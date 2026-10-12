@@ -1087,6 +1087,8 @@ export interface RecipeSpeech {
  */
 export interface RecipeTuneOut {
   enabled?: boolean;
+  /** Announce the all-except scope's entry and release in the excepted channel. Default true. */
+  announce?: boolean;
 }
 
 /**
@@ -2646,10 +2648,14 @@ export function validateRecipe(raw: unknown): Recipe {
     }
     const tuneOut = obj.tuneOut as Record<string, unknown>;
     for (const key of Object.keys(tuneOut)) {
-      if (key !== 'enabled') throw new Error(`Recipe tuneOut has unknown field ${JSON.stringify(key)} (expected: enabled).`);
+      if (key !== 'enabled' && key !== 'announce') {
+        throw new Error(`Recipe tuneOut has unknown field ${JSON.stringify(key)} (expected: enabled, announce).`);
+      }
     }
-    if (tuneOut.enabled !== undefined && typeof tuneOut.enabled !== 'boolean') {
-      throw new Error('Recipe tuneOut.enabled must be a boolean.');
+    for (const key of ['enabled', 'announce'] as const) {
+      if (tuneOut[key] !== undefined && typeof tuneOut[key] !== 'boolean') {
+        throw new Error(`Recipe tuneOut.${key} must be a boolean.`);
+      }
     }
   }
 

@@ -120,4 +120,9 @@ describe('validateRecipe — speech and tuneOut (Dendrite admission options)', (
     expect(() => validateRecipe(baseRecipe({ tuneOut: { enabled: 'yes' } }))).toThrow(/tuneOut\.enabled must be a boolean/);
     expect(() => validateRecipe(baseRecipe({ tuneOut: { silent: true } }))).toThrow(/tuneOut has unknown field "silent"/);
   });
+
+  test('tuneOut.announce turns the excepted-channel announcement off', () => {
+    expect(validateRecipe(baseRecipe({ tuneOut: { enabled: true, announce: false } })).tuneOut).toEqual({ enabled: true, announce: false });
+    expect(() => validateRecipe(baseRecipe({ tuneOut: { announce: 'no' } }))).toThrow(/tuneOut\.announce must be a boolean/);
+  });
 });

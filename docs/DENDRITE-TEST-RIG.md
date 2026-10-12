@@ -91,6 +91,8 @@ prefix — a passthrough resident caches only system and tools):
   silent hold with no reader at all.
 - `"speech": { "locus": "latest-inbound" }` restores the pre-Dendrite
   routing rule (global latest-inbound fallback, mid-turn addressed re-pin).
+- `"tuneOut": { "announce": false }` keeps the all-except scope's entry and
+  release out of the excepted channel (default: announced there).
 
 ## What to exercise
 
@@ -110,10 +112,13 @@ four tools in its block, refused with a pointer if the resident calls them.
    tool call: stored, never injected into the live turn.
 4. **Release.** `tune_out mode: cancel` — one notice, the backlog as
    `author: text [image]` lines up to `backlogCap`, the reader's report.
-5. **Focus.** `focus channelId=<work> durationSeconds=600`; everything else,
-   DMs included, is held; a heartbeat turn's prose lands in `<work>`;
+5. **Focus.** `focus channelId=<work> durationSeconds=600`; `<work>` hears
+   `[Focus: <name> is here for 10 min, until HH:MM UTC; …]` under the
+   resident's name and nothing is posted elsewhere; everything else, DMs
+   included, is held; a heartbeat turn's prose lands in `<work>`;
    `tune_out mode: check peek=<other>` shows what is held without releasing;
-   the deadline releases per channel.
+   the deadline releases per channel and `<work>` hears `[Focus: <name>
+   released — duration elapsed.]`.
 6. **Locus.** With no hold and no delivery (a heartbeat), the resident's
    prose stays private and a `[routing]` notice says so; an addressed
    message arriving mid-turn from another channel is announced and does not
@@ -122,7 +127,7 @@ four tools in its block, refused with a pointer if the resident calls them.
    epoch resumes; a release left in the deferred queue lands and wakes the
    resident.
 
-Traces worth watching: `admission:decided`, `tune-out:entered`,
+Traces worth watching: `admission:decided`, `tune-out:entered`, `tune-out:announced`,
 `tune-out:reader-fork`, `dendrite:agent-created`, `dendrite:mail-delivered`,
 `tune-out:cancelled`, `tune-out:wake-budget-paused`, `gate:held-dropped`.
 
