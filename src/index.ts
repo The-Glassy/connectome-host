@@ -511,9 +511,26 @@ agents: [agentConfig],
     // Client-side programmatic tool calling (code_execution) — recipe opt-in.
     ...(recipe.codeExecution ? { codeExecution: recipe.codeExecution } : {}),
     ...(conversations ? { conversations } : {}),
-    // Tune-out's subconscious resident (agent-framework#77) — recipe opt-in,
-    // passed through verbatim; the framework owns the defaults.
-    ...(recipe.subconscious ? { subconscious: recipe.subconscious } : {}),
+    // Tune-out's reader (agent-framework#77, #232) — recipe opt-in. The
+    // persistent reader passes through verbatim; reader forks get the one
+    // field a recipe cannot state, a fresh instance of the recipe's strategy
+    // per fork (the `conversations` pattern), so a fork reuses the
+    // resident's fold state and rendering.
+    // Together with the Dendrite admission options (`speech`, `tuneOut`),
+    // spread untyped so an agent-framework that predates them typechecks:
+    // it then ignores the fields it lacks, and refuses `reader: 'forks'` at
+    // create() with its own message.
+    ...({
+      ...(recipe.subconscious
+        ? {
+            subconscious: recipe.subconscious.reader === 'forks'
+              ? { ...recipe.subconscious, strategyFactory: () => buildFrameworkStrategy(recipe, model, timeZone, extensionRegistry) }
+              : recipe.subconscious,
+          }
+        : {}),
+      ...(recipe.speech ? { speech: recipe.speech } : {}),
+      ...(recipe.tuneOut ? { tuneOut: recipe.tuneOut } : {}),
+    } as object),
     // MCPL RFC-008 tool classes: this host's module table, and the recipe's
     // operator overrides. Spread as an untyped object so an agent-framework
     // older than the tool-lifecycle release (which lacks both fields)

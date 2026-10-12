@@ -83,4 +83,41 @@ describe('validateRecipe — subconscious schema', () => {
     expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, systemPrompt: MODE, reAnchorFraction: 1 } })))
       .not.toThrow();
   });
+
+  test('reader "forks": model and voice are required; its keys are its own', () => {
+    const forks = { enabled: true, reader: 'forks', model: 'claude-sonnet-4-5', voice: 'You are reading for sherlock.' };
+    expect(validateRecipe(baseRecipe({ subconscious: forks })).subconscious).toEqual(forks);
+    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', voice: 'v' } })))
+      .toThrow(/subconscious\.model is required for reader "forks"/);
+    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', model: 'm' } })))
+      .toThrow(/subconscious\.voice must be a non-empty string/);
+    expect(() => validateRecipe(baseRecipe({ subconscious: { ...forks, systemPrompt: MODE } })))
+      .toThrow(/unknown field "systemPrompt".*for reader "forks"/);
+    expect(() => validateRecipe(baseRecipe({ subconscious: { ...forks, forkIdleTimeoutMs: 0 } })))
+      .toThrow(/forkIdleTimeoutMs must be a positive number/);
+    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'elsewhere', systemPrompt: MODE } })))
+      .toThrow(/reader must be "persistent" or "forks"/);
+  });
+
+  test('reader "persistent" may be stated and keeps the persistent schema', () => {
+    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'persistent', systemPrompt: MODE } }))).not.toThrow();
+    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'persistent', voice: 'v', model: 'm' } })))
+      .toThrow(/unknown field "voice"/);
+  });
+});
+
+describe('validateRecipe — speech and tuneOut (Dendrite admission options)', () => {
+  test('speech.locus takes the two rules and nothing else', () => {
+    expect(validateRecipe(baseRecipe({ speech: { locus: 'delivery' } })).speech).toEqual({ locus: 'delivery' });
+    expect(validateRecipe(baseRecipe({ speech: { locus: 'latest-inbound' } })).speech).toEqual({ locus: 'latest-inbound' });
+    expect(() => validateRecipe(baseRecipe({ speech: { locus: 'sticky' } }))).toThrow(/speech\.locus must be "delivery" or "latest-inbound"/);
+    expect(() => validateRecipe(baseRecipe({ speech: { fallback: 'x' } }))).toThrow(/speech has unknown field "fallback"/);
+    expect(() => validateRecipe(baseRecipe({ speech: 'delivery' }))).toThrow(/speech must be an object/);
+  });
+
+  test('tuneOut.enabled offers tune_out without a reader', () => {
+    expect(validateRecipe(baseRecipe({ tuneOut: { enabled: true } })).tuneOut).toEqual({ enabled: true });
+    expect(() => validateRecipe(baseRecipe({ tuneOut: { enabled: 'yes' } }))).toThrow(/tuneOut\.enabled must be a boolean/);
+    expect(() => validateRecipe(baseRecipe({ tuneOut: { silent: true } }))).toThrow(/tuneOut has unknown field "silent"/);
+  });
 });
