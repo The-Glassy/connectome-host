@@ -77,7 +77,7 @@ prefix — a passthrough resident caches only system and tools):
     "enabled": true,
     "reader": "forks",
     "model": "claude-sonnet-4-5",
-    "voice": "You are reading for scout while they are tuned out. Report in second person, briefly: what happened, what needs them, what can wait."
+    "voice": "You are reading for scout while they are tuned out. Report with the deliver_summary tool, in second person, briefly: what happened, what needs them, what can wait. If you end in plain prose instead, that prose is delivered as your report."
   },
   "speech": { "locus": "delivery" },
   "mcpServers": { "…": "your channel connector" }
@@ -106,6 +106,8 @@ four tools in its block, refused with a pointer if the resident calls them.
    wakes nobody. An addressed message gets the suppressed-mention reaction
    and, after the 2 s coalesce, one reader fork (`tune-out:reader-fork` in
    the trace), whose `deliver_summary` arrives as mail under its own name.
+   A fork that answers in prose without the tool still reports: its final
+   prose arrives the same way (`tune-out:reader-prose-delivered`).
 2. **A DM.** `tune_out` the DM channel id (`discord:dm:<id>`); the next DM is
    held. This was #232 gap 1.
 3. **Mid-turn.** Post to the held channel while the resident is inside a
@@ -116,16 +118,23 @@ four tools in its block, refused with a pointer if the resident calls them.
    `[Focus: <name> is here for 10 min, until HH:MM UTC; …]` under the
    resident's name and nothing is posted elsewhere; everything else, DMs
    included, is held; a heartbeat turn's prose lands in `<work>`;
-   `tune_out mode: check peek=<other>` shows what is held without releasing;
+   `tune_out mode: check peek=<other>` shows what is held now, without
+   releasing (lines from a released epoch do not appear);
    the deadline releases per channel and `<work>` hears `[Focus: <name>
    released — duration elapsed.]`.
 6. **Locus.** With no hold and no delivery (a heartbeat), the resident's
    prose stays private and a `[routing]` notice says so; an addressed
-   message arriving mid-turn from another channel is announced and does not
-   move the turn's locus.
+   message arriving mid-turn from another channel gets a `[routing] <author>
+   addressed you from <channel> …` notice in the live turn and does not move
+   the turn's locus. `channel_publish` with no `channelId` goes to the turn's
+   locus (the waking delivery's channel, or one opened this turn).
 7. **Restart under a hold.** Stop the host mid-epoch and start it again: the
    epoch resumes; a release left in the deferred queue lands and wakes the
-   resident.
+   resident. A reader fork cut off by the stop is left live
+   (`dendrite:agent-interrupted`, reason `host-stop`) and the next boot ends
+   it as `host-restart`, with an `[Agent lifecycle: …]` line in the
+   resident's window and a `dendrite:agent-ended` trace — visible to a sink
+   attached after `createFramework`, since create-time traces replay.
 
 Traces worth watching: `admission:decided`, `tune-out:entered`, `tune-out:announced`,
 `tune-out:reader-fork`, `dendrite:agent-created`, `dendrite:mail-delivered`,
