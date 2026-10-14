@@ -8,7 +8,7 @@
  * proxy's refusal path is exercised.
  */
 import { describe, test, expect, afterAll, beforeEach } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MembraneError, type ProviderRequest } from '@animalabs/membrane';
@@ -23,6 +23,8 @@ type Reply = {
   crlf?: boolean;
   /** End a 200 stream with an `error` event instead of message_delta. */
   errorEvent?: { type: string; message: string };
+  /** Deliver the whole stream, then keep the HTTP body open for a while. */
+  holdOpenMs?: number;
 };
 let replies: Reply[] = [];
 const upstreamBodies: any[] = [];
@@ -38,7 +40,12 @@ const upstream = Bun.serve({
     }
     if (r.delayMs) await Bun.sleep(r.delayMs);
     const stream = sse(r.blocks ?? [], r.stop ?? 'end_turn', body.model, r.errorEvent);
-    return new Response(r.crlf ? stream.replace(/\n/g, '\r\n') : stream, { headers: { 'content-type': 'text/event-stream' } });
+    const text = r.crlf ? stream.replace(/\n/g, '\r\n') : stream;
+    if (r.holdOpenMs) {
+      const held = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(text)); setTimeout(() => { try { c.close(); } catch { /* already cancelled */ } }, r.holdOpenMs); } });
+      return new Response(held, { headers: { 'content-type': 'text/event-stream' } });
+    }
+    return new Response(text, { headers: { 'content-type': 'text/event-stream' } });
   },
 });
 afterAll(() => upstream.stop(true));
@@ -82,12 +89,27 @@ interface FakeCliBehaviour {
   reminders?: boolean | 'split';
   /** Extra top-level fields on every request body. */
   extraBody?: Record<string, unknown>;
+  /** Send this max_tokens instead of the one in the environment (the CLI caps it). */
+  maxTokens?: number;
+  /** Send this `thinking` instead of the option (the CLI turns a budget adaptive). */
+  thinking?: unknown;
+  /** Send this effort instead of the option. */
+  effort?: string;
+  /** List the first tool twice / with an extra definition field. */
+  duplicateTool?: boolean;
+  extraToolField?: Record<string, unknown>;
+  /** Ask the proxy for this route before the Messages request. */
+  extraRoute?: string;
+  /** Throw this from query() before anything runs (a spawn failure). */
+  crash?: string;
 }
 const queryCalls: Array<{ options: Record<string, any> }> = [];
 const toolCalls: string[] = [];
 let behaviour: FakeCliBehaviour = {};
 const REMINDER = '<system-reminder>\nToday is a test.\n</system-reminder>';
 const REMINDER_2 = '<system-reminder>\nYou run in a test.\n</system-reminder>';
+/** The CLI's model reminder names the model it runs; so does ours. */
+const reminderFor = (model: string) => `<system-reminder>\nYou are powered by the model ${model}.\n</system-reminder>`;
 const renderedText = (row: any): string => row.rendered?.[0]?.content ?? REMINDER;
 
 function parseSse(text: string): any[] {
@@ -113,8 +135,17 @@ function parseSse(text: string): any[] {
 const fakeSdk: AgentSdk = {
   async *query({ prompt, options }) {
     queryCalls.push({ options });
+    if (behaviour.crash) throw new Error(behaviour.crash);
     const env = options.env as Record<string, string>;
     const signal = (options.abortController as AbortController).signal;
+    if (!options.resume) {
+      // A fresh session: the CLI writes its own transcript under the config dir.
+      const dir = join(env.CLAUDE_CONFIG_DIR!, 'projects', '-cwd');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `${options.sessionId}.jsonl`), '{"type":"user"}\n');
+      writeFileSync(join(env.CLAUDE_CONFIG_DIR!, '.claude.json'), '{}');
+    }
+    if (behaviour.extraRoute) await fetch(`${env.ANTHROPIC_BASE_URL}${behaviour.extraRoute}`).catch(() => {});
     const server = options.mcpServers.host.instance;
     const waiting = new Map<number, (m: any) => void>();
     let nextId = 1;
@@ -149,14 +180,15 @@ const fakeSdk: AgentSdk = {
     const promptMessage = { role: 'user', content: typeof raw.content === 'string' ? [{ type: 'text', text: raw.content }] : raw.content };
     const injectReminder = behaviour.reminders && !hadReminder;
     const split = behaviour.reminders === 'split';
-    const added = !injectReminder ? [] : split ? [REMINDER, REMINDER_2] : [REMINDER];
+    const modelReminder = reminderFor(options.model);
+    const added = !injectReminder ? [] : split ? [REMINDER, REMINDER_2] : [modelReminder];
     messages.push({ role: 'user', content: [...added.map((t) => ({ type: 'text', text: t })), ...promptMessage.content] });
     if (injectReminder && !split) {
       // The CLI writes the rows before its request; the SDK mirrors them later.
       setTimeout(() => {
         void options.sessionStore.append({}, [
           { type: 'user', message: promptMessage },
-          { type: 'attachment', uuid: 'a1', attachment: { type: 'date' } },
+          { type: 'attachment', uuid: 'a1', attachment: { type: 'model' }, rendered: [{ content: modelReminder }] },
           { type: 'assistant', message: {} },
         ]);
       }, 50);
@@ -179,18 +211,27 @@ const fakeSdk: AgentSdk = {
         ...(options.systemPrompt.prompt.length ? [{ type: 'text', text: options.systemPrompt.prompt.join('\n\n'), cache_control: { type: 'ephemeral' } }] : []),
       ];
       const sent = behaviour.rewrite ? behaviour.rewrite(structuredClone(messages), turn) : messages;
+      const thinkingOpt = options.thinking as { type: string; budgetTokens?: number };
+      const thinking = behaviour.thinking ?? (thinkingOpt.type === 'enabled'
+        ? { type: 'enabled', ...(thinkingOpt.budgetTokens ? { budget_tokens: thinkingOpt.budgetTokens } : {}) }
+        : { type: thinkingOpt.type });
+      const wireTools = tools.map((t: any) => ({ name: `${TOOL_PREFIX}${t.name}`, description: t.description, input_schema: t.inputSchema, ...behaviour.extraToolField }));
       const body = {
         model: options.model,
-        max_tokens: Number(env.CLAUDE_CODE_MAX_OUTPUT_TOKENS),
+        max_tokens: behaviour.maxTokens ?? Number(env.CLAUDE_CODE_MAX_OUTPUT_TOKENS),
         system,
-        tools: tools.map((t: any) => ({ name: `${TOOL_PREFIX}${t.name}`, description: t.description, input_schema: t.inputSchema })),
+        tools: behaviour.duplicateTool && wireTools.length ? [wireTools[0], ...wireTools] : wireTools,
         messages: sent,
+        thinking,
+        // Like the CLI: the default temperature travels only without thinking.
+        ...((thinking as { type: string }).type === 'disabled' ? { temperature: 1 } : {}),
+        output_config: { effort: behaviour.effort ?? options.effort ?? 'high' },
         stream: true,
         ...behaviour.extraBody,
       };
       let res: Response;
       try {
-        res = await fetch(`${env.ANTHROPIC_BASE_URL}/v1/messages?beta=true`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
+        res = await fetch(`${env.ANTHROPIC_BASE_URL}/v1/messages?beta=true`, { method: 'POST', headers: { 'content-type': 'application/json', 'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20' }, body: JSON.stringify(body), signal });
       } catch {
         return;
       }
@@ -225,9 +266,11 @@ const TOOLS = [
   { name: 'send', description: 'Send a message.', input_schema: { type: 'object', properties: { text: { type: 'string' } } } },
   { name: 'read', description: 'Read a file.', input_schema: { type: 'object', properties: { path: { type: 'string' } } } },
 ];
+let lastConfigDir = '';
 function makeAdapter(auth: AgentSdkAuth = { apiKey: 'sk-ant-api03-test' }, extra: Record<string, unknown> = {}) {
   const root = mkdtempSync(join(tmpdir(), 'agent-sdk-test-'));
-  return new ClaudeAgentSdkAdapter({ auth, upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, cwd: join(root, 'cwd'), configDir: join(root, 'cfg'), sdk: fakeSdk, ...extra });
+  lastConfigDir = join(root, 'cfg');
+  return new ClaudeAgentSdkAdapter({ auth, upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, cwd: join(root, 'cwd'), configDir: lastConfigDir, sdk: fakeSdk, ...extra });
 }
 const request = (messages: any[], extra: Partial<ProviderRequest> = {}): ProviderRequest =>
   ({ model: 'claude-opus-4-6', maxTokens: 777, system: [{ type: 'text', text: 'You are Ada.', cache_control: { type: 'ephemeral' } }], tools: TOOLS, messages, ...extra }) as ProviderRequest;
@@ -284,8 +327,13 @@ describe('claude-agent-sdk adapter', () => {
     expect(o!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-oat01-x');
     expect(o!.env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(o!.env.CLAUDE_CODE_SIMPLE).toBeUndefined();
-    expect(o!.thinking).toEqual({ type: 'adaptive', display: 'omitted' });
+    // `display` is not passed on: the CLI never sends it (measured), so the
+    // option would promise what the wire cannot keep.
+    expect(o!.thinking).toEqual({ type: 'adaptive' });
     expect(o!.effort).toBe('low');
+    expect(upstreamBodies[0].thinking).toEqual({ type: 'adaptive' });
+    expect(upstreamBodies[0].output_config).toEqual({ effort: 'low' });
+    expect(upstreamBodies[1].thinking).toEqual({ type: 'enabled', budget_tokens: 2000 });
     expect(k!.env.ANTHROPIC_API_KEY).toBe('sk-ant-api03-test');
     expect(k!.env.CLAUDE_CODE_SIMPLE).toBe('1');
     expect(k!.thinking).toEqual({ type: 'enabled', budgetTokens: 2000 });
@@ -502,5 +550,99 @@ describe('claude-agent-sdk adapter', () => {
     adapter.dispose();
     expect(error).toBeInstanceOf(MembraneError);
     expect(error.type).toBe('abort');
+  });
+
+  test('a request whose max_tokens, thinking or effort the CLI rewrote is refused, not forwarded', async () => {
+    const cases: Array<[FakeCliBehaviour, Partial<ProviderRequest>, RegExp]> = [
+      [{ maxTokens: 128_000 }, { maxTokens: 999_999 }, /max_tokens 128000, requested 999999/],
+      [{ thinking: { type: 'adaptive' } }, { thinking: { type: 'enabled', budget_tokens: 2048 } }, /thinking .*adaptive.*requested .*budget_tokens.*2048.*adaptive/],
+      [{ effort: 'max' }, { extra: { output_config: { effort: 'low' } } }, /effort max, requested low/],
+      [{ duplicateTool: true }, {}, /listed more than once/],
+      [{ extraToolField: { defer_loading: true } }, {}, /carries defer_loading/],
+    ];
+    for (const [cli, extra, message] of cases) {
+      const adapter = makeAdapter();
+      behaviour = cli;
+      const error = await adapter.stream(request([{ role: 'user', content: 'hi' }], extra), { onChunk: () => {} }).catch((e) => e);
+      adapter.dispose();
+      expect(error.type).toBe('unsupported');
+      expect(error.message).toMatch(message);
+    }
+    expect(upstreamBodies).toHaveLength(0);
+  });
+
+  test("the CLI's default effort and betas are reported when nothing was asked for", async () => {
+    const adapter = makeAdapter();
+    const response = await adapter.stream(request([{ role: 'user', content: 'hi' }]), { onChunk: () => {} });
+    adapter.dispose();
+    const meta = (response.raw as any).agentSdk;
+    expect(meta.cliEffort).toBe('high');
+    expect(meta.cliBetas).toBe('claude-code-20250219,oauth-2025-04-20');
+    expect(upstreamBodies[0].max_tokens).toBe(777);
+  });
+
+  test('a completed stream settles the call even when the HTTP body stays open', async () => {
+    const adapter = makeAdapter();
+    replies = [{ blocks: [{ type: 'text', text: 'done early' }], holdOpenMs: 3000 }];
+    const t0 = performance.now();
+    const response = await adapter.stream(request([{ role: 'user', content: 'hi' }]), { onChunk: () => {} });
+    const elapsed = performance.now() - t0;
+    adapter.dispose();
+    expect(response.content).toEqual([{ type: 'text', text: 'done early' }]);
+    expect(response.usage.outputTokens).toBe(5);
+    expect(elapsed).toBeLessThan(1500);
+  });
+
+  test('a fresh session leaves no transcript file behind; the rest of the config dir stays', async () => {
+    const adapter = makeAdapter();
+    await adapter.stream(request([{ role: 'user', content: 'first ever' }]), { onChunk: () => {} });
+    adapter.dispose();
+    // The CLI writes the file on exit, after the call settles; the adapter removes it once the query has ended.
+    await Bun.sleep(100);
+    expect(queryCalls[0]!.options.sessionId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(queryCalls[0]!.options.resume).toBeUndefined();
+    expect(readdirSync(join(lastConfigDir, 'projects', '-cwd'))).toEqual([]);
+    expect(existsSync(join(lastConfigDir, '.claude.json'))).toBe(true);
+  });
+
+  test('a CLI that dies before its request is retryable; a refused login is not', async () => {
+    const cases: Array<[string, string, boolean]> = [
+      ['spawn EAGAIN', 'unknown', true],
+      ['Not logged in', 'auth', false],
+    ];
+    for (const [crash, type, retryable] of cases) {
+      const adapter = makeAdapter();
+      behaviour = { crash };
+      const error = await adapter.stream(request([{ role: 'user', content: 'hi' }]), { onChunk: () => {} }).catch((e) => e);
+      adapter.dispose();
+      expect(error).toBeInstanceOf(MembraneError);
+      expect(error.type).toBe(type);
+      expect(error.retryable).toBe(retryable);
+      expect(error.message).toContain(crash);
+    }
+  });
+
+  test('remembered reminders are kept apart by model: the same opening words under another model get their own', async () => {
+    const adapter = makeAdapter({ oauthToken: 'sk-ant-oat01-x' });
+    behaviour = { reminders: true };
+    const opening = [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }];
+    const r1 = await adapter.stream(request(opening), { onChunk: () => {} });
+    await adapter.stream(request([...opening, { role: 'assistant', content: r1.content }, { role: 'user', content: 'again' }]), { onChunk: () => {} });
+    const r2 = await adapter.stream(request(opening, { model: 'claude-sonnet-4-5' }), { onChunk: () => {} });
+    await adapter.stream(request([...opening, { role: 'assistant', content: r2.content }, { role: 'user', content: 'again' }], { model: 'claude-sonnet-4-5' }), { onChunk: () => {} });
+    adapter.dispose();
+    const firstTurnText = (body: any) => JSON.stringify(body.messages[0]);
+    expect(firstTurnText(upstreamBodies[1])).toContain('claude-opus-4-6');
+    expect(firstTurnText(upstreamBodies[3])).toContain('claude-sonnet-4-5');
+    expect(firstTurnText(upstreamBodies[3])).not.toContain('claude-opus-4-6');
+  });
+
+  test('a route other than POST /v1/messages is answered 404 and reported, never forwarded', async () => {
+    const adapter = makeAdapter();
+    behaviour = { extraRoute: '/v1/models' };
+    const response = await adapter.stream(request([{ role: 'user', content: 'hi' }]), { onChunk: () => {} });
+    adapter.dispose();
+    expect((response.raw as any).agentSdk.cliOtherRequests).toEqual(['GET /v1/models']);
+    expect(upstreamBodies).toHaveLength(1);
   });
 });

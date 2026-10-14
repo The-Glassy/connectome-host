@@ -1125,6 +1125,12 @@ async function main() {
         getReasoning: () => settingsModule.getReasoning(),
       })
     : undefined;
+  if (agentSdkAdapter && !config.agentSdkOAuthToken) {
+    // With an API key the CLI adds a process, an identity block and a
+    // dropped sampling config on top of what the anthropic provider sends
+    // with the same key; this mode exists for the offline bench.
+    console.warn('[claude-agent-sdk] running on ANTHROPIC_API_KEY: this provider only pays off on a subscription token (CLAUDE_CODE_OAUTH_TOKEN); with an API key, provider "anthropic" sends the same conversation without the CLI.');
+  }
   // -- x-gate-debt-chunks stamp (membrane dynamicHeaders, antra-tess/membrane#65)
   // The gate records compression-debt per ledger row; debt only changes at
   // calls, so the per-call series is its full-resolution history ("spoke ->

@@ -27,7 +27,7 @@
 //      membrane's callbacks as it arrives, and the process is stopped once
 //      the response is complete.
 
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -53,11 +53,13 @@ import {
   attachmentsForPrompt,
   renderedCount,
   checkWireMessages,
+  checkWireReasoning,
   checkWireSystem,
   checkWireTools,
   expectedAtRound,
   planCall,
   prefixKeys,
+  stableJson,
   systemTexts,
   toMcpResult,
   transcriptRows,
@@ -145,6 +147,8 @@ const UNSUPPORTED_PARAMS: Array<keyof ProviderRequest> = [
 ];
 
 const MAX_REMEMBERED_ATTACHMENTS = 512;
+/** Second sweep for a fresh session's transcript file after the CLI exits. */
+const SESSION_FILE_SWEEP_MS = 1_000;
 /** Longest a load waits for the previous call's attachment rows. */
 const ATTACHMENT_CAPTURE_WAIT_MS = 2_000;
 
@@ -177,9 +181,13 @@ export class ClaudeAgentSdkAdapter implements ProviderAdapter {
   private readonly warned = new Set<string>();
   /** CLI attachment rows per conversation prefix (see transcriptRows). */
   private readonly attachments = new Map<string, Array<Record<string, unknown>>>();
-  /** Captures still in flight: the SDK mirrors a call's rows after the call
-   *  has returned, so the next call's load waits for them (bounded). */
-  private readonly pendingCaptures = new Set<Promise<void>>();
+  /** Captures still in flight, by the prompt's prefix key: the SDK mirrors a
+   *  call's rows after the call has returned, so a later load of a history
+   *  that contains that prompt waits for them (bounded). */
+  private readonly pendingCaptures = new Map<string, Promise<void>>();
+  /** The CLI's own system blocks and beta header from the previous forwarded
+   *  request: a change between calls breaks the cached prefix, so it is logged. */
+  private lastCliPrefix?: { system: string; betas: string };
 
   constructor(private readonly config: ClaudeAgentSdkAdapterConfig) {
     this.proxy = new LoopbackProxy(() => config.upstreamBaseURL ?? process.env.ANTHROPIC_BASE_URL ?? 'https://api.anthropic.com');
@@ -276,12 +284,16 @@ export class ClaudeAgentSdkAdapter implements ProviderAdapter {
     const injected: string[] = [];
     let cliBlocks: string[] = [];
     let sanitizedTools: string[] = [];
+    let cliBetas = '';
+    let cliEffort: string | undefined;
+    const otherRequests: string[] = [];
     let finalWire: Record<string, unknown> | undefined;
     let firstRequestMs: number | undefined;
     let round = 0;
     let activeRound = -1;
 
-    const promptKey = prefixKeys([...plan.transcript, plan.prompt]).at(-1)!;
+    const keySeed = stableJson({ model: request.model, system: sys });
+    const promptKey = prefixKeys([...plan.transcript, plan.prompt], keySeed).at(-1)!;
     const mirrored: Array<Record<string, unknown>> = [];
     let captured: (() => void) | undefined;
     // Reminder blocks the CLI put on the prompt, known once the final request
@@ -317,7 +329,14 @@ export class ClaudeAgentSdkAdapter implements ProviderAdapter {
     armIdle(this.config.startupTimeoutMs ?? 120_000, 'the CLI made no request');
 
     const handler: CallHandler = (req) => {
-      if (req.method !== 'POST' || !/^\/v1\/messages(\?|$)/.test(req.path)) return { kind: 'forward' };
+      if (req.method !== 'POST' || !/^\/v1\/messages(\?|$)/.test(req.path)) {
+        // Only the Messages endpoint is proxied. Anything else the CLI asks
+        // for is answered 404 and reported, never forwarded on the credential.
+        const route = `${req.method} ${req.path.split('?')[0]}`;
+        otherRequests.push(route);
+        this.warnOnce(`route:${route}`, `the CLI requested ${route}, which this provider does not forward`);
+        return { kind: 'respond', response: jsonError(404, 'not_found_error', 'connectome forwards POST /v1/messages only') };
+      }
       const body = req.json as Record<string, unknown> | undefined;
       firstRequestMs ??= Math.round(performance.now() - t0);
       const refuse = (reason: string) => {
@@ -339,6 +358,18 @@ export class ClaudeAgentSdkAdapter implements ProviderAdapter {
       if (body.model !== request.model) return refuse(`model ${String(body.model)}, expected ${request.model}`);
       const unexpected = Object.keys(body).filter((k) => !WIRE_FIELDS.has(k));
       if (unexpected.length) return refuse(`request carries ${unexpected.join(', ')}, which the conversation did not ask for`);
+      // The values the CLI derives from what it was handed: a field it
+      // rewrites (max_tokens capped at the model's limit, a fixed thinking
+      // budget turned adaptive) must fail the call, not reach the model.
+      if (body.stream !== true) return refuse('the request is not streamed');
+      if (body.max_tokens !== request.maxTokens) {
+        return refuse(`max_tokens ${String(body.max_tokens)}, requested ${request.maxTokens} (the CLI caps max_tokens at the model's limit; lower the recipe's maxTokens)`);
+      }
+      if (body.temperature !== undefined && body.temperature !== 1) return refuse(`temperature ${String(body.temperature)}; the CLI sends none or the default`);
+      const reasoning = checkWireReasoning({ thinking, effort }, body);
+      if (reasoning.diff) return refuse(reasoning.diff);
+      cliEffort = reasoning.cliEffort;
+      cliBetas = req.headers.get('anthropic-beta') ?? '';
       injected.push(...messages.injected);
       cliBlocks = system.cliBlocks;
       if (round < plan.replay.length) {
@@ -350,6 +381,13 @@ export class ClaudeAgentSdkAdapter implements ProviderAdapter {
       round++;
       activeRound = -1;
       finalWire = body;
+      // The CLI's own blocks and betas lead every request: a change between
+      // calls is a cache miss on the whole prompt, and worth knowing about.
+      const cliPrefix = { system: stableJson(cliBlocks), betas: cliBetas };
+      if (this.lastCliPrefix && (this.lastCliPrefix.system !== cliPrefix.system || this.lastCliPrefix.betas !== cliPrefix.betas)) {
+        this.warnOnce(`prefix:${cliPrefix.system}:${cliPrefix.betas}`, "the CLI's own system blocks or beta headers changed since the previous call; the cached prefix misses once");
+      }
+      this.lastCliPrefix = cliPrefix;
       promptReminders = addedReminders((body.messages as Array<{ content?: unknown }>)[plan.transcript.length], plan.prompt);
       remember();
       try { options?.onRequest?.(body); } catch { /* a caller's hook never fails the call */ }
@@ -378,6 +416,15 @@ export class ClaudeAgentSdkAdapter implements ProviderAdapter {
                 if (done) break;
                 armIdle(idleMs, 'the response stream went idle');
                 accumulator.push(decoder.decode(value, { stream: true }));
+                // The protocol's end settles the call, as in membrane's own
+                // Anthropic adapter; a gateway may hold the HTTP body open
+                // past it, and the CLI must not be the one to say we're done.
+                if (accumulator.message.sawTerminalEvent || accumulator.message.error) {
+                  // Release our branch of the tee cleanly; the CLI's branch
+                  // ends when the process is stopped in `finally`.
+                  void reader.cancel().catch(() => {});
+                  break;
+                }
               }
               const message = accumulator.finish();
               if (message.error) {
@@ -441,8 +488,10 @@ export class ClaudeAgentSdkAdapter implements ProviderAdapter {
     const store = {
       load: async (key: { sessionId: string }) => {
         if (key.sessionId !== sessionId) return null;
-        if (this.pendingCaptures.size > 0) await Promise.all([...this.pendingCaptures]);
-        return transcriptRows({ messages: plan.transcript, sessionId, cwd: this.cwd, model: request.model, attachmentsAfter: (k) => this.attachments.get(k) });
+        const inHistory = new Set(prefixKeys(plan.transcript, keySeed));
+        const waits = [...this.pendingCaptures].filter(([k]) => inHistory.has(k)).map(([, p]) => p);
+        if (waits.length > 0) await Promise.all(waits);
+        return transcriptRows({ messages: plan.transcript, sessionId, cwd: this.cwd, model: request.model, keySeed, attachmentsAfter: (k) => this.attachments.get(k) });
       },
       append: async (_key: unknown, entries: Array<Record<string, unknown>>) => {
         mirrored.push(...entries);
@@ -472,9 +521,12 @@ export class ClaudeAgentSdkAdapter implements ProviderAdapter {
       sessionStore: store,
       sessionStoreFlush: 'eager',
       // A first turn has no history to load: the CLI refuses to resume an
-      // empty session, so it starts a fresh one (still mirrored, for its
-      // attachment rows).
-      ...(plan.transcript.length > 0 ? { resume: sessionId } : {}),
+      // empty session, so it starts a fresh one under our id (still mirrored,
+      // for its attachment rows). A fresh session is the one case where the
+      // CLI writes its own transcript file under CLAUDE_CONFIG_DIR (a resumed
+      // one goes to the SDK's temp copy); knowing the id lets `finally`
+      // remove it.
+      ...(plan.transcript.length > 0 ? { resume: sessionId } : { sessionId }),
       abortController: abort,
       stderr: (data: string) => { stderrTail = (stderrTail + data).slice(-4000); },
       ...(this.config.pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable: this.config.pathToClaudeCodeExecutable } : {}),
@@ -507,8 +559,8 @@ export class ClaudeAgentSdkAdapter implements ProviderAdapter {
         const capture = new Promise<void>((resolve) => {
           captured = resolve;
           setTimeout(resolve, ATTACHMENT_CAPTURE_WAIT_MS);
-        }).then(() => { this.pendingCaptures.delete(capture); });
-        this.pendingCaptures.add(capture);
+        }).then(() => { if (this.pendingCaptures.get(promptKey) === capture) this.pendingCaptures.delete(promptKey); });
+        this.pendingCaptures.set(promptKey, capture);
       }
       return {
         content: message.content,
@@ -532,6 +584,9 @@ export class ClaudeAgentSdkAdapter implements ProviderAdapter {
             cliSystemBlocks: cliBlocks,
             cliInjectedReminders: injected,
             cliSanitizedTools: sanitizedTools,
+            cliBetas,
+            ...(cliEffort !== undefined ? { cliEffort } : {}),
+            ...(otherRequests.length ? { cliOtherRequests: otherRequests } : {}),
           },
         },
       };
@@ -542,16 +597,47 @@ export class ClaudeAgentSdkAdapter implements ProviderAdapter {
       finished();
       abort.abort();
       this.proxy.unregister(callId);
+      if (plan.transcript.length === 0) {
+        // The CLI flushes its transcript rows on exit, after the call has
+        // settled (measured: ~50 ms later). Remove the file once the SDK
+        // query has ended, and once more a little later in case the exit
+        // flush lands after that.
+        void drain.then(() => {
+          this.removeSessionFiles(sessionId);
+          setTimeout(() => this.removeSessionFiles(sessionId), SESSION_FILE_SWEEP_MS).unref?.();
+        });
+      }
+    }
+  }
+
+  /**
+   * The transcript file (and any sidecar directory) the CLI wrote for a fresh
+   * session under `<configDir>/projects/<cwd key>/`. One per call whose prompt
+   * is the first message, each holding the whole conversation; nothing else
+   * removes them. Best effort: a failure here never fails the call.
+   */
+  private removeSessionFiles(sessionId: string): void {
+    const projects = join(this.configDir, 'projects');
+    let keys: string[];
+    try { keys = readdirSync(projects); } catch { return; }
+    for (const key of keys) {
+      try { rmSync(join(projects, key, `${sessionId}.jsonl`), { force: true }); } catch { /* best effort */ }
+      try { rmSync(join(projects, key, sessionId), { recursive: true, force: true }); } catch { /* best effort */ }
     }
   }
 
   private exitError(what: string, sdkErrors: string[], stderr: string, rawRequest: unknown, rawError?: unknown): MembraneError {
     const detail = [...sdkErrors, stderr.trim().split('\n').slice(-3).join(' | ')].filter(Boolean).join('; ');
-    const auth = /not logged in|authentication|invalid api key|oauth/i.test(detail);
+    // The thrown cause counts too: the SDK reports a refused login in the
+    // exception, not always on stderr.
+    const auth = /not logged in|authentication|invalid api key|oauth/i.test(`${what}; ${detail}`);
     return new MembraneError({
       type: auth ? 'auth' : 'unknown',
       message: `claude-agent-sdk: ${what}${detail ? ` (${detail.slice(0, 600)})` : ''}`,
-      retryable: false,
+      // A CLI that died before its request (spawn failure, OOM kill, a crash
+      // on startup) is worth membrane's retry schedule; a refused credential
+      // is not.
+      retryable: !auth,
       rawError,
       rawRequest,
     });
@@ -581,11 +667,16 @@ export class ClaudeAgentSdkAdapter implements ProviderAdapter {
     let t = (request.thinking ?? extra?.thinking) as { type?: string; budget_tokens?: number; display?: string } | undefined;
     const r = this.config.getReasoning?.();
     if (!t && r?.enabled && modelAcceptsAdaptiveThinking(request.model)) t = { type: 'adaptive', display: r.display ?? 'summarized' };
-    const display = t?.display ? { display: t.display } : {};
+    // The CLI never sends `display` (measured on 2.1.299: the API default
+    // applies whatever the option says), so it is not passed on, and a
+    // setting other than the default is reported once.
+    if (t?.display && t.display !== 'summarized') {
+      this.warnOnce(`display:${t.display}`, `thinking display "${t.display}" cannot be set through the Agent SDK; the model's default applies`);
+    }
     const thinking = t?.type === 'adaptive'
-      ? { type: 'adaptive', ...display }
+      ? { type: 'adaptive' }
       : t?.type === 'enabled'
-        ? { type: 'enabled', ...(t.budget_tokens ? { budgetTokens: t.budget_tokens } : {}), ...display }
+        ? { type: 'enabled', ...(t.budget_tokens ? { budgetTokens: t.budget_tokens } : {}) }
         : { type: 'disabled' };
     let effort = extra?.output_config?.effort;
     if (!effort && kind === 'stream' && r?.effort && r.effort !== 'default' && modelAcceptsEffort(request.model, r.effort)) effort = r.effort;

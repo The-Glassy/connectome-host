@@ -182,6 +182,7 @@ export class LoggingProviderAdapter implements ProviderAdapter {
     request: ProviderRequest,
     started: number,
     outcome: { response: ProviderResponse } | { error: unknown },
+    wire?: unknown,
   ): void {
     const failed = 'error' in outcome;
     // The credential monitor's taps (main's 8ed0a18). They follow the
@@ -203,7 +204,10 @@ export class LoggingProviderAdapter implements ProviderAdapter {
       record = {
         ...head,
         requestSummary: summarizeRequest(request),
-        rawRequest: request,
+        // What reached the provider when the adapter reported it through the
+        // request hook (as the bedrock logging adapter records); otherwise
+        // the membrane request.
+        rawRequest: wire ?? request,
         ...('response' in outcome
           ? { response: summarizeResponse(outcome.response, this.usageCacheConvention), rawResponse: outcome.response.raw ?? null }
           : {}),
@@ -221,12 +225,24 @@ export class LoggingProviderAdapter implements ProviderAdapter {
     request: ProviderRequest,
     started: number,
     outcome: { response: ProviderResponse } | { error: unknown },
+    wire?: unknown,
   ): void {
     try {
-      this.record(kind, request, started, outcome);
+      this.record(kind, request, started, outcome, wire);
     } catch {
       // Logging must never break inference, nor change what it returns or throws.
     }
+  }
+
+  /** Options with the request hook tapped, so the provider's own body is logged. */
+  private tapped(options: ProviderRequestOptions | undefined, sink: { wire?: unknown }): ProviderRequestOptions {
+    return {
+      ...options,
+      onRequest: (req) => {
+        sink.wire = req;
+        options?.onRequest?.(req);
+      },
+    };
   }
 
   async complete(
@@ -234,15 +250,16 @@ export class LoggingProviderAdapter implements ProviderAdapter {
     options?: ProviderRequestOptions,
   ): Promise<ProviderResponse> {
     const started = Date.now();
+    const sink: { wire?: unknown } = {};
     let response: ProviderResponse;
     try {
-      response = await this.inner.complete(request, options);
+      response = await this.inner.complete(request, this.tapped(options, sink));
     } catch (error) {
-      this.recordSafely('complete', request, started, { error });
+      this.recordSafely('complete', request, started, { error }, sink.wire);
       throw error;
     }
     // Outside the try: a logging failure can't be taken for the provider's.
-    this.recordSafely('complete', request, started, { response });
+    this.recordSafely('complete', request, started, { response }, sink.wire);
     return response;
   }
 
@@ -252,14 +269,15 @@ export class LoggingProviderAdapter implements ProviderAdapter {
     options?: ProviderRequestOptions,
   ): Promise<ProviderResponse> {
     const started = Date.now();
+    const sink: { wire?: unknown } = {};
     let response: ProviderResponse;
     try {
-      response = await this.inner.stream(request, callbacks, options);
+      response = await this.inner.stream(request, callbacks, this.tapped(options, sink));
     } catch (error) {
-      this.recordSafely('stream', request, started, { error });
+      this.recordSafely('stream', request, started, { error }, sink.wire);
       throw error;
     }
-    this.recordSafely('stream', request, started, { response });
+    this.recordSafely('stream', request, started, { response }, sink.wire);
     return response;
   }
 }

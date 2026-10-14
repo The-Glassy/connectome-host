@@ -24,7 +24,7 @@ import { join } from 'node:path';
 import { execSync } from 'node:child_process';
 import type { ProviderRequest } from '@animalabs/membrane';
 import { ClaudeAgentSdkAdapter, AGENT_SDK_PACKAGE, type AgentSdk, type AgentSdkAuth } from '../src/agent-sdk/adapter.js';
-import { prefixToolName, stableJson } from '../src/agent-sdk/transcript.js';
+import { normalizeMessage, prefixToolName, stableJson } from '../src/agent-sdk/transcript.js';
 
 const args = process.argv.slice(2);
 const RUNS = Number(args[args.indexOf('--runs') + 1] ?? 5) || 5;
@@ -75,8 +75,10 @@ async function loadSdk(): Promise<AgentSdk> {
 }
 const sdk = await loadSdk();
 
+const roots: string[] = [];
 function adapter(auth: AgentSdkAuth): ClaudeAgentSdkAdapter {
   const root = mkdtempSync(join(tmpdir(), 'agent-sdk-spike-'));
+  roots.push(root);
   return new ClaudeAgentSdkAdapter({ auth, upstreamBaseURL: UPSTREAM, cwd: join(root, 'cwd'), configDir: join(root, 'config'), sdk });
 }
 const API_KEY: AgentSdkAuth = { apiKey: 'sk-ant-api03-spike' };
@@ -178,7 +180,7 @@ function prefixEqualIgnoringCc(prev: any[], next: any[]): boolean {
     const r = await a.stream(req(history), { onChunk: () => {} });
     const wire = lastApi().body.messages;
     const expected = history.map((m) => ({ role: m.role, content: m.content.map((b: any) => (b.type === 'tool_use' ? { ...b, name: prefixToolName(b.name) } : b)) }));
-    const fidelity = wire.length === expected.length && wire.every((m: any, k: number) => m.role === expected[k]!.role);
+    const fidelity = stableJson(wire.map(normalizeMessage)) === stableJson(expected.map(normalizeMessage));
     const meta = (r.raw as any).agentSdk;
     timings.push({ rounds: n, firstRequestMs: meta.firstRequestMs, totalMs: meta.totalMs, fidelity: fidelity && captured.length - before === 1 });
   }
@@ -214,8 +216,13 @@ function prefixEqualIgnoringCc(prev: any[], next: any[]): boolean {
 }
 
 await Bun.sleep(1500);
-report.hygiene = { cliProcessesLeft: claudePids() - pidsBefore, resumeTempDirsLeft: resumeDirs() - dirsBefore };
-log(`hygiene CLI processes left running: ${claudePids() - pidsBefore} · /tmp/claude-resume-* dirs left: ${resumeDirs() - dirsBefore}`);
+// Transcript files the CLI wrote under this run's config dirs and did not
+// get removed (a fresh session writes one per call; the adapter deletes it).
+const sessionFiles = () => roots
+  .flatMap((root) => { const p = join(root, 'config', 'projects'); try { return readdirSync(p).flatMap((k) => readdirSync(join(p, k)).filter((f) => f.endsWith('.jsonl'))); } catch { return []; } })
+  .length;
+report.hygiene = { cliProcessesLeft: claudePids() - pidsBefore, resumeTempDirsLeft: resumeDirs() - dirsBefore, sessionFilesLeft: sessionFiles() };
+log(`hygiene CLI processes left running: ${claudePids() - pidsBefore} · /tmp/claude-resume-* dirs left: ${resumeDirs() - dirsBefore} · transcript files left under config dirs: ${sessionFiles()}`);
 upstream.stop(true);
 if (JSON_OUT) await Bun.write(JSON_OUT, JSON.stringify(report, null, 2));
 process.exit(0);

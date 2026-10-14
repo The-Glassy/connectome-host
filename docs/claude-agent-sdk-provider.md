@@ -20,10 +20,10 @@ question for Anthropic's current terms, not something this code settles.
 | Question | Answer (CLI 2.1.299, SDK 0.3.299) |
 |---|---|
 | Can connectome keep owning the context? | Yes. The history is loaded through the SDK's `SessionStore`, and every request the CLI makes is checked against the requested conversation before it is forwarded. |
-| Does the conversation reach the API verbatim? | Yes for messages: text, signed thinking, tool calls and results, byte for byte. Tool *definitions* arrive NFKC-normalized (`…` → `...`). |
-| Is the cached prefix stable from turn to turn? | Yes, in both auth modes: turn k's request starts with exactly the bytes turn k−1 sent. (Whether the API then *hits* the cache is unverified.) |
-| What does it cost? | One short-lived CLI process per model call: **~0.45 s** from call to first upstream request (p50, n=10, this container). A five-round tool loop adds ~0.2 s. |
-| What can't it do? | Prefill / `anthropic-xml` recipes; a user turn mixing tool results with other content; sampling parameters; the host's cache-marker placement and TTL; error tool results with images. |
+| Does the conversation reach the API verbatim? | Yes for messages: text, signed thinking, tool calls and results, byte for byte. Tool *definitions* arrive NFKC-normalized (`…` → `...`). The request's `max_tokens`, thinking type/budget and effort are checked too; a value the CLI rewrote fails the call. |
+| Is the cached prefix stable from turn to turn? | Yes, in both auth modes: turn k's request starts with exactly the bytes turn k−1 sent. The CLI's own leading blocks (billing line, identity) are stable for one config dir, and it asks for the **1h** cache. (Whether the API then *hits* the cache is unverified.) |
+| What does it cost? | One short-lived CLI process per model call: **~0.45 s** from call to first upstream request (p50, n=10, in a container; ~0.17 s on a workstation). About **235 MB RSS** per process while it runs; six concurrent calls peaked at 1.4 GB. A five-round tool loop adds ~0.2 s. |
+| What can't it do? | Prefill / `anthropic-xml` recipes; a user turn mixing tool results with other content; sampling parameters; thinking `display`; a fixed thinking budget on a model that supports adaptive thinking; the host's cache-marker placement and TTL; error tool results with images. |
 
 ## How a call runs
 
@@ -45,24 +45,41 @@ membrane request ──► planCall()                      src/agent-sdk/transcr
                   ──► response complete → the CLI process is stopped
 ```
 
-The proxy (`src/agent-sdk/proxy.ts`) is the safety net. Each CLI request is
-compared with what membrane asked for: messages (after normalizing string vs
-block content and dropping cache markers), the system text, the tool list,
-the model, and the set of top-level fields (anything beyond `model`,
-`messages`, `system`, `tools`, `metadata`, `max_tokens`, `thinking`,
-`temperature`, `output_config` and `stream` is refused, so the CLI's
-`context_management` or `safeguards` cannot come back unnoticed). Any other difference fails the membrane call with
-`type: 'unsupported'` and the diff, and nothing goes upstream. The only
-tolerated differences are:
+The proxy (`src/agent-sdk/proxy.ts`) is the safety net. Only `POST
+/v1/messages` is forwarded at all; any other route the CLI asks for gets a
+404 and is reported. Each Messages request is compared with what membrane
+asked for:
+
+- messages (after normalizing string vs block content and dropping cache
+  markers), the system text, the model;
+- the tool list: names, descriptions and schemas, no duplicates, no
+  definition fields beyond the CLI's own cache marker;
+- the set of top-level fields (anything beyond `model`, `messages`,
+  `system`, `tools`, `metadata`, `max_tokens`, `thinking`, `temperature`,
+  `output_config` and `stream` is refused, so the CLI's
+  `context_management` or `safeguards` cannot come back unnoticed);
+- the values the CLI derives from what it was handed: `stream: true`,
+  `max_tokens` equal to the request's (the CLI caps it at the model's limit
+  — lower the recipe's `maxTokens` rather than let it be capped silently),
+  the thinking type and budget, the effort when one was asked for, and no
+  `temperature` other than the default.
+
+Any difference fails the membrane call with `type: 'unsupported'` and the
+diff, and nothing goes upstream. The only tolerated differences are:
 
 - the CLI's own `<system-reminder>` blocks on user turns;
 - the CLI's own system blocks ahead of the recipe's text;
-- the CLI's sanitization of tool definitions.
+- the CLI's sanitization of tool definitions;
+- the CLI's default effort when the request set none, and its beta headers.
 
-All three are reported under `raw.agentSdk` in `llm-calls.jsonl`. This is
-what lets the adapter lean on undocumented CLI environment variables: if a
-CLI upgrade changes behaviour, calls start failing with a precise reason
-instead of silently sending a different context.
+All of these are reported under `raw.agentSdk` in `llm-calls.jsonl`
+(`cliInjectedReminders`, `cliSystemBlocks`, `cliSanitizedTools`,
+`cliEffort`, `cliBetas`, `cliOtherRequests`); `rawRequest` in that log is
+the body that reached the API. A change in the CLI's own system blocks or
+betas between two calls (a cache miss on the whole prompt) is logged once.
+This is what lets the adapter lean on undocumented CLI environment
+variables: if a CLI upgrade changes behaviour, calls start failing with a
+precise reason instead of silently sending a different context.
 
 Membrane's host always executes tools. In a played-back round the CLI's
 `canUseTool` allows exactly the recorded calls, and the MCP server returns
@@ -75,9 +92,15 @@ Probed against a recording stand-in API. Each of these shaped the design:
 1. **System prompt.** The CLI sends `x-anthropic-billing-header: …` and
    `You are a Claude agent, built on Anthropic's Claude Agent SDK.` ahead of
    the custom prompt, which it joins into one block. It places three cache
-   breakpoints (identity block, system block, last user block). The billing
-   line was constant across the turns of one conversation and differed
-   between conversations.
+   breakpoints (identity block, system block, last user block), with
+   `ttl: "1h"`. The billing line is
+   `cc_version=<CLI version>.<3 hex>; cc_entrypoint=sdk-ts;`; the hex suffix
+   is derived from the config dir's device id, so it is the same for every
+   call under one `CLAUDE_CONFIG_DIR` and changes when that dir is recreated
+   (a redeploy that wipes `$DATA_DIR` costs one cache miss). The format has
+   room for per-turn fields (`cc_turn_index`, `cc_prompt_id`, …) that
+   2.1.299 leaves empty in this mode; the adapter logs once if they ever
+   start moving.
 2. **Extras on by default.** Server-side `context_management` (clear
    thinking), a `safeguards` classifier payload, `display: "updates"`
    thinking, and the `auto` permission mode, which makes **extra
@@ -116,6 +139,21 @@ Probed against a recording stand-in API. Each of these shaped the design:
 8. **Compaction and clearing.** The CLI has auto-compaction and time-based
    "microcompact" (`[Old tool result content cleared]`). Both are disabled
    by environment, and the wire check would refuse either if it fired.
+9. **Reasoning fields.** `thinking.display` is never sent, whatever the
+   option says (the API default applies). A fixed budget
+   (`{type: "enabled", budgetTokens}`) goes out as `{type: "adaptive"}` on a
+   model that supports adaptive thinking. `max_tokens` is capped at the
+   model's limit (128000 on Opus 4.6). Without an effort the CLI sends
+   `output_config.effort: "high"` on models that take one. The adapter
+   drops `display` with a one-time warning and refuses the other two
+   rewrites.
+10. **Files.** A fresh session (a call whose prompt is the first message:
+    first-turn tool loops, single-turn contexts) makes the CLI write its
+    own transcript under `CLAUDE_CONFIG_DIR/projects/<cwd key>/<session
+    id>.jsonl`, the whole conversation per call, and its retention sweep is
+    off with `settingSources: []`. A resumed session writes to the SDK's
+    temporary copy, which the SDK removes. The adapter names fresh sessions
+    itself and deletes that file after the call.
 
 ## Measurements
 
@@ -128,11 +166,14 @@ spawn  subscription token     first request p50 518ms (max 566) · response p50 
 prefix api-key (bare mode)    turn k starts with turn k-1's bytes: yes yes yes · CLI reminders per turn: 0 0 0 0
 prefix subscription token     turn k starts with turn k-1's bytes: yes yes yes · CLI reminders per turn: 3 3 3 3
 tools  played-back rounds → response ms: 1:447 2:471 3:512 4:523 5:676 · one upstream request each, forwarded messages = requested: yes
-hygiene CLI processes left running: 0 · /tmp/claude-resume-* dirs left: 0
+hygiene CLI processes left running: 0 · /tmp/claude-resume-* dirs left: 0 · transcript files left under config dirs: 0
 ```
 
 "Reminders per turn: 3" means the same three remembered blocks on the first
-user turn, re-sent unchanged. One api-key run once took 12.6 s to its first
+user turn, re-sent unchanged. Six concurrent calls through one adapter, with
+the upstream holding each response for 2.5 s so the processes overlapped:
+all six succeeded, ~235 MB RSS per CLI process at peak, 1.4 GB in total,
+none left afterwards. One api-key run once took 12.6 s to its first
 request. That did not reproduce in later runs, including with the page cache
 dropped (worst 852 ms), and is unexplained. A host-level run (`bun src/index.ts` in batch
 mode with a `claude-agent-sdk` recipe) completed a plain turn, then a
@@ -167,6 +208,12 @@ export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat…    # `claude setup-token`; or ANTHR
 - Reasoning settings (`agent.thinking`, the agent's live reasoning/effort
   settings) map onto the SDK's `thinking` and `effort` options. Absent
   thinking is sent as disabled. When effort is unset, the CLI sends `high`.
+  A thinking `display` other than the default is dropped with a warning; a
+  fixed thinking budget on a model that supports adaptive thinking is
+  refused (ask for `adaptive`).
+- With an API key this provider is strictly more than `anthropic` sends
+  with the same key (a process, an identity block, dropped sampling); that
+  mode exists for the offline bench, and the host says so at startup.
 
 ### What you give up, versus `anthropic`
 
@@ -174,6 +221,7 @@ export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat…    # `claude setup-token`; or ANTHR
 |---|---|
 | Formatter | `native` only; `anthropic-xml` is rejected at recipe load. |
 | Sampling | `temperature`, `top_p`, `top_k`, stop sequences are dropped with a one-time warning. |
+| Reasoning | Thinking `display` is dropped (one-time warning). A fixed budget on an adaptive-capable model is refused. `max_tokens` above the model's limit is refused rather than capped. |
 | Caching | The CLI's three breakpoints and TTL; `agent.cacheTtl`, `promptCaching`, `cacheKeepalive` don't apply. |
 | Accounting | No call ledger, quota meter or credential monitor yet; usage still lands in `llm-calls.jsonl`. |
 | Model-visible | Tool names carry `mcp__host__`. Tool definitions are NFKC-normalized. On a subscription, the first user turn carries the CLI's environment/model/date reminders. Agent SDK identity block. |
@@ -185,12 +233,12 @@ export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat…    # `claude setup-token`; or ANTHR
 - **No call has reached the real API.** Unknown:
   - whether the subscription endpoint accepts this traffic (it is the
     SDK's own request shape, so it should);
-  - real cache hit rates, and which TTL the CLI asks for;
+  - real cache hit rates (the CLI asks for the 1h TTL);
   - rate-limit headers;
   - whether the API accepts signed thinking replayed through playback. It
     is byte-identical to what the transcript path sends, but untested here.
 - Long runs: microcompact timers, date rollover (a new date reminder lands on
-  the newest turn), many concurrent CLI processes, memory per process.
+  the newest turn), more than six concurrent CLI processes.
 - After a host restart the remembered reminder rows are gone, so the first
   call puts fresh reminders on the newest turn: one prefix change, once.
 - macOS and Windows. Only linux-x64 was exercised.
@@ -205,6 +253,7 @@ export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat…    # `claude setup-token`; or ANTHR
 2. Keep the CLI process alive across a tool loop (42 ms vs ~450 ms a round),
    falling back to playback when the next request is not a continuation.
 3. Persist the remembered reminder rows next to the session store, so a
-   restart doesn't move them.
+   restart doesn't move them; keep `$DATA_DIR/agent-sdk/config` across
+   deploys for the same reason (the billing line's suffix lives there).
 4. Wire `rate_limit_event` messages into the quota meter and auth failures
    into the credential monitor.

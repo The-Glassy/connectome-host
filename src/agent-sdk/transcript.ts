@@ -176,6 +176,8 @@ export interface TranscriptRowsInput {
   model: string;
   /** CLI attachment rows remembered for the user turn ending a given prefix. */
   attachmentsAfter?: (prefixKey: string) => Array<Record<string, unknown>> | undefined;
+  /** Seed for the prefix keys (see prefixKeys). */
+  keySeed?: string;
 }
 
 /**
@@ -189,7 +191,7 @@ export function transcriptRows(input: TranscriptRowsInput): Array<Record<string,
   const rows: Array<Record<string, unknown>> = [];
   let parent: string | null = null;
   const timestamp = new Date().toISOString();
-  const keys = prefixKeys(input.messages);
+  const keys = prefixKeys(input.messages, input.keySeed);
   input.messages.forEach((m, index) => {
     const uuid = randomUUID();
     const common = { uuid, parentUuid: parent, sessionId: input.sessionId, timestamp, isSidechain: false, userType: 'external', cwd: input.cwd };
@@ -224,10 +226,15 @@ export function transcriptRows(input: TranscriptRowsInput): Array<Record<string,
   return rows;
 }
 
-/** Rolling hash per message: key i names the conversation up to message i. */
-export function prefixKeys(messages: WireMessage[]): string[] {
+/**
+ * Rolling hash per message: key i names the conversation up to message i.
+ * `seed` names what the messages hang off (model and system text), so two
+ * conversations that open with the same words under different models or
+ * prompts never share remembered attachment rows.
+ */
+export function prefixKeys(messages: WireMessage[], seed = ''): string[] {
   const keys: string[] = [];
-  let acc = '';
+  let acc = seed;
   for (const m of messages) {
     acc = createHash('sha256').update(acc).update(stableJson(normalizeMessage(m))).digest('hex');
     keys.push(acc);
@@ -373,11 +380,24 @@ export interface ToolCheck {
  * only by the CLI's own sanitization (cliSanitize), which is deterministic, so
  * the prompt prefix stays stable across calls; those tools are reported.
  */
+/** Tool-definition fields the CLI may add: its own cache marker, nothing else
+ *  (a `defer_loading` or `strict` would change how the model sees the tool). */
+const TOOL_FIELDS = new Set(['name', 'description', 'input_schema', 'cache_control']);
+
 export function checkWireTools(tools: unknown[] | undefined, wire: unknown): ToolCheck {
   const sanitized: string[] = [];
   const want = new Map(expectedTools(tools).map((t) => [t.name, t]));
-  const sent = new Map(((Array.isArray(wire) ? wire : []) as Array<{ name: string; description?: unknown; input_schema?: unknown }>)
-    .map((t) => [t.name, { name: t.name, description: t.description ?? '', input_schema: t.input_schema }]));
+  const list = (Array.isArray(wire) ? wire : []) as Array<{ name: string; description?: unknown; input_schema?: unknown }>;
+  const sent = new Map(list.map((t) => [t.name, { name: t.name, description: t.description ?? '', input_schema: t.input_schema }]));
+  if (sent.size !== list.length) {
+    const seen = new Set<string>();
+    const dup = list.map((t) => t.name).find((n) => seen.has(n) || (seen.add(n), false));
+    return { sanitized, diff: `tool ${dup} is listed more than once` };
+  }
+  for (const t of list) {
+    const fields = Object.keys(t).filter((k) => !TOOL_FIELDS.has(k));
+    if (fields.length) return { sanitized, diff: `tool ${t.name} carries ${fields.join(', ')}, which the definition did not` };
+  }
   const extra = [...sent.keys()].filter((n) => !want.has(n));
   const missing = [...want.keys()].filter((n) => !sent.has(n));
   if (extra.length || missing.length) {
@@ -419,4 +439,32 @@ export function checkWireSystem(texts: string[], wire: unknown): { ok: boolean; 
   const last = sent[sent.length - 1];
   if (last !== want) return { ok: false, cliBlocks: sent.slice(0, -1), diff: `system prompt differs: last block ${JSON.stringify(String(last).slice(0, 200))}` };
   return { ok: true, cliBlocks: sent.slice(0, -1) };
+}
+
+/** The thinking and effort the adapter asked the SDK for. */
+export interface AskedReasoning {
+  thinking: { type?: string; budgetTokens?: number };
+  effort?: string;
+}
+
+/**
+ * Whether the request carries the reasoning that was asked for. The CLI
+ * decides these from its options and the model: measured on 2.1.299, a fixed
+ * budget on an adaptive model goes out as `adaptive`, and `display` is never
+ * sent (the API default applies). What was not asked for — the CLI's own
+ * default effort — is reported, not refused.
+ */
+export function checkWireReasoning(asked: AskedReasoning, body: Record<string, unknown>): { diff?: string; cliEffort?: string } {
+  const wire = body.thinking as Record<string, unknown> | undefined;
+  const want = asked.thinking.type === 'enabled'
+    ? { type: 'enabled', ...(asked.thinking.budgetTokens ? { budget_tokens: asked.thinking.budgetTokens } : {}) }
+    : { type: asked.thinking.type ?? 'disabled' };
+  const { display: _display, ...got } = wire ?? {};
+  if (stableJson(got) !== stableJson(want)) {
+    const hint = asked.thinking.type === 'enabled' ? ' (the CLI sends adaptive thinking on a model that supports it; ask for thinking type adaptive)' : '';
+    return { diff: `thinking ${JSON.stringify(wire)}, requested ${JSON.stringify(want)}${hint}` };
+  }
+  const cliEffort = (body.output_config as { effort?: string } | undefined)?.effort;
+  if (asked.effort && cliEffort !== asked.effort) return { diff: `effort ${String(cliEffort)}, requested ${asked.effort}` };
+  return asked.effort ? {} : { cliEffort };
 }
