@@ -16,6 +16,7 @@ A map of the guides, by who they are for. The top-level
 | [debug-context-api.md](./debug-context-api.md) | Seeing exactly what the agent's next request would contain. |
 | [retrieval-traces.md](./retrieval-traces.md) | Why a lesson was (or wasn't) injected. |
 | [subscription-transport.md](./subscription-transport.md) | How the ChatGPT-subscription transport authenticates and refreshes. |
+| [claude-agent-sdk-provider.md](./claude-agent-sdk-provider.md) | The experimental `claude-agent-sdk` provider: what the CLI does on the wire, what is kept, what is not verified. |
 | [fleet-protocol.md](./fleet-protocol.md) | Headless mode, its socket protocol, and the fleet module. |
 
 ## Bringing an agent in from elsewhere
