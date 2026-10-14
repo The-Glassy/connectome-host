@@ -29,7 +29,7 @@
 
 import { mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
   MembraneError,
@@ -191,8 +191,11 @@ export class ClaudeAgentSdkAdapter implements ProviderAdapter {
 
   constructor(private readonly config: ClaudeAgentSdkAdapterConfig) {
     this.proxy = new LoopbackProxy(() => config.upstreamBaseURL ?? process.env.ANTHROPIC_BASE_URL ?? 'https://api.anthropic.com');
-    this.cwd = config.cwd ?? join(tmpdir(), 'connectome-agent-sdk', 'cwd');
-    this.configDir = config.configDir ?? join(tmpdir(), 'connectome-agent-sdk', 'config');
+    // Absolute, because the CLI resolves CLAUDE_CONFIG_DIR against its own cwd
+    // while this process resolves it against the host's: a relative DATA_DIR
+    // (the default ./data) would put the CLI's files where cleanup never looks.
+    this.cwd = resolve(config.cwd ?? join(tmpdir(), 'connectome-agent-sdk', 'cwd'));
+    this.configDir = resolve(config.configDir ?? join(tmpdir(), 'connectome-agent-sdk', 'config'));
     if (config.sdk) this.sdk = Promise.resolve(config.sdk);
   }
 

@@ -10,7 +10,7 @@
 import { describe, test, expect, afterAll, beforeEach } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { MembraneError, type ProviderRequest } from '@animalabs/membrane';
 import { ClaudeAgentSdkAdapter, type AgentSdk, type AgentSdkAuth } from '../src/agent-sdk/adapter.js';
 import { TOOL_PREFIX } from '../src/agent-sdk/transcript.js';
@@ -313,6 +313,21 @@ describe('claude-agent-sdk adapter', () => {
     expect(response.usage).toEqual({ inputTokens: 11, outputTokens: 5, cacheReadTokens: 7, cacheCreationTokens: 3 });
     expect(response.stopReason).toBe('end_turn');
     expect((response.raw as any).agentSdk.cliSystemBlocks[1]).toContain('Agent SDK');
+  });
+
+  test('relative directories reach the CLI as absolute paths, so cleanup looks where it writes', async () => {
+    // The default DATA_DIR is relative (./data). The CLI resolves
+    // CLAUDE_CONFIG_DIR against its own cwd, the host against its own.
+    const root = mkdtempSync(join(tmpdir(), 'agent-sdk-test-'));
+    const cwd = relative(process.cwd(), join(root, 'cwd'));
+    const configDir = relative(process.cwd(), join(root, 'cfg'));
+    expect(isAbsolute(configDir)).toBe(false);
+    const adapter = new ClaudeAgentSdkAdapter({ auth: { apiKey: 'sk-ant-api03-test' }, upstreamBaseURL: `http://127.0.0.1:${upstream.port}`, cwd, configDir, sdk: fakeSdk });
+    await adapter.stream(request([{ role: 'user', content: 'hi' }]), { onChunk: () => {} });
+    adapter.dispose();
+    const { options } = queryCalls.at(-1)!;
+    expect(options.cwd).toBe(resolve(cwd));
+    expect(options.env.CLAUDE_CONFIG_DIR).toBe(resolve(configDir));
   });
 
   test('passes model, max tokens, system, reasoning and auth to the CLI', async () => {
