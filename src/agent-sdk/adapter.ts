@@ -35,6 +35,7 @@ import {
   MembraneError,
   abortError,
   errorFromHttpResponse,
+  errorFromProviderStatus,
   unsupportedError,
 } from '@animalabs/membrane';
 import type {
@@ -50,6 +51,7 @@ import {
   TOOL_SERVER,
   UnrepresentableRequest,
   attachmentsForPrompt,
+  renderedCount,
   checkWireMessages,
   checkWireSystem,
   checkWireTools,
@@ -61,6 +63,7 @@ import {
   transcriptRows,
   type Block,
   type CallPlan,
+  type WireMessage,
 } from './transcript.js';
 
 export const AGENT_SDK_PACKAGE = '@anthropic-ai/claude-agent-sdk';
@@ -126,6 +129,14 @@ const FIDELITY_ENV: Record<string, string> = {
   CLAUDE_AGENT_SDK_CLIENT_APP: 'connectome-host',
 };
 
+/**
+ * Top-level request fields the CLI may send. Anything else — notably the
+ * CLI's default `context_management` (server-side thinking clearing) and
+ * `safeguards`, which FIDELITY_ENV switches off — fails the call, so a CLI
+ * that stops honoring those flags cannot change the context unnoticed.
+ */
+const WIRE_FIELDS = new Set(['model', 'messages', 'system', 'tools', 'metadata', 'max_tokens', 'thinking', 'temperature', 'output_config', 'stream']);
+
 const INHERITED_ENV = ['PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'SystemRoot', 'USERPROFILE'];
 
 /** Request fields the CLI offers no way to set; dropped with a warning. */
@@ -137,9 +148,14 @@ const MAX_REMEMBERED_ATTACHMENTS = 512;
 /** Longest a load waits for the previous call's attachment rows. */
 const ATTACHMENT_CAPTURE_WAIT_MS = 2_000;
 
-function injectedOnPrompt(message: { content?: unknown } | undefined): boolean {
-  return Array.isArray(message?.content) &&
-    (message.content as Array<{ type?: string; text?: unknown }>).some((b) => b.type === 'text' && String(b.text).startsWith('<system-reminder>'));
+/** Reminder blocks on the wire's `sent` turn that the requested turn lacks. */
+function addedReminders(sent: { content?: unknown } | undefined, requested: WireMessage): number {
+  const own = new Set((typeof requested.content === 'string' ? [{ type: 'text', text: requested.content }] : requested.content)
+    .filter((b) => b.type === 'text').map((b) => String(b.text)));
+  return Array.isArray(sent?.content)
+    ? (sent.content as Array<{ type?: string; text?: unknown }>)
+        .filter((b) => b.type === 'text' && String(b.text).startsWith('<system-reminder>') && !own.has(String(b.text))).length
+    : 0;
 }
 
 type Deferred<T> = { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void };
@@ -236,6 +252,9 @@ export class ClaudeAgentSdkAdapter implements ProviderAdapter {
       }
     }
     const sdk = await this.loadSdk();
+    // Listeners added below never fire for a signal that aborted during the
+    // await, so check again before anything is spawned.
+    if (options?.signal?.aborted) throw abortError(undefined, request);
     const sys = systemTexts(request.system);
     const { thinking, effort } = this.reasoningFor(request, kind);
     mkdirSync(this.cwd, { recursive: true });
@@ -265,13 +284,23 @@ export class ClaudeAgentSdkAdapter implements ProviderAdapter {
     const promptKey = prefixKeys([...plan.transcript, plan.prompt]).at(-1)!;
     const mirrored: Array<Record<string, unknown>> = [];
     let captured: (() => void) | undefined;
+    // Reminder blocks the CLI put on the prompt, known once the final request
+    // is seen; the remembered rows are complete when they render that many.
+    let promptReminders = Number.POSITIVE_INFINITY;
+    let attachmentsComplete = false;
     const remember = () => {
-      if (this.attachments.has(promptKey)) return;
-      const rows = attachmentsForPrompt(mirrored, plan.prompt);
+      const { rows, closed } = attachmentsForPrompt(mirrored, plan.prompt);
       if (rows.length === 0) return;
-      this.attachments.set(promptKey, rows);
-      if (this.attachments.size > MAX_REMEMBERED_ATTACHMENTS) this.attachments.delete(this.attachments.keys().next().value!);
-      captured?.();
+      // Rows may arrive over several batches: keep the longest set seen.
+      if ((this.attachments.get(promptKey)?.length ?? 0) < rows.length) {
+        this.attachments.delete(promptKey);
+        this.attachments.set(promptKey, rows);
+        if (this.attachments.size > MAX_REMEMBERED_ATTACHMENTS) this.attachments.delete(this.attachments.keys().next().value!);
+      }
+      if (closed || renderedCount(rows) >= promptReminders) {
+        attachmentsComplete = true;
+        captured?.();
+      }
     };
 
     const accumulator = new SseAccumulator(callbacks, options?.wrapThinkingTags === true);
@@ -308,6 +337,8 @@ export class ClaudeAgentSdkAdapter implements ProviderAdapter {
       }
       sanitizedTools = toolCheck.sanitized;
       if (body.model !== request.model) return refuse(`model ${String(body.model)}, expected ${request.model}`);
+      const unexpected = Object.keys(body).filter((k) => !WIRE_FIELDS.has(k));
+      if (unexpected.length) return refuse(`request carries ${unexpected.join(', ')}, which the conversation did not ask for`);
       injected.push(...messages.injected);
       cliBlocks = system.cliBlocks;
       if (round < plan.replay.length) {
@@ -319,6 +350,8 @@ export class ClaudeAgentSdkAdapter implements ProviderAdapter {
       round++;
       activeRound = -1;
       finalWire = body;
+      promptReminders = addedReminders((body.messages as Array<{ content?: unknown }>)[plan.transcript.length], plan.prompt);
+      remember();
       try { options?.onRequest?.(body); } catch { /* a caller's hook never fails the call */ }
       armIdle(firstEventMs, 'no response event arrived');
       return {
@@ -347,6 +380,14 @@ export class ClaudeAgentSdkAdapter implements ProviderAdapter {
                 accumulator.push(decoder.decode(value, { stream: true }));
               }
               const message = accumulator.finish();
+              if (message.error) {
+                throw errorFromProviderStatus({
+                  provider: 'anthropic',
+                  body: { type: 'error', error: message.error },
+                  message: message.error.message,
+                  rawRequest: finalWire,
+                });
+              }
               if (!message.sawTerminalEvent) throw new MembraneError({ type: 'network', message: 'claude-agent-sdk: response stream ended before message_delta', retryable: true, rawError: undefined, rawRequest: finalWire });
               if (!settled) { settled = true; outcome.resolve({ message }); }
             } catch (error) {
@@ -450,18 +491,19 @@ export class ClaudeAgentSdkAdapter implements ProviderAdapter {
         : this.exitError(`the SDK query failed: ${error instanceof Error ? error.message : String(error)}`, sdkErrors, stderrTail, finalWire, error)),
     );
 
+    let onAbortReject: (() => void) | undefined;
     try {
       const { message } = await Promise.race([
         outcome.promise,
         new Promise<never>((_, reject) => {
-          if (options?.signal) options.signal.addEventListener('abort', () => reject(abortError(undefined, finalWire ?? request)), { once: true });
+          onAbortReject = () => reject(abortError(undefined, finalWire ?? request));
+          options?.signal?.addEventListener('abort', onAbortReject, { once: true });
         }),
       ]);
       remember();
       // The CLI attached reminders to this prompt: hold the next load until
-      // their rows are mirrored, so that load renders this turn as sent.
-      const promptWire = (finalWire?.messages as Array<{ content?: unknown }> | undefined)?.[plan.transcript.length];
-      if (!this.attachments.has(promptKey) && injectedOnPrompt(promptWire)) {
+      // all their rows are mirrored, so that load renders this turn as sent.
+      if (promptReminders > 0 && !attachmentsComplete) {
         const capture = new Promise<void>((resolve) => {
           captured = resolve;
           setTimeout(resolve, ATTACHMENT_CAPTURE_WAIT_MS);
@@ -496,6 +538,7 @@ export class ClaudeAgentSdkAdapter implements ProviderAdapter {
     } finally {
       if (idleTimer) clearTimeout(idleTimer);
       options?.signal?.removeEventListener('abort', onExternalAbort);
+      if (onAbortReject) options?.signal?.removeEventListener('abort', onAbortReject);
       finished();
       abort.abort();
       this.proxy.unregister(callId);

@@ -17,7 +17,13 @@ import { TOOL_PREFIX } from '../src/agent-sdk/transcript.js';
 
 // --- Stand-in Messages API ---------------------------------------------------
 
-type Reply = { status?: number; headers?: Record<string, string>; error?: unknown; blocks?: any[]; stop?: string; delayMs?: number };
+type Reply = {
+  status?: number; headers?: Record<string, string>; error?: unknown; blocks?: any[]; stop?: string; delayMs?: number;
+  /** Frame the stream with CRLF line endings. */
+  crlf?: boolean;
+  /** End a 200 stream with an `error` event instead of message_delta. */
+  errorEvent?: { type: string; message: string };
+};
 let replies: Reply[] = [];
 const upstreamBodies: any[] = [];
 const upstream = Bun.serve({
@@ -31,15 +37,20 @@ const upstream = Bun.serve({
       return new Response(JSON.stringify(r.error ?? { type: 'error', error: { type: 'rate_limit_error', message: 'slow down' } }), { status: r.status, headers: { 'content-type': 'application/json', ...r.headers } });
     }
     if (r.delayMs) await Bun.sleep(r.delayMs);
-    return new Response(sse(r.blocks ?? [], r.stop ?? 'end_turn', body.model), { headers: { 'content-type': 'text/event-stream' } });
+    const stream = sse(r.blocks ?? [], r.stop ?? 'end_turn', body.model, r.errorEvent);
+    return new Response(r.crlf ? stream.replace(/\n/g, '\r\n') : stream, { headers: { 'content-type': 'text/event-stream' } });
   },
 });
 afterAll(() => upstream.stop(true));
 
-function sse(blocks: any[], stop: string, model: string): string {
+function sse(blocks: any[], stop: string, model: string, errorEvent?: Reply['errorEvent']): string {
   const out: string[] = [];
   const ev = (type: string, data: any) => out.push(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
   ev('message_start', { message: { id: 'msg_1', type: 'message', role: 'assistant', model, content: [], usage: { input_tokens: 11, output_tokens: 1, cache_read_input_tokens: 7, cache_creation_input_tokens: 3 } } });
+  if (errorEvent) {
+    ev('error', { error: errorEvent });
+    return out.join('');
+  }
   blocks.forEach((b, index) => {
     if (b.type === 'text') {
       ev('content_block_start', { index, content_block: { type: 'text', text: '' } });
@@ -65,18 +76,24 @@ interface FakeCliBehaviour {
   /** Edit the messages before each request, as a misbehaving CLI would. */
   rewrite?: (messages: any[], turn: number) => any[];
   /** Attach a reminder to the prompt unless history already has one, and
-   *  mirror its attachment row only after the call (as the SDK does). */
-  reminders?: boolean;
+   *  mirror its attachment row only after the call (as the SDK does).
+   *  'split': two reminders, their rows mirrored in separate batches with
+   *  no closing row. */
+  reminders?: boolean | 'split';
+  /** Extra top-level fields on every request body. */
+  extraBody?: Record<string, unknown>;
 }
 const queryCalls: Array<{ options: Record<string, any> }> = [];
 const toolCalls: string[] = [];
 let behaviour: FakeCliBehaviour = {};
 const REMINDER = '<system-reminder>\nToday is a test.\n</system-reminder>';
+const REMINDER_2 = '<system-reminder>\nYou run in a test.\n</system-reminder>';
+const renderedText = (row: any): string => row.rendered?.[0]?.content ?? REMINDER;
 
 function parseSse(text: string): any[] {
   const content: any[] = [];
   let json = '';
-  for (const frame of text.split('\n\n')) {
+  for (const frame of text.replace(/\r\n/g, '\n').split('\n\n')) {
     const line = frame.split('\n').find((l) => l.startsWith('data:'));
     if (!line) continue;
     const e = JSON.parse(line.slice(5));
@@ -114,11 +131,15 @@ const fakeSdk: AgentSdk = {
     const rows: any[] = options.resume ? await options.sessionStore.load({ projectKey: 'p', sessionId: options.resume }) : [];
     const messages: any[] = [];
     let hadReminder = false;
+    const rendered = new Map<any, number>();
     for (const row of rows) {
       if (row.type === 'attachment') {
         hadReminder = true;
+        // Like the CLI: a turn's attachments render ahead of its own text, in row order.
         const last = messages.at(-1);
-        last.content = [{ type: 'text', text: REMINDER }, ...last.content];
+        const at = rendered.get(last) ?? 0;
+        last.content.splice(at, 0, { type: 'text', text: renderedText(row) });
+        rendered.set(last, at + 1);
       } else if (row.type === 'user' || row.type === 'assistant') {
         messages.push({ role: row.message.role, content: typeof row.message.content === 'string' ? [{ type: 'text', text: row.message.content }] : [...row.message.content] });
       }
@@ -127,8 +148,10 @@ const fakeSdk: AgentSdk = {
     const raw = first.value.message;
     const promptMessage = { role: 'user', content: typeof raw.content === 'string' ? [{ type: 'text', text: raw.content }] : raw.content };
     const injectReminder = behaviour.reminders && !hadReminder;
-    messages.push(injectReminder ? { role: 'user', content: [{ type: 'text', text: REMINDER }, ...promptMessage.content] } : promptMessage);
-    if (injectReminder) {
+    const split = behaviour.reminders === 'split';
+    const added = !injectReminder ? [] : split ? [REMINDER, REMINDER_2] : [REMINDER];
+    messages.push({ role: 'user', content: [...added.map((t) => ({ type: 'text', text: t })), ...promptMessage.content] });
+    if (injectReminder && !split) {
       // The CLI writes the rows before its request; the SDK mirrors them later.
       setTimeout(() => {
         void options.sessionStore.append({}, [
@@ -137,6 +160,15 @@ const fakeSdk: AgentSdk = {
           { type: 'assistant', message: {} },
         ]);
       }, 50);
+    }
+    if (injectReminder && split) {
+      // One frame per batch, as with sessionStoreFlush 'eager', and no closing row.
+      const batches = [
+        [{ type: 'user', message: promptMessage }],
+        [{ type: 'attachment', uuid: 'a1', attachment: { type: 'date' }, rendered: [{ content: REMINDER }] }],
+        [{ type: 'attachment', uuid: 'a2', attachment: { type: 'environment' }, rendered: [{ content: REMINDER_2 }] }],
+      ];
+      batches.forEach((batch, i) => setTimeout(() => { void options.sessionStore.append({}, batch); }, 40 + i * 40));
     }
     yield { type: 'system', subtype: 'init' };
 
@@ -154,6 +186,7 @@ const fakeSdk: AgentSdk = {
         tools: tools.map((t: any) => ({ name: `${TOOL_PREFIX}${t.name}`, description: t.description, input_schema: t.inputSchema })),
         messages: sent,
         stream: true,
+        ...behaviour.extraBody,
       };
       let res: Response;
       try {
@@ -378,6 +411,86 @@ describe('claude-agent-sdk adapter', () => {
     expect(b.slice(0, a.length)).toEqual(a);
     expect(c.slice(0, b.length)).toEqual(b);
     expect(JSON.stringify(c).split('<system-reminder>').length - 1).toBe(1);
+  });
+
+  test('a CRLF-framed stream is read like an LF one', async () => {
+    const adapter = makeAdapter();
+    replies = [{ crlf: true, blocks: [{ type: 'text', text: 'over CRLF' }] }];
+    const chunks: string[] = [];
+    const response = await adapter.stream(request([{ role: 'user', content: 'hi' }]), { onChunk: (c) => chunks.push(c) });
+    adapter.dispose();
+    expect(response.content).toEqual([{ type: 'text', text: 'over CRLF' }]);
+    expect(chunks.join('')).toBe('over CRLF');
+    expect(response.stopReason).toBe('end_turn');
+  });
+
+  test('an error event inside a 200 stream keeps its type (overloaded → 529)', async () => {
+    const adapter = makeAdapter();
+    replies = [{ errorEvent: { type: 'overloaded_error', message: 'Overloaded' } }];
+    const error = await adapter.stream(request([{ role: 'user', content: 'hi' }]), { onChunk: () => {} }).catch((e) => e);
+    adapter.dispose();
+    expect(error).toBeInstanceOf(MembraneError);
+    expect(error.type).toBe('server');
+    expect(error.httpStatus).toBe(529);
+    expect(error.retryable).toBe(true);
+    expect(error.message).toContain('Overloaded');
+  });
+
+  test('server-side context edits on the request are refused, not forwarded', async () => {
+    for (const extraBody of [
+      { context_management: { edits: [{ type: 'clear_thinking_20251015', keep: 'all' }] } },
+      { safeguards: [{ type: 'dangerous_tool_use' }] },
+    ]) {
+      const adapter = makeAdapter();
+      behaviour = { extraBody };
+      const error = await adapter.stream(request([{ role: 'user', content: 'hi' }]), { onChunk: () => {} }).catch((e) => e);
+      adapter.dispose();
+      expect(error.type).toBe('unsupported');
+      expect(error.message).toContain(Object.keys(extraBody)[0]!);
+    }
+    expect(upstreamBodies).toHaveLength(0);
+  });
+
+  test('an abort that lands while the SDK loads starts no CLI', async () => {
+    const adapter = makeAdapter();
+    const controller = new AbortController();
+    const pending = adapter.stream(request([{ role: 'user', content: 'hi' }]), { onChunk: () => {} }, { signal: controller.signal });
+    controller.abort();
+    const error = await pending.catch((e) => e);
+    adapter.dispose();
+    expect(error).toBeInstanceOf(MembraneError);
+    expect(error.type).toBe('abort');
+    expect(queryCalls).toHaveLength(0);
+    expect(upstreamBodies).toHaveLength(0);
+  });
+
+  test('a finished call leaves no listener on a signal its caller keeps', async () => {
+    const adapter = makeAdapter();
+    const signal = new AbortController().signal;
+    let live = 0;
+    const add = signal.addEventListener.bind(signal);
+    const remove = signal.removeEventListener.bind(signal);
+    signal.addEventListener = ((type: string, fn: any, o?: any) => { live++; add(type, fn, o); }) as typeof signal.addEventListener;
+    signal.removeEventListener = ((type: string, fn: any, o?: any) => { live--; remove(type, fn, o); }) as typeof signal.removeEventListener;
+    for (let i = 0; i < 3; i++) await adapter.stream(request([{ role: 'user', content: `hi ${i}` }]), { onChunk: () => {} }, { signal });
+    adapter.dispose();
+    expect(live).toBe(0);
+  });
+
+  test('attachment rows mirrored over several batches are all kept', async () => {
+    const adapter = makeAdapter({ oauthToken: 'sk-ant-oat01-x' });
+    behaviour = { reminders: 'split' };
+    let messages: any[] = [{ role: 'user', content: [{ type: 'text', text: 'first' }] }];
+    for (let i = 0; i < 3; i++) {
+      replies = [{ blocks: [{ type: 'text', text: `r${i}` }] }];
+      const r = await adapter.stream(request(messages), { onChunk: () => {} });
+      messages = [...messages, { role: 'assistant', content: r.content }, { role: 'user', content: [{ type: 'text', text: `next ${i}` }] }];
+    }
+    adapter.dispose();
+    const [a, b, c] = upstreamBodies.map((body) => strip(body.messages));
+    expect(b.slice(0, a.length)).toEqual(a);
+    expect(c.slice(0, b.length)).toEqual(b);
+    expect(JSON.stringify(c).split('<system-reminder>').length - 1).toBe(2);
   });
 
   test('an abort stops the call', async () => {

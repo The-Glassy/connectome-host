@@ -9,6 +9,7 @@ import {
   TOOL_PREFIX,
   UnrepresentableRequest,
   attachmentsForPrompt,
+  renderedCount,
   checkWireMessages,
   checkWireSystem,
   checkWireTools,
@@ -187,7 +188,21 @@ describe('session rows', () => {
       { type: 'assistant', message: {} },
       { type: 'attachment', attachment: { type: 'later' } },
     ];
-    expect(attachmentsForPrompt(entries, user(text('hello'))).map((e) => (e.attachment as { type: string }).type)).toEqual(['environment', 'date']);
-    expect(attachmentsForPrompt(entries, user(text('other')))).toEqual([]);
+    const found = attachmentsForPrompt(entries, user(text('hello')));
+    expect(found.rows.map((e) => (e.attachment as { type: string }).type)).toEqual(['environment', 'date']);
+    expect(found.closed).toBe(true);
+    expect(attachmentsForPrompt(entries, user(text('other')))).toEqual({ rows: [], closed: false });
+  });
+
+  test('rows still arriving are reported open, and counted by what they render', () => {
+    const partial = [
+      { type: 'user', message: { role: 'user', content: [text('hello')] } },
+      { type: 'attachment', attachment: { type: 'environment' }, rendered: [{ content: '<system-reminder>env</system-reminder>' }] },
+      { type: 'attachment', attachment: { type: 'session_context' } },
+    ];
+    const found = attachmentsForPrompt(partial, user(text('hello')));
+    expect(found).toMatchObject({ closed: false });
+    expect(found.rows).toHaveLength(2);
+    expect(renderedCount(found.rows)).toBe(1);
   });
 });

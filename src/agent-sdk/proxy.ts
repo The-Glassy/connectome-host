@@ -176,6 +176,8 @@ export interface AccumulatedMessage {
   };
   rawUsage: Record<string, unknown>;
   sawTerminalEvent: boolean;
+  /** An `error` event inside a 200 stream (e.g. overloaded_error). */
+  error?: { type?: string; message?: string };
 }
 
 /**
@@ -199,7 +201,9 @@ export class SseAccumulator {
   constructor(private readonly callbacks: StreamCallbacks, private readonly wrapThinkingTags = false) {}
 
   push(chunk: string): void {
-    this.buffer += chunk;
+    // SSE allows CRLF line endings. Normalizing the accumulated buffer (not
+    // the chunk) also joins a CR and LF that arrive in different chunks.
+    this.buffer = (this.buffer + chunk).replace(/\r\n/g, '\n');
     let cut: number;
     while ((cut = this.buffer.indexOf('\n\n')) >= 0) {
       const frame = this.buffer.slice(0, cut);
@@ -309,6 +313,9 @@ export class SseAccumulator {
         m.rawUsage = { ...m.rawUsage, ...usage };
         break;
       }
+      case 'error':
+        m.error = event.error ?? { type: 'api_error', message: 'stream error event' };
+        break;
       default:
         break;
     }

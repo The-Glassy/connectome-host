@@ -237,19 +237,29 @@ export function prefixKeys(messages: WireMessage[]): string[] {
 
 /**
  * The attachment rows the CLI wrote after the prompt's user row, from the
- * entries it mirrored to the SessionStore during the call.
+ * entries it has mirrored to the SessionStore so far. The SDK may deliver
+ * them over several batches; `closed` says a later user/assistant row has
+ * arrived, so no more of them can follow.
  */
-export function attachmentsForPrompt(entries: Array<Record<string, unknown>>, prompt: WireMessage): Array<Record<string, unknown>> {
+export function attachmentsForPrompt(
+  entries: Array<Record<string, unknown>>,
+  prompt: WireMessage,
+): { rows: Array<Record<string, unknown>>; closed: boolean } {
   const want = stableJson(normalizeMessage(prompt));
   const start = entries.findIndex((e) => e.type === 'user' &&
     stableJson(normalizeMessage({ role: 'user', content: (e.message as WireMessage | undefined)?.content ?? '' })) === want);
-  if (start < 0) return [];
-  const out: Array<Record<string, unknown>> = [];
+  if (start < 0) return { rows: [], closed: false };
+  const rows: Array<Record<string, unknown>> = [];
   for (const e of entries.slice(start + 1)) {
-    if (e.type === 'attachment') out.push(e);
-    else if (e.type === 'user' || e.type === 'assistant') break;
+    if (e.type === 'attachment') rows.push(e);
+    else if (e.type === 'user' || e.type === 'assistant') return { rows, closed: true };
   }
-  return out;
+  return { rows, closed: false };
+}
+
+/** How many reminder blocks these attachment rows render to on the wire. */
+export function renderedCount(rows: Array<Record<string, unknown>>): number {
+  return rows.reduce((n, r) => n + (Array.isArray(r.rendered) ? r.rendered.length : 0), 0);
 }
 
 // --- Verification ----------------------------------------------------------

@@ -48,7 +48,10 @@ membrane request ──► planCall()                      src/agent-sdk/transcr
 The proxy (`src/agent-sdk/proxy.ts`) is the safety net. Each CLI request is
 compared with what membrane asked for: messages (after normalizing string vs
 block content and dropping cache markers), the system text, the tool list,
-and the model. Any other difference fails the membrane call with
+the model, and the set of top-level fields (anything beyond `model`,
+`messages`, `system`, `tools`, `metadata`, `max_tokens`, `thinking`,
+`temperature`, `output_config` and `stream` is refused, so the CLI's
+`context_management` or `safeguards` cannot come back unnoticed). Any other difference fails the membrane call with
 `type: 'unsupported'` and the diff, and nothing goes upstream. The only
 tolerated differences are:
 
@@ -79,7 +82,8 @@ Probed against a recording stand-in API. Each of these shaped the design:
    thinking), a `safeguards` classifier payload, `display: "updates"`
    thinking, and the `auto` permission mode, which makes **extra
    security-classifier API calls before every tool call**. These are off via
-   `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` and `permissionMode: 'default'`.
+   `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` and `permissionMode: 'default'`,
+   and the wire check refuses a request that carries either field.
 3. **Reminders.** Environment (cwd, platform), model identity and today's
    date arrive as `<system-reminder>` blocks prepended to the newest user
    turn, even with `verbatimPrompts`. Bare mode (`CLAUDE_CODE_SIMPLE=1`)
@@ -128,7 +132,9 @@ hygiene CLI processes left running: 0 · /tmp/claude-resume-* dirs left: 0
 ```
 
 "Reminders per turn: 3" means the same three remembered blocks on the first
-user turn, re-sent unchanged. A host-level run (`bun src/index.ts` in batch
+user turn, re-sent unchanged. One api-key run once took 12.6 s to its first
+request. That did not reproduce in later runs, including with the page cache
+dropped (worst 852 ms), and is unexplained. A host-level run (`bun src/index.ts` in batch
 mode with a `claude-agent-sdk` recipe) completed a plain turn, then a
 two-round tool loop on the host's real tools. That loop was three membrane
 calls with 0, 1 and 2 rounds played back, one upstream request each, signed
