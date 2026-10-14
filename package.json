@@ -25,6 +25,14 @@
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0"
   },
+  "peerDependencies": {
+    "@anthropic-ai/claude-agent-sdk": ">=0.3.299"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/claude-agent-sdk": {
+      "optional": true
+    }
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/anima-research/connectome-host.git"

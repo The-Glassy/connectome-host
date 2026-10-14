@@ -402,6 +402,7 @@ depend on what the endpoint reports.
 | `openai-responses` | `OPENAI_API_KEY` (`OPENAI_BASE_URL` optional) | OpenAI Platform, Responses API. |
 | `openrouter` | `OPENROUTER_API_KEY` | |
 | `mock` | none | Echoes the last user message by default; scripted replies and timing are set under `agent.mock` ([below](#mock-provider)). Calls are still logged. |
+| `claude-agent-sdk` | `CLAUDE_CODE_OAUTH_TOKEN` (else `ANTHROPIC_AUTH_TOKEN`, else `ANTHROPIC_API_KEY`) | **Experimental spike.** Calls go through the Claude Code CLI via the Claude Agent SDK (`npm install @anthropic-ai/claude-agent-sdk`), every request checked against the requested conversation. Native formatter only, ~0.45 s per call; see [docs/claude-agent-sdk-provider.md](docs/claude-agent-sdk-provider.md) for what it keeps and gives up. |
 
 Every provider's calls are logged to `$DATA_DIR/llm-calls.<iso>.jsonl`.
 `agent.formatter: "anthropic-xml"` with `agent.prefillUserMessage` reproduces
@@ -580,6 +581,8 @@ bun install      # or npm install; the postinstall step builds the web UI
 | `OPENROUTER_API_KEY` | — | `openrouter` recipes |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` | region `us-west-2` | `bedrock` recipes |
 | `BEDROCK_BASE_URL` | — | Route Bedrock calls through a gateway |
+| `CLAUDE_CODE_OAUTH_TOKEN` | — | Subscription token for `claude-agent-sdk` recipes (falls back to `ANTHROPIC_AUTH_TOKEN`, then `ANTHROPIC_API_KEY`) |
+| `CLAUDE_AGENT_SDK_CLI_PATH` | the SDK's platform package | Claude Code binary for `claude-agent-sdk` recipes |
 | `CODEX_BINARY` | `codex` | Codex CLI executable for `openai-codex` subscription auth |
 | `CODEX_HOME` | `~/.codex` | Codex credential/config directory |
 | `CODEX_BASE_URL` | ChatGPT Codex backend | Optional subscription transport override |

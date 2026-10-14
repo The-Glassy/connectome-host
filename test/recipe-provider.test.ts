@@ -22,6 +22,13 @@ describe('recipe provider validation', () => {
     })).agent.mock).toEqual({ echoMode: false, defaultResponse: 'canned' });
   });
 
+  test('accepts the claude-agent-sdk provider with the native formatter only', () => {
+    expect(validateRecipe(recipe({ provider: 'claude-agent-sdk' })).agent.provider).toBe('claude-agent-sdk');
+    expect(validateRecipe(recipe({ provider: 'claude-agent-sdk', formatter: 'native' })).agent.formatter).toBe('native');
+    expect(() => validateRecipe(recipe({ provider: 'claude-agent-sdk', formatter: 'anthropic-xml' })))
+      .toThrow(/anthropic-xml.*claude-agent-sdk/);
+  });
+
   test('rejects malformed mock settings', () => {
     expect(() => validateRecipe(recipe({ mock: 'echo' }))).toThrow(/agent.mock/);
     expect(() => validateRecipe(recipe({ mock: { echoMode: 'yes' } }))).toThrow(/echoMode/);

@@ -215,8 +215,10 @@ export interface RecipeAgent {
   timezone?: string;
   /** Provider transport. Omitted preserves the historical Anthropic default.
    * 'mock' wires membrane's MockAdapter — canned/echo responses, no API key,
-   * no provider spend; for exercising the full host loop offline. */
-  provider?: 'anthropic' | 'openai-responses' | 'openai-codex' | 'openrouter' | 'bedrock' | 'openai-compatible' | 'mock';
+   * no provider spend; for exercising the full host loop offline.
+   * 'claude-agent-sdk' (EXPERIMENTAL) serves calls through the Claude Code CLI
+   * via the Claude Agent SDK — see docs/claude-agent-sdk-provider.md. */
+  provider?: 'anthropic' | 'openai-responses' | 'openai-codex' | 'openrouter' | 'bedrock' | 'openai-compatible' | 'mock' | 'claude-agent-sdk';
   /**
    * Base URL of an OpenAI-compatible chat-completions endpoint, e.g.
    * `http://localhost:11434/v1` (Ollama), a vLLM server, Together, Groq,
@@ -1721,10 +1723,20 @@ export function validateRecipe(raw: unknown): Recipe {
       agent.provider !== 'openrouter' &&
       agent.provider !== 'bedrock' &&
       agent.provider !== 'openai-compatible' &&
-      agent.provider !== 'mock') {
+      agent.provider !== 'mock' &&
+      agent.provider !== 'claude-agent-sdk') {
     throw new Error(
-      `Recipe agent.provider must be 'anthropic', 'openai-responses', 'openai-codex', 'openrouter', 'bedrock', 'openai-compatible', or 'mock', ` +
+      `Recipe agent.provider must be 'anthropic', 'openai-responses', 'openai-codex', 'openrouter', 'bedrock', 'openai-compatible', 'mock', or 'claude-agent-sdk', ` +
       `got ${JSON.stringify(agent.provider)}.`,
+    );
+  }
+
+  // The CLI answers user turns only: a prefill transcript (anthropic-xml ends
+  // every request on an assistant prefill) cannot be expressed through it.
+  if (agent.provider === 'claude-agent-sdk' && agent.formatter === 'anthropic-xml') {
+    throw new Error(
+      "Recipe agent.formatter 'anthropic-xml' cannot run on agent.provider 'claude-agent-sdk': " +
+      'the Claude Code CLI sends no assistant prefill. Use the native formatter or the anthropic provider.',
     );
   }
 

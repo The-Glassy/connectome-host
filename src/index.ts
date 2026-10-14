@@ -19,6 +19,9 @@
  *                         Point it at a COPY, never at ~/.claude/.credentials.json.
  *   ANTHROPIC_OAUTH_AUTO_REFRESH - 1/true: rotate on a 401 without asking
  *                         (default: alert + operator action)
+ *   CLAUDE_CODE_OAUTH_TOKEN - Subscription token for recipe provider
+ *                         "claude-agent-sdk" (else ANTHROPIC_AUTH_TOKEN, else
+ *                         ANTHROPIC_API_KEY); see docs/claude-agent-sdk-provider.md
  *   MODEL               - Override model (default: from recipe or claude-opus-4-6)
  *   DATA_DIR            - Data directory for sessions (default: ./data)
  */
@@ -40,6 +43,7 @@ import { mockAdapterConfig } from './mock-provider.js';
 import { gateTelemetryHeaders, stampedTrigger, type TurnTrigger } from './gate-telemetry.js';
 import { LoggingBedrockAdapter } from './logging-bedrock-adapter.js';
 import { CodexSubscriptionAdapter, codexGateAuth } from './codex-subscription-adapter.js';
+import { ClaudeAgentSdkAdapter } from './agent-sdk/adapter.js';
 import { CallLedger } from './call-ledger.js';
 import { SettingsModule } from './modules/settings-module.js';
 import { AgentFramework, WorkspaceModule, resolveTimeZone, HistoryModule, type Module } from '@animalabs/agent-framework';
@@ -109,6 +113,9 @@ const config = {
   // credential as a Bearer token to whatever endpoint a recipe names.
   openaiCompatibleApiKey: process.env.OPENAI_COMPATIBLE_API_KEY,
   codexBinary: process.env.CODEX_BINARY,
+  // claude-agent-sdk provider: the CLI's own subscription-token variable wins.
+  agentSdkOAuthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_AUTH_TOKEN,
+  agentSdkCliPath: process.env.CLAUDE_AGENT_SDK_CLI_PATH,
   model: process.env.MODEL,
   dataDir: process.env.DATA_DIR || './data',
 };
@@ -980,6 +987,10 @@ async function main() {
     console.error('Missing AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY for recipe provider "bedrock".');
     process.exit(1);
   }
+  if (provider === 'claude-agent-sdk' && !config.agentSdkOAuthToken && !config.apiKey) {
+    console.error('Missing CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY) for recipe provider "claude-agent-sdk".');
+    process.exit(1);
+  }
   if (provider === 'anthropic' && !config.apiKey && !config.authToken && !config.anthropicCredentialsFile) {
     console.error('Missing ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN / ANTHROPIC_OAUTH_CREDENTIALS_FILE). Set one in .env or environment.');
     process.exit(1);
@@ -1100,6 +1111,20 @@ async function main() {
   const mockAdapter = provider === 'mock'
     ? new MockAdapter(mockAdapterConfig(recipe.agent.mock))
     : undefined;
+  // EXPERIMENTAL: membrane calls served by the Claude Code CLI through the
+  // Claude Agent SDK (an optional peer dependency). A subscription token wins
+  // over an API key, as on the anthropic provider. See
+  // docs/claude-agent-sdk-provider.md for what this does and does not keep.
+  const agentSdkAdapter = provider === 'claude-agent-sdk'
+    ? new ClaudeAgentSdkAdapter({
+        auth: config.agentSdkOAuthToken ? { oauthToken: config.agentSdkOAuthToken } : { apiKey: config.apiKey! },
+        upstreamBaseURL: process.env.ANTHROPIC_BASE_URL || undefined,
+        cwd: join(config.dataDir, 'agent-sdk', 'cwd'),
+        configDir: join(config.dataDir, 'agent-sdk', 'config'),
+        ...(config.agentSdkCliPath ? { pathToClaudeCodeExecutable: config.agentSdkCliPath } : {}),
+        getReasoning: () => settingsModule.getReasoning(),
+      })
+    : undefined;
   // -- x-gate-debt-chunks stamp (membrane dynamicHeaders, antra-tess/membrane#65)
   // The gate records compression-debt per ledger row; debt only changes at
   // calls, so the per-call series is its full-resolution history ("spoke ->
@@ -1184,6 +1209,7 @@ async function main() {
       ?? (openrouterAdapter ? new LoggingProviderAdapter(openrouterAdapter, llmLogPath) : undefined)
       ?? (openaiCompatibleAdapter ? new LoggingProviderAdapter(openaiCompatibleAdapter, llmLogPath) : undefined)
       ?? (codexAdapter ? new LoggingProviderAdapter(codexAdapter, llmLogPath) : undefined)
+      ?? (agentSdkAdapter ? new LoggingProviderAdapter(agentSdkAdapter, llmLogPath) : undefined)
       ?? new LoggingAnthropicAdapter(
         {
           // Anthropic OAuth wins over API-key auth when both are present.
@@ -1403,6 +1429,7 @@ async function main() {
   } finally {
     credentials?.dispose();
     codexAdapter?.dispose();
+    agentSdkAdapter?.dispose();
   }
 }
 
