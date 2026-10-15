@@ -121,6 +121,17 @@ describe('validateRecipe — speech and tuneOut (Dendrite admission options)', (
     expect(() => validateRecipe(baseRecipe({ tuneOut: { silent: true } }))).toThrow(/tuneOut has unknown field "silent"/);
   });
 
+  test('dendrite.collapseDerivationNoticesAfter sets when a source hears counts instead of lines (agent-framework#270)', () => {
+    expect(validateRecipe(baseRecipe({ dendrite: { collapseDerivationNoticesAfter: 25 } })).dendrite).toEqual({ collapseDerivationNoticesAfter: 25 });
+    expect(validateRecipe(baseRecipe({ dendrite: { announceOrphans: false, collapseDerivationNoticesAfter: 0 } })).dendrite)
+      .toEqual({ announceOrphans: false, collapseDerivationNoticesAfter: 0 });
+    expect(() => validateRecipe(baseRecipe({ dendrite: { collapseDerivationNoticesAfter: -1 } }))).toThrow(/collapseDerivationNoticesAfter must be a non-negative integer/);
+    expect(() => validateRecipe(baseRecipe({ dendrite: { collapseDerivationNoticesAfter: 2.5 } }))).toThrow(/non-negative integer/);
+    expect(() => validateRecipe(baseRecipe({ dendrite: { announceOrphans: 'no' } }))).toThrow(/dendrite\.announceOrphans must be a boolean/);
+    expect(() => validateRecipe(baseRecipe({ dendrite: { quiet: true } }))).toThrow(/dendrite has unknown field "quiet"/);
+    expect(() => validateRecipe(baseRecipe({ dendrite: 10 }))).toThrow(/dendrite must be an object/);
+  });
+
   test('tuneOut.announce turns the excepted-channel announcement off', () => {
     expect(validateRecipe(baseRecipe({ tuneOut: { enabled: true, announce: false } })).tuneOut).toEqual({ enabled: true, announce: false });
     expect(() => validateRecipe(baseRecipe({ tuneOut: { announce: 'no' } }))).toThrow(/tuneOut\.announce must be a boolean/);

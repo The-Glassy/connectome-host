@@ -1161,6 +1161,18 @@ export interface RecipeTuneOut {
   announce?: boolean;
 }
 
+/** Dendrite lifecycle options (agent-framework FrameworkConfig.dendrite). */
+export interface RecipeDendrite {
+  /** Tell the first adoption candidate when task work is orphaned. Default true. */
+  announceOrphans?: boolean;
+  /**
+   * Every derivation tells the agent it was made from, in one line. After
+   * this many of one kind, the agent hears a count line every so many
+   * instead (agent-framework#270). Default 10; 0 never collapses.
+   */
+  collapseDerivationNoticesAfter?: number;
+}
+
 /**
  * Per-channel conversation routing (agent-framework ConversationRouter):
  * the recipe's agent becomes a dormant "trunk" template, and qualifying
@@ -1248,6 +1260,8 @@ export interface Recipe {
   speech?: RecipeSpeech;
   /** Offer `tune_out` without a reader (agent-framework `tuneOut`). */
   tuneOut?: RecipeTuneOut;
+  /** Dendrite lifecycle options (agent-framework `dendrite`). */
+  dendrite?: RecipeDendrite;
   /**
    * MCPL RFC-008 operator class overrides: tool-name pattern → classes. The
    * highest-precedence source of a tool's class, and the way to class
@@ -1631,7 +1645,7 @@ function validateKvUnifiedConfig(strategy: Record<string, unknown>): void {
  */
 const RECIPE_KEYS = [
   'name', 'description', 'version', 'agent', 'mcpServers', 'modules', 'extensions',
-  'sessionNaming', 'codeExecution', 'conversations', 'subconscious', 'speech', 'tuneOut', 'toolClassOverrides',
+  'sessionNaming', 'codeExecution', 'conversations', 'subconscious', 'speech', 'tuneOut', 'dendrite', 'toolClassOverrides',
 ] as const;
 const RECIPE_AGENT_KEYS = [
   'name', 'model', 'timezone', 'provider', 'baseUrl', 'formatter', 'retry', 'prefillUserMessage',
@@ -2850,6 +2864,25 @@ export function validateRecipe(raw: unknown): Recipe {
       if (tuneOut[key] !== undefined && typeof tuneOut[key] !== 'boolean') {
         throw new Error(`Recipe tuneOut.${key} must be a boolean.`);
       }
+    }
+  }
+
+  if (obj.dendrite !== undefined) {
+    if (!obj.dendrite || typeof obj.dendrite !== 'object' || Array.isArray(obj.dendrite)) {
+      throw new Error('Recipe dendrite must be an object.');
+    }
+    const dendrite = obj.dendrite as Record<string, unknown>;
+    for (const key of Object.keys(dendrite)) {
+      if (key !== 'announceOrphans' && key !== 'collapseDerivationNoticesAfter') {
+        throw new Error(`Recipe dendrite has unknown field ${JSON.stringify(key)} (expected: announceOrphans, collapseDerivationNoticesAfter).`);
+      }
+    }
+    if (dendrite.announceOrphans !== undefined && typeof dendrite.announceOrphans !== 'boolean') {
+      throw new Error('Recipe dendrite.announceOrphans must be a boolean.');
+    }
+    const after = dendrite.collapseDerivationNoticesAfter;
+    if (after !== undefined && !(typeof after === 'number' && Number.isInteger(after) && after >= 0)) {
+      throw new Error('Recipe dendrite.collapseDerivationNoticesAfter must be a non-negative integer.');
     }
   }
 

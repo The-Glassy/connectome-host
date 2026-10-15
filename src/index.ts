@@ -600,6 +600,7 @@ agents: [agentConfig],
         : {}),
       ...(recipe.speech ? { speech: recipe.speech } : {}),
       ...(recipe.tuneOut ? { tuneOut: recipe.tuneOut } : {}),
+      ...(recipe.dendrite ? { dendrite: recipe.dendrite } : {}),
     } as object),
     // MCPL RFC-008 tool classes: this host's module table, and the recipe's
     // operator overrides. Spread as an untyped object so an agent-framework
