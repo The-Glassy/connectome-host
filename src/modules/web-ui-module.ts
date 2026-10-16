@@ -1825,7 +1825,12 @@ export class WebUiModule implements Module {
     }
     if (client.auth === 'pending') return; // nothing else before auth
     if (client.auth === 'observer' && !this.observerMaySend(client, parsed.type)) {
-      this.send(client, { type: 'error', message: `forbidden for observer scope (${parsed.type})` });
+      const corrId = (parsed as { corrId?: unknown }).corrId;
+      this.send(client, {
+        type: 'error',
+        ...(typeof corrId === 'string' ? { corrId } : {}),
+        message: `forbidden for observer scope (${parsed.type})`,
+      });
       return;
     }
 
@@ -1845,7 +1850,11 @@ export class WebUiModule implements Module {
         if (parsed.images && parsed.images.length > 0) {
           const checked = userImageBlocks(parsed.images);
           if (!checked.ok) {
-            this.send(client, { type: 'error', message: `message not sent: ${checked.error}` });
+            this.send(client, {
+              type: 'error',
+              ...(parsed.corrId !== undefined ? { corrId: parsed.corrId } : {}),
+              message: `message not sent: ${checked.error}`,
+            });
             return;
           }
           content = parsed.content.trim()

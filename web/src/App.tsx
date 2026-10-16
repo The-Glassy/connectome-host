@@ -22,6 +22,7 @@ import {
 } from './Health';
 import { BranchPanel } from './Branches';
 import { AttachmentStrip, dragHasFiles, pastedImages, prepareImage, type Attachment } from './Attachments';
+import { isSyntheticId, pendingEchoIndex } from './echo';
 import { createQuotaPoll, quotaReadout, quotaTitle, quotaTone } from './quota';
 import {
   WEB_PROTOCOL_VERSION,
@@ -88,6 +89,9 @@ interface Message {
   lines?: Array<{ text: string; style?: 'user' | 'agent' | 'tool' | 'system' }>;
   /** True if the message is mid-stream — render with a cursor cue. */
   streaming?: boolean;
+  /** Client-only, on a row typed here until its echo replaces it: the
+   *  images it sent, so a refused send can go back into the composer. */
+  sentImages?: Attachment[];
   /** For 'trigger' participant: origin/source/author metadata for the box header. */
   trigger?: {
     origin: string;
@@ -99,7 +103,6 @@ interface Message {
 
 let messageCounter = 0;
 const nextMessageId = () => `m${++messageCounter}`;
-const isSyntheticId = (id: string): boolean => /^m\d+$/.test(id);
 let streamIdSeq = 0;
 const streamLineId = (): number => ++streamIdSeq;
 
@@ -928,12 +931,10 @@ export function App() {
       }
       // Server echo of a message typed here: adopt into the optimistic row.
       if (incoming.participant === 'user') {
-        for (let i = arr.length - 1; i >= Math.max(0, arr.length - 3); i--) {
-          const m = arr[i]!;
-          if (m.participant === 'user' && isSyntheticId(m.id) && m.text === incoming.text) {
-            arr[i] = incoming;
-            return;
-          }
+        const i = pendingEchoIndex(arr, incoming);
+        if (i >= 0) {
+          arr[i] = incoming;
+          return;
         }
       }
       arr.push(incoming);
@@ -1234,6 +1235,7 @@ export function App() {
         applyAppended,
         applyHistoryPage,
         appendMessage: (m) => setMessages(produce(arr => arr.push(m))),
+        retractSend,
         setUsage,
         setPerAgentCost,
         setCallLedger,
@@ -1450,21 +1452,46 @@ export function App() {
       wire.send({ type: 'route-to-child', childName: route.childName, content: route.content });
       return;
     }
+    // The row's id is the send's corrId: a refusal names it, and the row
+    // comes out (see retractSend).
+    const id = nextMessageId();
     setMessages(produce((arr) => arr.push({
-      id: nextMessageId(),
+      id,
       participant: 'user',
       text,
       timestamp: Date.now(),
       ...(images.length > 0
-        ? { blocks: images.map((a): UiBlock => ({ kind: 'media', mediaType: a.mediaType, dataUrl: a.dataUrl })) }
+        ? {
+            blocks: images.map((a): UiBlock => ({ kind: 'media', mediaType: a.mediaType, dataUrl: a.dataUrl })),
+            sentImages: images,
+          }
         : {}),
     })));
     queueScroll();
     wire.send({
       type: 'user-message',
       content: text,
+      corrId: id,
       ...(images.length > 0 ? { images: images.map((a) => ({ mediaType: a.mediaType, data: a.data })) } : {}),
     });
+  };
+
+  /** A send the host refused: take its row out of the transcript (the error
+   *  row says why) and, when the composer is empty, put the message back in
+   *  it to fix and send again. False when `corrId` names no such row. */
+  const retractSend = (corrId: string): boolean => {
+    const i = messages.findIndex((m) => m.id === corrId && m.participant === 'user');
+    if (i < 0) return false;
+    const row = messages[i]!;
+    const text = row.text;
+    const images = (row.sentImages ?? []).map((a) => ({ ...a }));
+    setMessages(produce((arr) => { arr.splice(i, 1); }));
+    if (!draft().trim() && attachments().length === 0) {
+      setDraft(text);
+      setAttachments(images);
+      setAttachNotice('not sent (see the error above); the message is back here');
+    }
+    return true;
   };
 
   const interrupt = (): void => {
@@ -1920,6 +1947,8 @@ interface HandlerHooks {
   applyHistoryPage: (msg: HistoryPageMessage) => void;
   /** Append a single message at the end (used for command-result, errors, etc.). */
   appendMessage: (msg: Message) => void;
+  /** Take out the row of a refused send (its corrId); false if none. */
+  retractSend: (corrId: string) => boolean;
   setUsage: (u: TokenUsage) => void;
   setPerAgentCost: (c: PerAgentCost[]) => void;
   setCallLedger: (ledger: CallLedgerSnapshot | null) => void;
@@ -2144,6 +2173,7 @@ function handleServerMessage(
       return;
     case 'error':
       console.warn('[server error]', msg.message);
+      if (msg.corrId) hooks.retractSend(msg.corrId);
       hooks.appendMessage({
         id: nextMessageId(),
         participant: 'system',

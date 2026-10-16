@@ -21,6 +21,8 @@ describe('the wire shape', () => {
     expect(isClientMessage({ type: 'user-message', content: '', images: [{ mediaType: 'image/png', data: FIX.png }] })).toBe(true);
     expect(isClientMessage({ type: 'user-message', content: 'hi', images: [] })).toBe(true);
     expect(isClientMessage({ type: 'user-message', content: 'hi' })).toBe(true);
+    expect(isClientMessage({ type: 'user-message', content: 'hi', corrId: 'm3' })).toBe(true);
+    expect(isClientMessage({ type: 'user-message', content: 'hi', corrId: 3 })).toBe(false);
   });
 
   test('images that are not a list of { mediaType, data } strings are refused', () => {

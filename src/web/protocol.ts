@@ -757,6 +757,9 @@ export interface UserMessageMessage {
    *  the 'user-images' feature: an older host ignores the field, and the
    *  images would be dropped without a word. */
   images?: UserMessageImage[];
+  /** Echoed on the `error` that refuses the message, so the client can
+   *  take back the row it showed for it. */
+  corrId?: string;
 }
 
 /** One composer image: raw base64 (no `data:` prefix) and the type the
@@ -1220,6 +1223,7 @@ export function isClientMessage(value: unknown): value is WebUiClientMessage {
       return isOptionalScope(v.scope);
     case 'user-message':
       return typeof v.content === 'string'
+        && (v.corrId === undefined || typeof v.corrId === 'string')
         && (v.images === undefined || (Array.isArray(v.images) && v.images.every((img) => {
           const i = img as Record<string, unknown> | null;
           return !!i && typeof i === 'object' && typeof i.mediaType === 'string' && typeof i.data === 'string';

@@ -87,7 +87,9 @@ chunks are checksummed too; a JPEG's, GIF's or WebP's compressed data has no
 checksum, so damage inside it would take a decoder to see), and refuses a
 message whose image fails with `message not sent: <reason>`. A stored image the
 API refuses would fail every later inference on the branch, so it is never
-stored.
+stored. The refusal carries the send's `corrId`: the composer takes the
+message's row back out of the transcript and, when the composer is empty,
+puts the message back in it.
 
 Images can't go to a fleet child (`@name …`) or with a slash command; the
 composer says so and keeps the draft. Once sent, the context manager's

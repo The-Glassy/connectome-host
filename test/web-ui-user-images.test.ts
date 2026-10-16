@@ -119,6 +119,15 @@ describe('composer images over the WebSocket', () => {
     expect(pushed.length).toBe(before);
   });
 
+  test("a refusal names the send's corrId, so the client can take its row back", async () => {
+    const c = await connect();
+    await c.until(() => c.frames.find((f) => f.type === 'welcome'), 'welcome');
+    c.ws.send(JSON.stringify({ type: 'user-message', content: '', corrId: 'm7', images: [{ mediaType: 'image/png', data: FIX.png8001x1 }] }));
+    const err = await c.until(() => c.frames.find((f) => f.type === 'error'), 'the refusal');
+    expect(err.corrId).toBe('m7');
+    c.ws.close();
+  });
+
   const atCap = (): string => {
     const png = Buffer.from(FIX.png!, 'base64');
     return Buffer.concat([png, Buffer.alloc(USER_IMAGE_LIMITS.maxBase64Chars * 3 / 4 - png.length)]).toString('base64');
