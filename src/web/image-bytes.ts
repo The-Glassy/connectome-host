@@ -4,6 +4,14 @@
  * host (`user-images.ts`) and the Web UI's composer read images the same way.
  */
 
+/** Unsigned 32-bit reads. Built by multiplying, not shifting: `<<` and `|`
+ *  work in signed 32 bits, so a length with its top bit set would come out
+ *  negative and walk a cursor backwards (a 20-byte WebP hung the host). */
+const u32be = (b: Uint8Array, o: number): number =>
+  b[o]! * 0x1000000 + b[o + 1]! * 0x10000 + b[o + 2]! * 0x100 + b[o + 3]!;
+const u32le = (b: Uint8Array, o: number): number =>
+  b[o]! + b[o + 1]! * 0x100 + b[o + 2]! * 0x10000 + b[o + 3]! * 0x1000000;
+
 /** The image format the leading bytes show, among those the model APIs take. */
 export function sniffImageType(b: Uint8Array): string | undefined {
   if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
@@ -23,13 +31,12 @@ export function imageSize(b: Uint8Array, mediaType: string): { width: number; he
   const be16 = (o: number) => (b[o]! << 8) | b[o + 1]!;
   const le16 = (o: number) => b[o]! | (b[o + 1]! << 8);
   const le24 = (o: number) => b[o]! | (b[o + 1]! << 8) | (b[o + 2]! << 16);
-  const be32 = (o: number) => ((b[o]! << 24) >>> 0) + ((b[o + 1]! << 16) | (b[o + 2]! << 8) | b[o + 3]!);
   const tag = (o: number) => String.fromCharCode(b[o]!, b[o + 1]!, b[o + 2]!, b[o + 3]!);
   switch (mediaType) {
     case 'image/png':
       // 8-byte signature, then the IHDR chunk: length, 'IHDR', width, height.
       if (b.length < 24 || tag(12) !== 'IHDR') return null;
-      return { width: be32(16), height: be32(20) };
+      return { width: u32be(b, 16), height: u32be(b, 20) };
     case 'image/gif':
       if (b.length < 10) return null;
       return { width: le16(6), height: le16(8) };
@@ -44,8 +51,8 @@ export function imageSize(b: Uint8Array, mediaType: string): { width: number; he
       if (chunk === 'VP8L') {
         // Lossless: signature 0x2f, then width-1 and height-1 as 14 bits each.
         if (b[20] !== 0x2f) return null;
-        const bits = b[21]! | (b[22]! << 8) | (b[23]! << 16) | (b[24]! << 24);
-        return { width: (bits & 0x3fff) + 1, height: ((bits >>> 14) & 0x3fff) + 1 };
+        const bits = u32le(b, 21);
+        return { width: (bits % 0x4000) + 1, height: (Math.floor(bits / 0x4000) % 0x4000) + 1 };
       }
       if (chunk === 'VP8X') {
         // Extended: canvas width-1 and height-1 as 24 bits each.
@@ -102,11 +109,11 @@ function pngDamage(b: Uint8Array): string | null {
   let o = 8;
   let sawData = false;
   while (o + 12 <= b.length) {
-    const len = ((b[o]! << 24) >>> 0) + ((b[o + 1]! << 16) | (b[o + 2]! << 8) | b[o + 3]!);
+    const len = u32be(b, o);
     const type = String.fromCharCode(b[o + 4]!, b[o + 5]!, b[o + 6]!, b[o + 7]!);
     const end = o + 12 + len;
     if (end > b.length) return CUT_SHORT;
-    const stored = ((b[end - 4]! << 24) >>> 0) + ((b[end - 3]! << 16) | (b[end - 2]! << 8) | b[end - 1]!);
+    const stored = u32be(b, end - 4);
     if (crc32(b, o + 4, end - 4) !== stored) return `is damaged: its ${type} chunk fails its checksum`;
     if (type === 'IDAT') sawData = true;
     if (type === 'IEND') return sawData ? null : 'has no image data';
@@ -175,13 +182,13 @@ function gifDamage(b: Uint8Array): string | null {
 
 function webpDamage(b: Uint8Array): string | null {
   if (b.length < 12) return CUT_SHORT;
-  const riffEnd = 8 + (b[4]! | (b[5]! << 8) | (b[6]! << 16) | ((b[7]! << 24) >>> 0));
+  const riffEnd = 8 + u32le(b, 4);
   if (riffEnd > b.length) return CUT_SHORT;
   let o = 12;
   let sawImage = false;
   while (o + 8 <= riffEnd) {
     const type = String.fromCharCode(b[o]!, b[o + 1]!, b[o + 2]!, b[o + 3]!);
-    const size = b[o + 4]! | (b[o + 5]! << 8) | (b[o + 6]! << 16) | ((b[o + 7]! << 24) >>> 0);
+    const size = u32le(b, o + 4);
     if (o + 8 + size > riffEnd) return CUT_SHORT;
     if (type === 'VP8 ' || type === 'VP8L' || type === 'ANMF') sawImage = true;
     o += 8 + size + (size & 1);

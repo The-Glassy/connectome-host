@@ -173,6 +173,62 @@ describe('userImageBlocks', () => {
   });
 });
 
+describe('walking hostile bytes', () => {
+  // The walkers run synchronously in the host's WebSocket handler, so one
+  // that never ends freezes the host. These run in a child process with a
+  // deadline: a regression fails the test instead of hanging the suite.
+  const MOD = JSON.stringify(new URL('../src/web/image-bytes.ts', import.meta.url).pathname);
+  const FIXTURES = JSON.stringify(new URL('./fixtures/user-images.json', import.meta.url).pathname);
+  const bounded = (code: string, ms: number) => {
+    const r = Bun.spawnSync({ cmd: [process.execPath, '-e', code], timeout: ms, stdout: 'pipe', stderr: 'pipe' });
+    return { exitCode: r.exitCode, out: r.stdout.toString().trim(), err: r.stderr.toString().trim() };
+  };
+
+  test('a WebP chunk length with its top bit set does not walk the cursor backwards', () => {
+    // Review on #280: RIFF length 12, chunk length f8 ff ff ff — read signed,
+    // that is -8, and the walk stood still.
+    const r = bounded(`
+      import { imageDamage } from ${MOD};
+      const b = new Uint8Array([0x52,0x49,0x46,0x46, 12,0,0,0, 0x57,0x45,0x42,0x50, 0x56,0x50,0x38,0x20, 0xf8,0xff,0xff,0xff]);
+      console.log(imageDamage(b, 'image/webp'));
+    `, 5000);
+    expect(r).toEqual({ exitCode: 0, out: 'is cut short: the file ends before the image does', err: '' });
+  });
+
+  test('every fixture, damaged at random, is read to an answer', () => {
+    // Seeded, so a failure reproduces: overwrite one to four bytes (often
+    // with 00 or ff, the values that make lengths extreme) and sometimes cut
+    // the file short, then read it every way the host does.
+    const r = bounded(`
+      import { readFileSync } from 'node:fs';
+      import { imageDamage, imageSize, sniffImageType } from ${MOD};
+      const fix = JSON.parse(readFileSync(${FIXTURES}, 'utf-8'));
+      let seed = 280;
+      const rand = () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t ^= t + Math.imul(t ^ (t >>> 7), 61 | t); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+      const types = { png: 'image/png', jpeg: 'image/jpeg', jpegProgressive: 'image/jpeg', gif: 'image/gif', webpLossy: 'image/webp', webpLossless: 'image/webp', webpExtended: 'image/webp' };
+      let runs = 0;
+      for (const [key, type] of Object.entries(types)) {
+        const whole = Buffer.from(fix[key], 'base64');
+        for (let i = 0; i < 3000; i++) {
+          let b = Uint8Array.from(whole);
+          for (let k = 1 + Math.floor(rand() * 4); k > 0; k--) {
+            const v = rand();
+            b[Math.floor(rand() * b.length)] = v < 0.25 ? 0xff : v < 0.5 ? 0x00 : Math.floor(rand() * 256);
+          }
+          if (rand() < 0.3) b = b.subarray(0, Math.floor(rand() * b.length));
+          imageDamage(b, type);
+          imageSize(b, type);
+          const sniffed = sniffImageType(b);
+          if (sniffed) imageDamage(b, sniffed);
+          runs++;
+        }
+      }
+      console.log(runs);
+    `, 30000);
+    expect(r).toEqual({ exitCode: 0, out: String(7 * 3000), err: '' });
+  }, 40000);
+});
+
 describe('TuiModule', () => {
   const state = {} as ProcessState;
   const event = (content: unknown, source = 'tui') => ({
