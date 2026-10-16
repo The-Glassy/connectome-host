@@ -127,7 +127,11 @@ four tools in its block, refused with a pointer if the resident calls them.
    message arriving mid-turn from another channel gets a `[routing] <author>
    addressed you from <channel> …` notice in the live turn and does not move
    the turn's locus. `channel_publish` with no `channelId` goes to the turn's
-   locus (the waking delivery's channel, or one opened this turn).
+   locus (the waking delivery's channel, or one opened this turn). A
+   message's author is named in the resident's window — `author: text` —
+   whichever shape the server sends: a spec-shaped driver's bare body
+   (`author` in the field, body alone as content) and a server that renders
+   `Name: body` itself both show the name once.
 7. **Restart under a hold.** Stop the host mid-epoch and start it again: the
    epoch resumes; a release left in the deferred queue lands and wakes the
    resident. A reader fork cut off by the stop is left live
