@@ -108,6 +108,7 @@ import {
   type PanelAppRef,
   type McplLiveServer,
 } from '../web/panel-data.js';
+import { userImageBlocks } from '../web/user-images.js';
 import { loadRecipe } from '../recipe.js';
 import {
   ObserverRegistry,
@@ -1557,7 +1558,7 @@ export class WebUiModule implements Module {
    *  @animalabs/agent-framework (affordances simply do not appear). */
   private hostFeatures(): string[] {
     const fw = sharedServer?.app?.framework as unknown as SurgeryCapableFramework | undefined;
-    const features = ['media'];
+    const features = ['media', 'user-images'];
     if (!fw) return features;
     if (typeof fw.rollbackToMessage === 'function') features.push('rollback');
     if (typeof fw.suppressMessages === 'function') features.push('suppress');
@@ -1838,15 +1839,28 @@ export class WebUiModule implements Module {
         // No reply — round-trip already confirmed by the message arriving.
         return;
 
-      case 'user-message':
+      case 'user-message': {
+        // Images go ahead of the text, the order Anthropic's vision docs recommend.
+        let content: unknown = parsed.content;
+        if (parsed.images && parsed.images.length > 0) {
+          const checked = userImageBlocks(parsed.images);
+          if (!checked.ok) {
+            this.send(client, { type: 'error', message: `message not sent: ${checked.error}` });
+            return;
+          }
+          content = parsed.content.trim()
+            ? [...checked.blocks, { type: 'text', text: parsed.content }]
+            : checked.blocks;
+        }
         sharedServer?.app.framework.pushEvent({
           type: 'external-message',
           source: 'tui',
-          content: parsed.content,
+          content,
           metadata: {},
           triggerInference: true,
         });
         return;
+      }
 
       case 'command': {
         void this.dispatchCommand(client, parsed.command, parsed.corrId);
