@@ -1378,16 +1378,16 @@ export function App() {
     const notes: string[] = [];
     const images = files.filter((f) => f.type.startsWith('image/'));
     if (images.length < files.length) notes.push(`${files.length - images.length} file(s) skipped: only images can be attached`);
+    let overCount = 0;
     setPreparing((n) => n + images.length);
     for (const file of images) {
       try {
+        // Before reading, so a big drop doesn't decode (and hold up Send
+        // for) files that can't be attached; and again after, since another
+        // paste or drop may have added images while this one was read.
+        if (attachments().length >= L.maxCount) { overCount++; continue; }
         const a = await prepareImage(file);
-        // Checked after the await: another paste or drop may have added
-        // images while this one was being read.
-        if (attachments().length >= L.maxCount) {
-          notes.push(`${a.name} not attached: a message takes at most ${L.maxCount} images`);
-          continue;
-        }
+        if (attachments().length >= L.maxCount) { overCount++; continue; }
         const total = attachments().reduce((sum, x) => sum + x.data.length, 0) + a.data.length;
         if (total > L.maxTotalBase64Chars) {
           notes.push(`${a.name} not attached: the images would come to more than ${(L.maxTotalBase64Chars / 1_000_000).toFixed(1)} MB`);
@@ -1400,6 +1400,7 @@ export function App() {
         setPreparing((n) => n - 1);
       }
     }
+    if (overCount > 0) notes.push(`${overCount} image(s) not attached: a message takes at most ${L.maxCount}`);
     if (notes.length > 0) setAttachNotice(notes.join(' · '));
   };
 
