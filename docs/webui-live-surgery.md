@@ -79,9 +79,13 @@ frame limit), and 8000 px on a side. The browser fits an image to them
 before sending: one that already fits goes byte for byte; one too big, too
 large on a side, or in a format the model APIs don't take (BMP, SVG, …) is
 redrawn smaller as WebP (JPEG where the browser can't write WebP), and its
-thumbnail says so. The host checks again for every client, telling the
-format by the bytes (a mislabeled type is corrected), and refuses a message
-whose image fails with `message not sent: <reason>`. A stored image the
+thumbnail says so. A PNG, JPEG, GIF or WebP that is cut short or damaged is
+refused rather than redrawn, since the browser would draw only what it has.
+The host checks again for every client, telling the format by the bytes (a
+mislabeled type is corrected) and walking the file to its end marker (PNG
+chunks are checksummed too; a JPEG's, GIF's or WebP's compressed data has no
+checksum, so damage inside it would take a decoder to see), and refuses a
+message whose image fails with `message not sent: <reason>`. A stored image the
 API refuses would fail every later inference on the branch, so it is never
 stored.
 

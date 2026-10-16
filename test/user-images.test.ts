@@ -9,7 +9,8 @@ import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import type { ProcessState } from '@animalabs/agent-framework';
 import { isClientMessage, USER_IMAGE_LIMITS } from '../src/web/protocol.js';
-import { imageSize, sniffImageType, userImageBlocks } from '../src/web/user-images.js';
+import { userImageBlocks } from '../src/web/user-images.js';
+import { imageDamage, imageSize, sniffImageType } from '../src/web/image-bytes.js';
 import { TuiModule } from '../src/modules/tui-module.js';
 
 const FIX = JSON.parse(readFileSync(new URL('./fixtures/user-images.json', import.meta.url), 'utf-8')) as Record<string, string>;
@@ -61,6 +62,50 @@ describe('image headers', () => {
     expect(imageSize(bytes('webpLossy').subarray(0, 24), 'image/webp')).toBeNull();
     expect(sniffImageType(Buffer.from('%PDF-1.7 not an image'))).toBeUndefined();
     expect(sniffImageType(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'))).toBeUndefined();
+  });
+});
+
+describe('a whole image', () => {
+  const FORMATS: Record<string, string> = {
+    png: 'image/png',
+    jpeg: 'image/jpeg',
+    jpegProgressive: 'image/jpeg',
+    gif: 'image/gif',
+    webpLossy: 'image/webp',
+    webpLossless: 'image/webp',
+    webpExtended: 'image/webp',
+  };
+
+  test('every fixture is whole, and stays whole with bytes after its end', () => {
+    for (const [key, type] of Object.entries(FORMATS)) {
+      expect({ key, damage: imageDamage(bytes(key), type) }).toEqual({ key, damage: null });
+      const trailed = Buffer.concat([bytes(key), Buffer.from('trailing bytes some writers append')]);
+      expect({ key, damage: imageDamage(trailed, type) }).toEqual({ key, damage: null });
+    }
+  });
+
+  test('every fixture cut short, at any byte, is refused', () => {
+    for (const [key, type] of Object.entries(FORMATS)) {
+      const b = bytes(key);
+      for (let cut = 1; cut < b.length; cut++) {
+        const damage = imageDamage(b.subarray(0, cut), type);
+        if (damage === null) throw new Error(`${key} cut to ${cut} of ${b.length} bytes passed as whole`);
+      }
+    }
+  });
+
+  test('a PNG cut to its first 24 bytes, dimensions intact, is refused before it is stored', () => {
+    const head = bytes('png').subarray(0, 24);
+    expect(imageSize(head, 'image/png')).toEqual({ width: 3, height: 2 });
+    expect(userImageBlocks([{ mediaType: 'image/png', data: head.toString('base64') }])).toEqual({
+      ok: false, error: 'the image is cut short: the file ends before the image does',
+    });
+  });
+
+  test('a damaged byte inside a PNG chunk fails its checksum', () => {
+    const b = Buffer.from(bytes('png'));
+    b[b.indexOf(Buffer.from('IDAT')) + 5]! ^= 0xff;
+    expect(imageDamage(b, 'image/png')).toBe('is damaged: its IDAT chunk fails its checksum');
   });
 });
 

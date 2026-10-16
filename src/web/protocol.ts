@@ -782,7 +782,6 @@ export const USER_IMAGE_LIMITS = {
   maxBase64Chars: 5_000_000,
   maxTotalBase64Chars: 12 * 1024 * 1024,
   maxSidePx: 8000,
-  mediaTypes: ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as readonly string[],
 } as const;
 
 /** Slash command. Server runs `handleCommand()` and replies with a

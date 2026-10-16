@@ -5,6 +5,7 @@
  */
 import { For, Show } from 'solid-js';
 import { USER_IMAGE_LIMITS } from '@conhost/web/protocol';
+import { imageDamage, sniffImageType } from '@conhost/web/image-bytes';
 
 export interface Attachment {
   id: string;
@@ -72,11 +73,21 @@ async function redraw(img: HTMLImageElement, w: number, h: number): Promise<Blob
  * Read a file as an attachment that fits the limits. One that already fits is
  * sent byte for byte; one that is too big, too large on a side, or in a format
  * the model APIs don't take (BMP, SVG, …) is redrawn smaller as WebP/JPEG.
- * Throws with a reason the composer shows.
+ * A PNG, JPEG, GIF or WebP that is cut short or damaged is refused, not
+ * redrawn: the browser draws what it has of one, and would send that as if
+ * it were the picture. Throws with a reason the composer shows.
  */
 export async function prepareImage(file: File): Promise<Attachment> {
   const L = USER_IMAGE_LIMITS;
   const name = file.name || 'pasted image';
+  // The type by the bytes, as the host reads it: a browser takes the type
+  // from the file name.
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const sniffed = sniffImageType(bytes);
+  if (sniffed) {
+    const damage = imageDamage(bytes, sniffed);
+    if (damage) throw new Error(`${name} ${damage}`);
+  }
   let img: HTMLImageElement;
   try {
     img = await loadImage(file);
@@ -87,15 +98,15 @@ export async function prepareImage(file: File): Promise<Attachment> {
   const height = img.naturalHeight;
   if (!width || !height) throw new Error(`${name} has no size to draw it at`);
 
-  const accepted = L.mediaTypes.includes(file.type);
-  if (accepted && width <= L.maxSidePx && height <= L.maxSidePx && base64Length(file.size) <= L.maxBase64Chars) {
+  if (sniffed && width <= L.maxSidePx && height <= L.maxSidePx && base64Length(file.size) <= L.maxBase64Chars) {
     const dataUrl = await readDataUrl(file);
+    const data = dataUrl.slice(dataUrl.indexOf(',') + 1);
     return {
       id: `att${++attachmentSeq}`,
       name,
-      mediaType: file.type,
-      data: dataUrl.slice(dataUrl.indexOf(',') + 1),
-      dataUrl,
+      mediaType: sniffed,
+      data,
+      dataUrl: `data:${sniffed};base64,${data}`,
     };
   }
 
