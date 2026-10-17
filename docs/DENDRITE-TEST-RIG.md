@@ -45,12 +45,21 @@ so Chronicle's native module is loaded once:
 ```sh
 link() { rm -rf "$1" && ln -s "$2" "$1"; }
 link context-manager/node_modules/@animalabs/chronicle          ../../../chronicle
+link context-manager/node_modules/@animalabs/membrane           ../../../agent-framework/node_modules/@animalabs/membrane
 link agent-framework/node_modules/@animalabs/chronicle          ../../../chronicle
 link agent-framework/node_modules/@animalabs/context-manager    ../../../context-manager
 link connectome-host/node_modules/@animalabs/chronicle          ../../../chronicle
 link connectome-host/node_modules/@animalabs/context-manager    ../../../context-manager
 link connectome-host/node_modules/@animalabs/agent-framework    ../../../agent-framework
 ```
+
+The membrane link gives the framework and context-manager one copy of
+membrane's types: with two (each repository's `npm install` pins its own
+patch version), `tsc` in agent-framework reports the framework's `Membrane`
+and the context-manager's as different types, which is not a defect in
+either branch. If a build still reports it after linking, delete
+`agent-framework/dist/tsconfig.tsbuildinfo` (the composite build's record of
+the old resolution) and build again.
 
 Check the links took: `ls -l connectome-host/node_modules/@animalabs/` shows
 three symlinks, and `(cd agent-framework && npm test)` runs the framework's
