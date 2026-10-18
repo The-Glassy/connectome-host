@@ -36,7 +36,7 @@ describe("the origin hint comes only from what the mount's own read gives", () =
           throw new WorkspaceReadError('escape', 'Symlink escape detected: files/refused.md', 'realpath');
         }
         if (path === 'files/grown.md') {
-          // As agent-framework 0.22.1 answers for a file that was within the
+          // As agent-framework 0.22.2 answers for a file that was within the
           // head when the read took its size and grew while it was read: all
           // of it, not truncated.
           const bytes = Buffer.from(`${'x'.repeat(2048)}\norigin: zulip#ops#past-the-head\n`);
@@ -124,8 +124,9 @@ describe("the origin hint comes only from what the mount's own read gives", () =
         trace('inference:completed');
         return (typing.at(-1)!.metadata as { topic?: string } | undefined)?.topic;
       };
-      // A recipe's mounts don't follow links, so the read refuses a file that
-      // is itself a link, even one naming a file in the same mount.
+      // A mount doesn't follow links unless the recipe sets followSymlinks, so
+      // here the read refuses a file that is itself a link, even one naming a
+      // file in the same mount.
       expect(await topicAfter('files/linked.md')).toBeUndefined();
       expect(await topicAfter('files/late.md')).toBeUndefined();
       expect(await topicAfter('files/early.md')).toBe('in-the-head');

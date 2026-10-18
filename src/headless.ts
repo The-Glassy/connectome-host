@@ -9,11 +9,13 @@
  * Input:   {type:"subscribe",events:[...]} | {type:"text",content} |
  *          {type:"command",command:"/..."} | {type:"shutdown",graceful?}
  *
- * Writes through process.stdout.write and process.stderr.write are
- * redirected to {DATA_DIR}/headless.log so the IPC channel is the only
- * structured output path (parent uses the socket, not pipes); Bun's
- * console.* writes to the process's own stdout and stderr directly.  PID
- * lives at {DATA_DIR}/headless.pid for parent-side liveness.
+ * process.stdout.write and process.stderr.write are redirected to
+ * {DATA_DIR}/headless.log so the IPC channel is the only structured output
+ * path (parent uses the socket, not pipes).  Bun's console.* writes to file
+ * descriptors 1 and 2 directly, not through those methods, so console lines
+ * go wherever those descriptors point: for a fleet child, the startup.log
+ * its parent opened.  PID lives at {DATA_DIR}/headless.pid for parent-side
+ * liveness.
  *
  * One client at a time.  Client disconnect does NOT exit the process —
  * children stay up across parent restarts and accept the next connection.
@@ -29,6 +31,7 @@ import type { AppContext } from './index.js';
 import { type IncomingCommand, matchesSubscription } from './modules/fleet-types.js';
 import { AgentTreeReducer } from './state/agent-tree-reducer.js';
 import { takeRecipeWarnings } from './recipe.js';
+import { workspaceReadFields } from './workspace-read-result.js';
 
 // ---------------------------------------------------------------------------
 // Local types
@@ -106,12 +109,12 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
 
   mkdirSync(dataDir, { recursive: true });
 
-  // -- Redirect stdout/stderr BEFORE anything else may log --
-  // The IPC socket is the only structured output channel; writes through
-  // process.stdout.write and process.stderr.write become a debug log on
-  // disk.  Done first so later such writes from framework code land in the
-  // file, not on a parent's pipe.  Bun's console.* doesn't pass through
-  // either, so its lines still reach the process's own stdout and stderr.
+  // -- Redirect stdout/stderr writes BEFORE anything else here may log --
+  // The IPC socket is the only structured output channel; direct
+  // process.stdout/stderr.write calls become a debug log on disk.  Bun's
+  // console.* bypasses these methods and writes to descriptors 1 and 2,
+  // which for a fleet child are its startup.log, so console lines from
+  // framework code land there, not here.
   //
   // Match the real process.stdout.write overload signature so libraries
   // passing (chunk, cb) or (chunk, encoding, cb) for backpressure /
@@ -402,7 +405,7 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
       }
       case 'request-workspace-file': {
         const mod = app.framework.getAllModules().find((m) => m.name === 'workspace') as
-          | { handleToolCall(call: { name: string; input: unknown; id?: string }): Promise<{ success: boolean; data?: unknown; error?: string }> }
+          | { handleToolCall(call: { name: string; input: unknown; id?: string }): Promise<{ success: boolean; data?: unknown; structured?: unknown; error?: string }> }
           | undefined;
         if (!mod) {
           reply({ type: 'workspace-file-snapshot', corrId: cmd.corrId, path: cmd.path, totalLines: 0, fromLine: 1, toLine: 0, content: '', truncated: false, error: 'workspace module not loaded' });
@@ -417,7 +420,7 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
             reply({ type: 'workspace-file-snapshot', corrId: cmd.corrId, path: cmd.path, totalLines: 0, fromLine: 1, toLine: 0, content: '', truncated: false, error: result.error ?? 'read failed' });
             return;
           }
-          const data = (result.data ?? {}) as { path?: string; totalLines?: number; fromLine?: number; toLine?: number; content?: string };
+          const data = workspaceReadFields(result);
           const totalLines = data.totalLines ?? 0;
           const toLine = data.toLine ?? totalLines;
           reply({
