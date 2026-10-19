@@ -84,6 +84,7 @@ import {
   clearSavedRecipe,
   parseRecipeArg,
   deprecatedConversationsNotices,
+  resolveProvider,
 } from './recipe.js';
 import { createBranchState, resetBranchState, handleExport, type BranchState } from './commands.js';
 import { buildFrameworkAgentConfig, membraneCachingOverride } from './framework-agent-config.js';
@@ -292,6 +293,7 @@ async function createFramework(
     const subagentConfig = typeof modules.subagents === 'object' ? modules.subagents : {};
     subagentModule = new SubagentModule({
       parentAgentName: agentName,
+      provider: resolveProvider(recipe),
       defaultModel: subagentConfig.defaultModel || model,
       defaultMaxTokens: subagentConfig.defaultMaxTokens,
     });
@@ -971,7 +973,7 @@ let beforeFatalExit: (() => Promise<void>) | undefined;
 
 async function main() {
   const recipe = await resolveRecipe();
-  const provider = recipe.agent.provider ?? 'anthropic';
+  const provider = resolveProvider(recipe);
 
   if (provider === 'openrouter' && !config.openrouterApiKey) {
     console.error('Missing OPENROUTER_API_KEY for recipe provider "openrouter".');
@@ -1273,7 +1275,7 @@ async function main() {
     // gives generic retryable errors — e.g. a gateway 502 — zero retries; only
     // 529/overloaded_error has a dedicated schedule.
     ...(recipe.agent.retry ? { retry: recipe.agent.retry } : {}),
-    formatter: recipeFormatter(recipe.agent.formatter, provider),
+    formatter: recipeFormatter(recipe, provider, resolveModel(recipe)),
     // Caching default for internal callers (autobio compression,
     // executeMerge), which read Membrane's defaultPromptCaching rather
     // than the per-agent flag. Applies on EVERY provider whenever the
