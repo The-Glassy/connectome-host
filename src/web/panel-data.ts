@@ -29,6 +29,7 @@ import {
   readMcplServersFile,
   DEFAULT_CONFIG_PATH,
 } from '../mcpl-config.js';
+import { serverTarget } from '../credential-redaction.js';
 import {
   countToolClassSources,
   readToolClasses,
@@ -316,7 +317,7 @@ export function buildMcplSnapshot(app: PanelAppRef): Record<string, unknown> {
         connected: s.connected === true,
         toolCount: s.toolCount ?? 0,
         ...(s.toolPrefix ? { toolPrefix: s.toolPrefix } : {}),
-        ...(s.command || s.url ? { target: s.command ?? s.url } : {}),
+        ...(s.command || s.url ? { target: serverTarget(s) } : {}),
       }));
     }
   } catch { /* live view is best-effort; the file registry still renders */ }

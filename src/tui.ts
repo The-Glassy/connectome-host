@@ -47,6 +47,7 @@ import { handleCommand, resetBranchState } from './commands.js';
 import { formatQuotaReadout } from './quota-meter.js';
 import { takeRecipeWarnings } from './recipe.js';
 import { effectiveContextBudgetTokens } from './framework-agent-config.js';
+import { redactChunk } from './credential-redaction.js';
 
 /** Format a token count compactly: 1.2M / 3.5k / 42. */
 export function fmtTokens(n: number): string {
@@ -436,7 +437,8 @@ export async function runTui(app: AppContext): Promise<void> {
   for (const warning of takeRecipeWarnings()) logStream.write(`warning: ${warning}\n`);
   const origStderrWrite = process.stderr.write.bind(process.stderr);
   process.stderr.write = ((chunk: string | Uint8Array, ...args: unknown[]) => {
-    logStream.write(chunk);
+    // A dial error names its url, query included (credential-redaction.ts).
+    logStream.write(redactChunk(chunk));
     return true;
   }) as typeof process.stderr.write;
 

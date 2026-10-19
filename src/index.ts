@@ -66,6 +66,8 @@ import { TtsRelayModule } from './modules/tts-relay-module.js';
 import { InstructionsModule } from './modules/instructions-module.js';
 import { loadMcplServers, applyAgentOverlay, mergeRecipeServers, composeMcplChildEnv, cleartextCredentialWarning, overlayWarnings, DEFAULT_CONFIG_PATH, DEFAULT_AGENT_OVERLAY_PATH } from './mcpl-config.js';
 import { toolClassConfig } from './tool-lifecycle-config.js';
+import { redactStderr } from './credential-redaction.js';
+import { formatMcplLifecycleLine } from './mcpl-lifecycle-log.js';
 import { batchModeStartNotice, batchTeardownNotice, batchWebUiNotice, BATCH_MCPL_LOG_NOTE } from './batch-mode.js';
 import { createPipedTurns, switchFollowing, traceFollower } from './piped-turns.js';
 import { setCallLogPath } from './bug-report.js';
@@ -775,26 +777,6 @@ function setupSynesthete(app: AppContext): void {
 
 const MCPL_STDERR_LOG_MAX_BYTES = 10 * 1024 * 1024; // 10 MB; rolls to .1 on overflow.
 
-/** Render an mcpl:server-* connection-lifecycle trace as a log line, or null
- *  for trace types this sink doesn't record. Lifecycle lines are prefixed
- *  `[host]` to stand apart from the server's own stderr output. */
-function formatMcplLifecycleLine(event: { type: string } & Record<string, unknown>): string | null {
-  switch (event.type) {
-    case 'mcpl:server-stderr':
-      return String(event.line);
-    case 'mcpl:server-connect-failed':
-      return `[host] connect failed (attempt ${event.attempt}, ${event.willRetry ? 'will retry' : 'NO RETRY — server unavailable until restart'}): ${event.error}`;
-    case 'mcpl:server-reconnected':
-      return `[host] reconnected after ${event.attempts} attempt(s)`;
-    case 'mcpl:server-closed':
-      return `[host] connection closed (code=${event.code}, signal=${event.signal}${event.willReconnect ? ', reconnect scheduled' : ''})`;
-    case 'mcpl:server-error':
-      return `[host] connection error: ${event.error}`;
-    default:
-      return null;
-  }
-}
-
 function mcplStderrLogDir(storePath: string): string {
   return join(storePath, 'mcpl-stderr');
 }
@@ -958,6 +940,9 @@ function countLines(path: string): number {
 let beforeFatalExit: (() => Promise<void>) | undefined;
 
 async function main() {
+  // A dial error names the url it dialed, query included: no credential in
+  // one reaches stderr, or the log files the TUI and headless send it to.
+  redactStderr();
   const recipe = await resolveRecipe();
   const provider = recipe.agent.provider ?? 'anthropic';
 

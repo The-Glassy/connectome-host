@@ -32,6 +32,7 @@ import { type IncomingCommand, matchesSubscription } from './modules/fleet-types
 import { AgentTreeReducer } from './state/agent-tree-reducer.js';
 import { takeRecipeWarnings } from './recipe.js';
 import { workspaceReadFields } from './workspace-read-result.js';
+import { redactChunk } from './credential-redaction.js';
 
 // ---------------------------------------------------------------------------
 // Local types
@@ -137,6 +138,8 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
     encodingOrCb?: BufferEncoding | ((err?: Error | null) => void),
     cb?: (err?: Error | null) => void,
   ): boolean => {
+    // A dial error names its url, query included (credential-redaction.ts).
+    chunk = redactChunk(chunk);
     if (logStream.writableEnded) return toStderr(chunk, encodingOrCb, cb);
     return typeof encodingOrCb === 'function'
       ? logStream.write(chunk, encodingOrCb)

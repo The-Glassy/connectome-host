@@ -58,6 +58,7 @@ import {
 } from '../mcpl-config.js';
 import { unknownToolResult } from './unknown-tool.js';
 import { shown } from './shown.js';
+import { serverTarget } from '../credential-redaction.js';
 
 export interface McplAdminModuleConfig {
   /** IANA zone propagated to newly deployed stdio servers. */
@@ -568,10 +569,11 @@ export class McplAdminModule implements Module {
       } else {
         source = fileServers === null ? 'unknown' : Object.hasOwn(fileServers, s.id) ? 'file/recipe' : 'recipe';
       }
-      // The command, else the url, as main labelled it. The framework's status
-      // carries no transport, so for a definition that names both, this can't
-      // tell which one the framework opened.
-      const target = s.command ?? s.url ?? '?';
+      // The command, else the url, as main labelled it, its credentials
+      // masked (serverTarget). The framework's status carries no transport,
+      // so for a definition that names both, this can't tell which one the
+      // framework opened.
+      const target = serverTarget(s) ?? '?';
       const connectionState = s.connected ? 'CONNECTED' : s.retrying ? 'RETRYING' : 'DISCONNECTED';
       const policyState = s.policyEstablished === undefined
         ? 'unknown'
