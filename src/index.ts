@@ -42,7 +42,7 @@ import { LoggingBedrockAdapter } from './logging-bedrock-adapter.js';
 import { CodexSubscriptionAdapter, codexGateAuth } from './codex-subscription-adapter.js';
 import { CallLedger } from './call-ledger.js';
 import { SettingsModule } from './modules/settings-module.js';
-import { AgentFramework, WorkspaceModule, resolveTimeZone, HistoryModule, type Module, type TraceEvent } from '@animalabs/agent-framework';
+import { AgentFramework, WorkspaceModule, resolveTimeZone, HistoryModule, type Module } from '@animalabs/agent-framework';
 import { resolve, join, basename } from 'node:path';
 import { appendFile, mkdir, stat, rename } from 'node:fs/promises';
 import { readFileSync, existsSync } from 'node:fs';
@@ -87,7 +87,8 @@ import {
 } from './recipe.js';
 import { createBranchState, resetBranchState, handleExport, type BranchState } from './commands.js';
 import { buildFrameworkAgentConfig, membraneCachingOverride } from './framework-agent-config.js';
-import { buildFrameworkStrategy, buildConversationsConfig, buildSubconsciousConfig } from './framework-strategy.js';
+import { buildFrameworkStrategy, buildConversationsConfig, dendriteCreateOptions } from './framework-strategy.js';
+import { holdBootTraces, type BootTraceHold } from './boot-traces.js';
 import { buildWorkspaceMounts } from './workspace-mounts.js';
 import { quarantineAlarm, type QuarantineStatus } from './web/quarantine-alert.js';
 import { logKeepaliveEvent } from './cache-keepalive-log.js';
@@ -121,36 +122,6 @@ const config = {
 // ---------------------------------------------------------------------------
 // AppContext — mutable container for session switching
 // ---------------------------------------------------------------------------
-
-/** Framework traces held from before the headless sink exists; see AppContext.bootTraces. */
-export interface BootTraceHold {
-  /** Deliver what is held, in order, then everything that follows, to `sink`. Takes effect once. */
-  handOver(sink: (event: TraceEvent) => void): void;
-}
-
-/** As many early traces as the framework itself keeps for replay. */
-const BOOT_TRACE_CAP = 1000;
-
-function holdBootTraces(framework: AgentFramework): BootTraceHold {
-  let held: TraceEvent[] | null = [];
-  let sink: ((event: TraceEvent) => void) | null = null;
-  framework.onTrace((event) => {
-    if (sink) sink(event);
-    else if (held) {
-      held.push(event);
-      if (held.length > BOOT_TRACE_CAP) held.shift();
-    }
-  }, { replay: true });
-  return {
-    handOver(next) {
-      if (sink) return;
-      const replay = held ?? [];
-      held = null;
-      sink = next;
-      for (const event of replay) next(event);
-    },
-  };
-}
 
 interface AppContext {
   framework: AgentFramework;
@@ -186,7 +157,8 @@ interface AppContext {
    * runHeadless attaches the sink that feeds the agent tree and the socket.
    * create() replays its early traces (registry restore, work a stop cut
    * off, resumed tune-out epochs) only to a listener attached before
-   * start(), and runHeadless runs after start(); this is that listener.
+   * start(), and runHeadless runs after start(); this is that listener
+   * (src/boot-traces.ts).
    */
   bootTraces?: BootTraceHold;
 
@@ -649,7 +621,6 @@ async function createFramework(
   // Deprecated (agent-framework#235): still wired, but named at startup.
   for (const notice of deprecatedConversationsNotices(recipe.conversations)) console.warn(`[deprecated] ${notice}`);
   const conversations = buildConversationsConfig(recipe, agentName, model, timeZone, extensionRegistry);
-  const subconscious = buildSubconsciousConfig(recipe, model, timeZone, extensionRegistry);
 
   // -- Create framework --
   const framework = await AgentFramework.create({
@@ -668,12 +639,9 @@ agents: [agentConfig],
     ...(conversations ? { conversations } : {}),
     // Tune-out's reader (agent-framework#77, #232) and the Dendrite options
     // (`speech`, `tuneOut`, `dendrite`) — recipe opt-ins, typed against the
-    // framework's own config (agent-framework#546). The reader mapping adds
-    // the one field a recipe cannot state (buildSubconsciousConfig).
-    ...(subconscious ? { subconscious } : {}),
-    ...(recipe.speech ? { speech: recipe.speech } : {}),
-    ...(recipe.tuneOut ? { tuneOut: recipe.tuneOut } : {}),
-    ...(recipe.dendrite ? { dendrite: recipe.dendrite } : {}),
+    // framework's own config (agent-framework#546); the reader mapping adds
+    // the one field a recipe cannot state.
+    ...dendriteCreateOptions(recipe, model, timeZone, extensionRegistry),
     // MCPL RFC-008 tool classes: this host's module table, and the recipe's
     // operator overrides. Spread as an untyped object so an agent-framework
     // older than the tool-lifecycle release (which lacks both fields)

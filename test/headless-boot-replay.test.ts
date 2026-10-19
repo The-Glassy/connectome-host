@@ -1,10 +1,12 @@
 /**
  * The boot reaches the first client (agent-framework#546, connectome-host#334):
  * framework traces from before any client connected are kept and sent to the
- * first client after its `ready`, each marked `replay: true`, oldest first;
- * a later client gets `ready` and no replay (it asks for a snapshot). The
- * agent tree folds the boot too, so a derived agent the boot announced hangs
- * under its source in `describe`.
+ * first client after its `ready`, each marked `replay: true`, oldest first,
+ * then a `replay-truncated` line when the boot outran the hold; live traces
+ * after that are unmarked; a later client gets `ready` and no replay (it
+ * sends `describe`). The agent tree folds the boot too, so a derived agent
+ * the boot announced hangs under its source in the snapshot, as a framework
+ * node.
  */
 import { expect, test } from 'bun:test';
 import { spawn } from 'node:child_process';
@@ -66,8 +68,10 @@ test('the first client hears the boot after ready, marked and in order; the next
   await withChild(async (open) => {
     const first = await open();
     await until(() => first.events.filter(event => event.replay === true).length >= 3, 'boot replay');
+    await until(() => first.events.some(event => event.type === 'lifecycle' && event.phase === 'replay-truncated'), 'truncation line');
     const types = first.events.map(event => `${event.type}${event.replay === true ? '*' : ''}`);
-    expect(types.slice(0, 4)).toEqual(['lifecycle', 'dendrite:agent-created*', 'dendrite:agent-created*', 'dendrite:agent-ended*']);
+    expect(types.slice(0, 5)).toEqual(['lifecycle', 'dendrite:agent-created*', 'dendrite:agent-created*', 'dendrite:agent-ended*', 'lifecycle']);
+    expect(first.events[4]).toMatchObject({ type: 'lifecycle', phase: 'replay-truncated', dropped: 2, kept: 3 });
     const replayed = first.events.filter(event => event.replay === true);
     // The events' own timestamps travel; `ts` is the send time, as for every event.
     expect(replayed.map(event => event.timestamp)).toEqual([1_700_000_000_001, 1_700_000_000_002, 1_700_000_000_003]);
@@ -80,8 +84,15 @@ test('the first client hears the boot after ready, marked and in order; the next
     const snapshot = first.events.find(event => event.type === 'snapshot') as { tree: { nodes: Array<Record<string, unknown>> } };
     const fork = snapshot.tree.nodes.find(node => node.name === 'fixture.reader-7');
     expect(fork?.parent).toBe('fixture');
-    expect(fork?.kind).toBe('subagent');
-    expect(fork?.subagentType).toBe('fork');
+    expect(fork?.kind).toBe('framework');
+    expect(fork?.subagentType).toBeUndefined();
+
+    // A live trace after the handover reaches the client unmarked.
+    first.send({ type: 'command', command: '/puppet live {}' });
+    await until(() => first.events.some(event => event.type === 'inference:started'), 'live trace');
+    const liveTrace = first.events.find(event => event.type === 'inference:started')!;
+    expect(liveTrace.replay).toBeUndefined();
+    expect(liveTrace.timestamp).toBe(1_700_000_000_010);
 
     const second = await open();
     await Bun.sleep(50);

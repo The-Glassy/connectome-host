@@ -9,7 +9,7 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { validateRecipe, type Recipe } from '../src/recipe.js';
-import { buildSubconsciousConfig } from '../src/framework-strategy.js';
+import { buildSubconsciousConfig, dendriteCreateOptions } from '../src/framework-strategy.js';
 
 function baseRecipe(extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -245,5 +245,38 @@ describe('validateRecipe — speech and tuneOut (Dendrite admission options)', (
   test('tuneOut.announce turns the excepted-channel announcement off', () => {
     expect(validateRecipe(baseRecipe({ tuneOut: { enabled: true, announce: false } })).tuneOut).toEqual({ enabled: true, announce: false });
     expect(() => validateRecipe(baseRecipe({ tuneOut: { announce: 'no' } }))).toThrow(/tuneOut\.announce must be a boolean/);
+  });
+});
+
+describe('dendriteCreateOptions — what the host hands AgentFramework.create()', () => {
+  test('a recipe with none of the blocks adds nothing, so the framework defaults apply', () => {
+    const recipe = validateRecipe(baseRecipe()) as Recipe;
+    expect(dendriteCreateOptions(recipe, 'model-x', 'UTC')).toEqual({});
+  });
+
+  test('each stated block is passed through as validated; the reader carries its factory', () => {
+    const recipe = validateRecipe(baseRecipe({
+      agent: { name: 'sherlock', systemPrompt: 'test', strategy: { type: 'passthrough' } },
+      subconscious: { enabled: true, reader: 'forks', model: 'm', voice: 'v', forkIdleTimeoutMs: 1000 },
+      speech: { locus: 'latest-inbound' },
+      tuneOut: { enabled: true, announce: false },
+      dendrite: { announceOrphans: false, collapseDerivationNoticesAfter: 3 },
+    })) as Recipe;
+    const options = dendriteCreateOptions(recipe, 'model-x', 'UTC');
+    expect(Object.keys(options).sort()).toEqual(['dendrite', 'speech', 'subconscious', 'tuneOut']);
+    expect(options.speech).toEqual({ locus: 'latest-inbound' });
+    expect(options.tuneOut).toEqual({ enabled: true, announce: false });
+    expect(options.dendrite).toEqual({ announceOrphans: false, collapseDerivationNoticesAfter: 3 });
+    const sub = options.subconscious!;
+    if (sub.reader !== 'forks') throw new Error('expected the fork reader config');
+    expect(sub.model).toBe('m');
+    expect(sub.voice).toBe('v');
+    expect(sub.forkIdleTimeoutMs).toBe(1000);
+    expect(sub.strategyFactory!().constructor.name).toBe('PassthroughStrategy');
+  });
+
+  test('a persistent reader alone: only that key, verbatim', () => {
+    const recipe = validateRecipe(baseRecipe({ subconscious: { enabled: true, systemPrompt: MODE } })) as Recipe;
+    expect(dendriteCreateOptions(recipe, 'model-x', 'UTC')).toEqual({ subconscious: { enabled: true, systemPrompt: MODE } });
   });
 });

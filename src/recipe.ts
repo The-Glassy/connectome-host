@@ -1154,15 +1154,14 @@ export interface RecipeCodeExecution {
  *   weights run the fork and is never defaulted — the resident's own model
  *   for a copy of the resident, or another by name. `voice` is the reader's
  *   voice block, delivered to each fork after the fork point with the held
- *   traffic, never a system prompt; how the fork is prompted (`framing`) is
- *   the framework's, not a recipe field. The host supplies the one field a
- *   recipe cannot: a `strategyFactory` building a fresh instance of the
- *   recipe's strategy per fork (the same pattern as `conversations`; see
- *   buildSubconsciousConfig).
+ *   traffic, never a system prompt. Two of the framework's fields are
+ *   function-valued, so a recipe cannot state them: the host supplies
+ *   `strategyFactory`, a fresh instance of the recipe's strategy per fork
+ *   (the same pattern as `conversations`; see buildSubconsciousConfig), and
+ *   `framing`, how the fork is prompted, stays the framework's default.
  *
- * The types are the framework's own, minus the function-valued fields a
- * recipe cannot state; agent-framework's src/tune-out/tools.ts documents
- * each field.
+ * The types are the framework's own, minus those two fields;
+ * agent-framework's src/tune-out/tools.ts documents each field.
  */
 export type RecipeSubconscious = RecipePersistentReader | RecipeForkReader;
 export type RecipePersistentReader = PersistentReaderConfig;
