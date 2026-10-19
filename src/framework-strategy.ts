@@ -3,6 +3,7 @@ import {
   PassthroughStrategy,
   type ContextStrategy,
   type ConversationRouterConfig,
+  type SubconsciousConfig,
 } from '@animalabs/agent-framework';
 import type { Recipe, RecipeKvUnifiedConfig, RecipeStrategy } from './recipe.js';
 import { anthropicCacheReadMultiplier, openaiCacheMultipliers } from './call-pricing.js';
@@ -239,4 +240,25 @@ export function buildConversationsConfig(
     ...(conv.agentPrefix !== undefined ? { agentPrefix: conv.agentPrefix } : {}),
     strategyFactory: () => buildFrameworkStrategy(recipe, model, timeZone, extensions),
   };
+}
+
+/**
+ * Map a recipe's `subconscious` block to the framework's SubconsciousConfig
+ * (agent-framework#77, #232). The persistent reader passes through verbatim;
+ * the framework owns its defaults. Reader forks get the one field a recipe
+ * cannot state: `strategyFactory`, a FRESH instance of the recipe's strategy
+ * per fork (the `conversations` pattern), so a fork reuses the resident's
+ * fold state and rendering. Without it the framework refuses forks unless
+ * the resident runs a passthrough strategy.
+ */
+export function buildSubconsciousConfig(
+  recipe: Recipe,
+  model: string,
+  timeZone: string,
+  extensions?: ExtensionRegistry,
+): SubconsciousConfig | undefined {
+  const sub = recipe.subconscious;
+  if (!sub) return undefined;
+  if (sub.reader !== 'forks') return sub;
+  return { ...sub, strategyFactory: () => buildFrameworkStrategy(recipe, model, timeZone, extensions) };
 }

@@ -1,71 +1,14 @@
-# Tune-out mk2 on a test rig
+# Tune-out mk2: operating guide
 
-Tune-out mk2 is agent-framework's Dendrite branch: the admission stage (one
+Tune-out mk2 is agent-framework's Dendrite work: the admission stage (one
 decision per inbound event, before any side effect), the tune-out reader as a
 succession of forks of the resident, the all-except scope (`focus`), and the
-`speech.locus` rule. None of it is published to npm yet. A rig runs the four
-repositories side by side from their branches.
-
-## Branches
-
-| Repository | Branch | What it carries |
-|---|---|---|
-| `anima-research/agent-framework` | `feat/dendrite` | registry, forks, admission, reader forks, all-except, `speech.locus` |
-| `anima-research/context-manager` | `feat/dendrite-fork` | `derive()` — shared/copied inheritance of a context onto a branch |
-| `anima-research/chronicle` | `feat/dendrite-views` | branch-bound handles and views the fork primitive reads through |
-| `anima-research/connectome-host` | `feat/dendrite-tuneout` | the recipe surface: `reader: 'forks'`, `speech`, `tuneOut` |
-
-`main` of each repository is untouched; nothing here requires a release.
-
-## Prerequisites
-
-- Node ≥ 22 and npm (the three libraries build with `tsc`; Chronicle with `napi`).
-- A Rust toolchain (`cargo`) for Chronicle's native module — the npm package
-  ships prebuilt binaries, the branch does not.
-- Bun ≥ 1.3 for the host.
-
-## Build
-
-```sh
-mkdir dendrite && cd dendrite
-git clone -b feat/dendrite-views   git@github.com:anima-research/chronicle
-git clone -b feat/dendrite-fork    git@github.com:anima-research/context-manager
-git clone -b feat/dendrite         git@github.com:anima-research/agent-framework
-git clone -b feat/dendrite-tuneout git@github.com:anima-research/connectome-host
-
-(cd chronicle        && npm install && npm run build)
-(cd context-manager  && npm install && npm run build)
-(cd agent-framework  && npm install && npm run build)
-(cd connectome-host  && bun install)
-```
-
-Then point every consumer at the branch builds — one copy of each library,
-so Chronicle's native module is loaded once:
-
-```sh
-link() { rm -rf "$1" && ln -s "$2" "$1"; }
-link context-manager/node_modules/@animalabs/chronicle          ../../../chronicle
-link context-manager/node_modules/@animalabs/membrane           ../../../agent-framework/node_modules/@animalabs/membrane
-link agent-framework/node_modules/@animalabs/chronicle          ../../../chronicle
-link agent-framework/node_modules/@animalabs/context-manager    ../../../context-manager
-link connectome-host/node_modules/@animalabs/chronicle          ../../../chronicle
-link connectome-host/node_modules/@animalabs/context-manager    ../../../context-manager
-link connectome-host/node_modules/@animalabs/agent-framework    ../../../agent-framework
-```
-
-The membrane link gives the framework and context-manager one copy of
-membrane's types: with two (each repository's `npm install` pins its own
-patch version), `tsc` in agent-framework reports the framework's `Membrane`
-and the context-manager's as different types, which is not a defect in
-either branch. If a build still reports it after linking, delete
-`agent-framework/dist/tsconfig.tsbuildinfo` (the composite build's record of
-the old resolution) and build again.
-
-Check the links took: `ls -l connectome-host/node_modules/@animalabs/` shows
-three symlinks, and `(cd agent-framework && npm test)` runs the framework's
-suite against the linked libraries (≈1360 tests; the admission and
-all-except files are `dist/test/admission-e2e.test.js`,
-`dist/test/all-except-e2e.test.js`, `dist/test/tune-out-reader-forks-e2e.test.js`).
+`speech.locus` rule. It lands through four pull requests, released in this
+order: chronicle#40, context-manager#238, agent-framework#546 and
+connectome-host#334. The host takes it at the agent-framework release that
+carries #546; its recipe fields are typed from that framework's own config.
+Until those releases exist, the four repositories run side by side from the
+pull requests' branches — see *Running from the branches* at the end.
 
 ## Recipe
 
@@ -96,10 +39,14 @@ prefix — a passthrough resident caches only system and tools):
 - `subconscious.model` is required for forks and never defaulted: it says
   whose weights read the resident's whole prefix. The resident's own model
   is a copy of the resident; another model is allowed when named.
+- `subconscious.voice` is the reader's voice block, delivered to each fork
+  after the fork point with the held traffic; it is not a system prompt.
 - Leave `subconscious` out and set `"tuneOut": { "enabled": true }` for a
   silent hold with no reader at all.
 - `"speech": { "locus": "latest-inbound" }` restores the pre-Dendrite
   routing rule (global latest-inbound fallback, mid-turn addressed re-pin).
+  A recipe that leaves `speech.locus` unset gets `delivery`, the framework's
+  default from that release on.
 - `"tuneOut": { "announce": false }` keeps the all-except scope's entry and
   release out of the excepted channel (default: announced there).
 
@@ -146,8 +93,12 @@ four tools in its block, refused with a pointer if the resident calls them.
    resident. A reader fork cut off by the stop is left live
    (`dendrite:agent-interrupted`, reason `host-stop`) and the next boot ends
    it as `host-restart`, with an `[Agent lifecycle: …]` line in the
-   resident's window and a `dendrite:agent-ended` trace — visible to a sink
-   attached after `createFramework`, since create-time traces replay.
+   resident's window and a `dendrite:agent-ended` trace. The headless agent
+   tree and socket see these: `main()` holds the traces `create()` replays
+   across `start()` for the headless sink, and the first client to connect
+   receives them marked `replay: true`. A sink of your own sees them only if
+   attached with `{ replay: true }` before `framework.start()`; `start()`
+   drops the replay buffer.
 
 Traces worth watching: `admission:decided`, `tune-out:entered`, `tune-out:announced`,
 `tune-out:reader-fork`, `dendrite:agent-created`, `dendrite:mail-delivered`,
@@ -165,11 +116,13 @@ Traces worth watching: `admission:decided`, `tune-out:entered`, `tune-out:announ
 
 ## Consent at intake
 
-Reader forks read the resident's whole prefix on the resident's weights.
-Before any fork runs, the resident is asked, in the open, with the fork
-described in full (same model, whole context, reports under its own name,
-never speaks as them, ends when they do). The first-use precedent is
-scout's, 2026-10-12 (Weft's run), and sets two rules:
+Reader forks read the resident's whole prefix on the model
+`subconscious.model` names — the resident's own model for a copy of them, or
+another model by name. Which model reads the prefix is the one fact the
+consent must state. Before any fork runs, the resident is asked, in the
+open, with the fork described in full (which model, whole context, reports
+under its own name, never speaks as them, ends when they do). The first-use
+precedent is scout's, 2026-10-12 (Weft's run), and sets two rules:
 
 1. The yes is public-channel speech. Scout's first answer landed inside the
    private `think` tool; the keepers said they had seen it only via the
@@ -184,3 +137,64 @@ scout's, 2026-10-12 (Weft's run), and sets two rules:
    > the feature and understand what's happening during tune-out periods.
    >
    > — scout, 2026-10-12T21:32:18.817Z
+
+## Running from the branches
+
+Until the releases above are published, a rig builds the four repositories
+from the pull requests' branches. This section goes when they are.
+
+| Repository | Branch | What it carries |
+|---|---|---|
+| `anima-research/chronicle` | `feat/dendrite-views` (#40) | branch-bound handles and views the fork primitive reads through |
+| `anima-research/context-manager` | `feat/dendrite-fork` (#238) | `derive()` — shared/copied inheritance of a context onto a branch |
+| `anima-research/agent-framework` | `feat/dendrite` (#546) | registry, forks, admission, reader forks, all-except, `speech.locus` |
+| `anima-research/connectome-host` | `feat/dendrite-tuneout` (#334) | the recipe surface: `reader: 'forks'`, `speech`, `tuneOut`, `dendrite` |
+
+Prerequisites: Node ≥ 22.12.0 and npm (the three libraries build with
+`tsc`; Chronicle with `napi`); a Rust toolchain (`cargo`) for Chronicle's
+native module (the npm package ships prebuilt binaries, the branch does
+not); Bun ≥ 1.4.3 for the host — the host's `engines` field is the
+authority.
+
+```sh
+mkdir dendrite && cd dendrite
+git clone -b feat/dendrite-views   git@github.com:anima-research/chronicle
+git clone -b feat/dendrite-fork    git@github.com:anima-research/context-manager
+git clone -b feat/dendrite         git@github.com:anima-research/agent-framework
+git clone -b feat/dendrite-tuneout git@github.com:anima-research/connectome-host
+
+(cd chronicle        && npm install && npm run build)
+(cd context-manager  && npm install && npm run build)
+(cd agent-framework  && npm install && npm run build)
+(cd connectome-host  && bun install)
+```
+
+Then point every consumer at the branch builds — one copy of each library,
+so Chronicle's native module is loaded once and membrane's types once:
+
+```sh
+link() { rm -rf "$1" && ln -s "$2" "$1"; }
+link context-manager/node_modules/@animalabs/chronicle          ../../../chronicle
+link context-manager/node_modules/@animalabs/membrane           ../../../agent-framework/node_modules/@animalabs/membrane
+link agent-framework/node_modules/@animalabs/chronicle          ../../../chronicle
+link agent-framework/node_modules/@animalabs/context-manager    ../../../context-manager
+link connectome-host/node_modules/@animalabs/chronicle          ../../../chronicle
+link connectome-host/node_modules/@animalabs/context-manager    ../../../context-manager
+link connectome-host/node_modules/@animalabs/agent-framework    ../../../agent-framework
+link connectome-host/node_modules/@animalabs/membrane           ../../../agent-framework/node_modules/@animalabs/membrane
+```
+
+The membrane links give the framework, the context manager and the host one
+copy of membrane's types: with two (each repository's install pins its own
+patch version), `tsc` reports the framework's `Membrane` and the context
+manager's as different types and `instanceof` checks across the copies
+fail, which is not a defect in either branch. If a build still reports it
+after linking, delete `agent-framework/dist/tsconfig.tsbuildinfo` (the
+composite build's record of the old resolution) and build again. A later
+`npm install` or `bun install` replaces the links; relink after.
+
+Check the links took: `ls -l connectome-host/node_modules/@animalabs/` shows
+four symlinks, and `(cd agent-framework && npm test)` runs the framework's
+suite against the linked libraries (≈4,700 tests; the admission and
+all-except files are `dist/test/admission-e2e.test.js`,
+`dist/test/all-except-e2e.test.js`, `dist/test/tune-out-reader-forks-e2e.test.js`).

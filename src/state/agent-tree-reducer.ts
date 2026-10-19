@@ -195,6 +195,21 @@ const EVENT_HANDLERS: Record<string, EventHandler> = {
     }
   },
 
+  // Dendrite (agent-framework#546): every derived agent announces itself
+  // with the agent it was made from, so reader forks and task forks hang
+  // under their source without a tool call to infer the edge from. A
+  // resident or a persistent reader announces no parent and stays top-level.
+  'dendrite:agent-created': (r, e, ts) => {
+    if (!e.agentName) return;
+    const inherit = e.inherit as { from?: string } | undefined;
+    const parent = (e.spawnedBy as string | undefined) ?? inherit?.from;
+    if (!parent) return;
+    const node = r._ensureNode(e.agentName, 'subagent');
+    node.parent = parent;
+    node.subagentType = inherit ? 'fork' : 'spawn';
+    if (node.startedAt === undefined) node.startedAt = ts;
+  },
+
   'inference:usage': (r, e, ts) => {
     if (!e.agentName) return;
     const node = r._ensureNode(e.agentName);

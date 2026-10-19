@@ -29,6 +29,37 @@ describe('AgentTreeReducer', () => {
     expect(commander!.parent).toBeUndefined();
   });
 
+  test('dendrite:agent-created hangs a derived agent under the agent it was made from', () => {
+    const r = new AgentTreeReducer();
+    r.seedFrameworkAgents(['scout']);
+    r.applyEvent({
+      type: 'dendrite:agent-created', agentName: 'scout.reader-3', kind: 'task-fork', model: 'm', incarnation: 1,
+      lifetime: { kind: 'task', idleTimeoutMs: 600_000 }, spawnedBy: 'scout',
+      inherit: { from: 'scout', mode: 'shared' }, timestamp: ts(0),
+    });
+    const fork = r.getNode('scout.reader-3')!;
+    expect(fork.kind).toBe('subagent');
+    expect(fork.parent).toBe('scout');
+    expect(fork.subagentType).toBe('fork');
+    expect(fork.startedAt).toBe(ts(0));
+
+    r.applyEvent({
+      type: 'dendrite:agent-created', agentName: 'scout.worker-1', kind: 'worker', incarnation: 1,
+      lifetime: { kind: 'task', deadlineMs: 60_000 }, spawnedBy: 'scout', timestamp: ts(1),
+    });
+    expect(r.getNode('scout.worker-1')!.subagentType).toBe('spawn');
+    expect(r.getNode('scout.worker-1')!.parent).toBe('scout');
+
+    // A resident announces itself with no parent: top-level, as seeded.
+    r.applyEvent({
+      type: 'dendrite:agent-created', agentName: 'scout', kind: 'resident', incarnation: 2,
+      lifetime: { kind: 'persistent' }, timestamp: ts(2),
+    });
+    expect(r.getNode('scout')!.parent).toBeUndefined();
+    expect(r.getNode('scout')!.kind).toBe('framework');
+    expect(REDUCER_REQUIRED_EVENTS).toContain('dendrite:agent-created');
+  });
+
   test('phase transitions follow the canonical mapping', () => {
     const r = new AgentTreeReducer();
     r.applyEvent({ type: 'inference:started', agentName: 'a', timestamp: ts(0) });
@@ -229,6 +260,9 @@ function makeRepresentativeEvent(eventType: string): Record<string, unknown> {
       return { type: eventType, agentName: 'agent', error: 'x', reason: 'x', timestamp: 1000 };
     case 'inference:stream_restarted':
       return { type: eventType, agentName: 'agent', reason: 'x', inputTokens: 0, budget: 0, timestamp: 1000 };
+    case 'dendrite:agent-created':
+      // A derivation with a parent; one without (a resident) is observably a no-op by design.
+      return { type: eventType, agentName: 'agent.fork-1', kind: 'task-fork', incarnation: 1, lifetime: { kind: 'task', idleTimeoutMs: 1 }, spawnedBy: 'agent', timestamp: 1000 };
     default:
       return { type: eventType, agentName: 'agent', content: '', timestamp: 1000 };
   }

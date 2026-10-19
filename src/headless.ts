@@ -28,6 +28,7 @@ import { createWriteStream, mkdirSync, existsSync, unlinkSync, writeFileSync, ty
 import { sessionMarker } from './bug-report.js';
 import { join, resolve } from 'node:path';
 import type { AppContext } from './index.js';
+import type { TraceEvent } from '@animalabs/agent-framework';
 import { type IncomingCommand, matchesSubscription } from './modules/fleet-types.js';
 import { AgentTreeReducer } from './state/agent-tree-reducer.js';
 import { takeRecipeWarnings } from './recipe.js';
@@ -186,6 +187,12 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
 
   // -- Connection state --
   let currentClient: Socket | null = null;
+  // Framework events from before the first client connected, sent to it on
+  // connect so a parent that attaches after the boot still hears it (the
+  // restart notices a re-created tune-out epoch or an ended fork leave).
+  // Null once a client has connected: later clients ask for a snapshot.
+  let bootEvents: Record<string, unknown>[] | null = [];
+  const BOOT_EVENT_CAP = 1000;
   // Default subscription: receive everything.  Smoke-test friendly; parents
   // are expected to send their own {type:"subscribe",events:[...]} on connect.
   let subscription = new Set<string>(['*']);
@@ -230,13 +237,23 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
   const startedAt = Date.now();
 
   // -- Wire framework trace events to socket and reducer --
-  // With replay: the traces create() emitted before this sink existed
-  // (registry restore, work a stop cut off, resumed tune-out epochs) are
-  // delivered first, so the tree and the socket see the boot whole.
-  app.framework.onTrace((traceEvent) => {
+  // The boot comes first: main() holds what create() replays and what
+  // start() emitted before this sink existed (registry restore, work a stop
+  // cut off, resumed tune-out epochs), so the tree sees the boot whole. No
+  // client is connected yet and emit() would drop them, so until the first
+  // client connects the events are kept for it instead.
+  const onFrameworkTrace = (traceEvent: TraceEvent): void => {
     treeReducer.applyEvent(traceEvent);
-    emit(traceEvent as unknown as Record<string, unknown>);
-  }, { replay: true });
+    const event = traceEvent as unknown as Record<string, unknown>;
+    if (bootEvents && !currentClient) {
+      bootEvents.push(event);
+      if (bootEvents.length > BOOT_EVENT_CAP) bootEvents.shift();
+      return;
+    }
+    emit(event);
+  };
+  if (app.bootTraces) app.bootTraces.handOver(onFrameworkTrace);
+  else app.framework.onTrace(onFrameworkTrace);
 
   // -- Command dispatch --
   /** Commands each superseded client sent after its takeover, all dropped. */
@@ -552,6 +569,16 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
       dataDir,
       recipe: app.recipe.name,
     });
+
+    // The first client then hears the boot it missed, in order and each
+    // marked `replay: true`, before anything live; the default subscription
+    // lets all of it through, since the parent's `subscribe` can't have
+    // arrived yet.
+    if (bootEvents) {
+      const replay = bootEvents;
+      bootEvents = null;
+      for (const event of replay) emit({ ...event, replay: true });
+    }
   });
 
   server.on('error', (err) => {

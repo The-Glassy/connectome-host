@@ -42,7 +42,7 @@ import { LoggingBedrockAdapter } from './logging-bedrock-adapter.js';
 import { CodexSubscriptionAdapter, codexGateAuth } from './codex-subscription-adapter.js';
 import { CallLedger } from './call-ledger.js';
 import { SettingsModule } from './modules/settings-module.js';
-import { AgentFramework, WorkspaceModule, resolveTimeZone, HistoryModule, type Module } from '@animalabs/agent-framework';
+import { AgentFramework, WorkspaceModule, resolveTimeZone, HistoryModule, type Module, type TraceEvent } from '@animalabs/agent-framework';
 import { resolve, join, basename } from 'node:path';
 import { appendFile, mkdir, stat, rename } from 'node:fs/promises';
 import { readFileSync, existsSync } from 'node:fs';
@@ -87,7 +87,7 @@ import {
 } from './recipe.js';
 import { createBranchState, resetBranchState, handleExport, type BranchState } from './commands.js';
 import { buildFrameworkAgentConfig, membraneCachingOverride } from './framework-agent-config.js';
-import { buildFrameworkStrategy, buildConversationsConfig } from './framework-strategy.js';
+import { buildFrameworkStrategy, buildConversationsConfig, buildSubconsciousConfig } from './framework-strategy.js';
 import { buildWorkspaceMounts } from './workspace-mounts.js';
 import { quarantineAlarm, type QuarantineStatus } from './web/quarantine-alert.js';
 import { logKeepaliveEvent } from './cache-keepalive-log.js';
@@ -122,6 +122,36 @@ const config = {
 // AppContext — mutable container for session switching
 // ---------------------------------------------------------------------------
 
+/** Framework traces held from before the headless sink exists; see AppContext.bootTraces. */
+export interface BootTraceHold {
+  /** Deliver what is held, in order, then everything that follows, to `sink`. Takes effect once. */
+  handOver(sink: (event: TraceEvent) => void): void;
+}
+
+/** As many early traces as the framework itself keeps for replay. */
+const BOOT_TRACE_CAP = 1000;
+
+function holdBootTraces(framework: AgentFramework): BootTraceHold {
+  let held: TraceEvent[] | null = [];
+  let sink: ((event: TraceEvent) => void) | null = null;
+  framework.onTrace((event) => {
+    if (sink) sink(event);
+    else if (held) {
+      held.push(event);
+      if (held.length > BOOT_TRACE_CAP) held.shift();
+    }
+  }, { replay: true });
+  return {
+    handOver(next) {
+      if (sink) return;
+      const replay = held ?? [];
+      held = null;
+      sink = next;
+      for (const event of replay) next(event);
+    },
+  };
+}
+
 interface AppContext {
   framework: AgentFramework;
   membrane: Membrane;
@@ -151,6 +181,14 @@ interface AppContext {
    *  (openai-codex through an inference gateway, which tracks them per
    *  login): usage readouts still stay off dollars. */
   subscriptionUnmetered: boolean;
+  /**
+   * Headless only: the framework's traces from create() on, held until
+   * runHeadless attaches the sink that feeds the agent tree and the socket.
+   * create() replays its early traces (registry restore, work a stop cut
+   * off, resumed tune-out epochs) only to a listener attached before
+   * start(), and runHeadless runs after start(); this is that listener.
+   */
+  bootTraces?: BootTraceHold;
 
   /** Stop current framework, switch to a different session, start new framework. */
   switchSession(id: string): Promise<void>;
@@ -611,6 +649,7 @@ async function createFramework(
   // Deprecated (agent-framework#235): still wired, but named at startup.
   for (const notice of deprecatedConversationsNotices(recipe.conversations)) console.warn(`[deprecated] ${notice}`);
   const conversations = buildConversationsConfig(recipe, agentName, model, timeZone, extensionRegistry);
+  const subconscious = buildSubconsciousConfig(recipe, model, timeZone, extensionRegistry);
 
   // -- Create framework --
   const framework = await AgentFramework.create({
@@ -627,27 +666,14 @@ agents: [agentConfig],
     // Client-side programmatic tool calling (code_execution) — recipe opt-in.
     ...(recipe.codeExecution ? { codeExecution: recipe.codeExecution } : {}),
     ...(conversations ? { conversations } : {}),
-    // Tune-out's reader (agent-framework#77, #232) — recipe opt-in. The
-    // persistent reader passes through verbatim; reader forks get the one
-    // field a recipe cannot state, a fresh instance of the recipe's strategy
-    // per fork (the `conversations` pattern), so a fork reuses the
-    // resident's fold state and rendering.
-    // Together with the Dendrite admission options (`speech`, `tuneOut`),
-    // spread untyped so an agent-framework that predates them typechecks:
-    // it then ignores the fields it lacks, and refuses `reader: 'forks'` at
-    // create() with its own message.
-    ...({
-      ...(recipe.subconscious
-        ? {
-            subconscious: recipe.subconscious.reader === 'forks'
-              ? { ...recipe.subconscious, strategyFactory: () => buildFrameworkStrategy(recipe, model, timeZone, extensionRegistry) }
-              : recipe.subconscious,
-          }
-        : {}),
-      ...(recipe.speech ? { speech: recipe.speech } : {}),
-      ...(recipe.tuneOut ? { tuneOut: recipe.tuneOut } : {}),
-      ...(recipe.dendrite ? { dendrite: recipe.dendrite } : {}),
-    } as object),
+    // Tune-out's reader (agent-framework#77, #232) and the Dendrite options
+    // (`speech`, `tuneOut`, `dendrite`) — recipe opt-ins, typed against the
+    // framework's own config (agent-framework#546). The reader mapping adds
+    // the one field a recipe cannot state (buildSubconsciousConfig).
+    ...(subconscious ? { subconscious } : {}),
+    ...(recipe.speech ? { speech: recipe.speech } : {}),
+    ...(recipe.tuneOut ? { tuneOut: recipe.tuneOut } : {}),
+    ...(recipe.dendrite ? { dendrite: recipe.dendrite } : {}),
     // MCPL RFC-008 tool classes: this host's module table, and the recipe's
     // operator overrides. Spread as an untyped object so an agent-framework
     // older than the tool-lifecycle release (which lacks both fields)
@@ -1387,6 +1413,10 @@ async function main() {
     };
   }
 
+  // The headless sink attaches inside runHeadless, after start() has
+  // dropped the traces create() replays; hold them from here (see
+  // AppContext.bootTraces).
+  if (headless) app.bootTraces = holdBootTraces(framework);
   framework.start();
   setupSynesthete(app);
   setupMcplStderrLog(app, storePath);

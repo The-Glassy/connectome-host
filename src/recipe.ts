@@ -13,7 +13,7 @@
 
 import { readFileSync, writeFileSync, existsSync, lstatSync, statSync, mkdirSync, rmSync, chmodSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
-import type { MountConfig } from '@animalabs/agent-framework';
+import type { ForkReaderConfig, FrameworkConfig, MountConfig, PersistentReaderConfig } from '@animalabs/agent-framework';
 import { buildWorkspaceMounts } from './workspace-mounts.js';
 import { validateToolClassTable, validateToolLifecycle } from './tool-lifecycle-config.js';
 import { isLoopbackOrTailnetHost } from './history-semantic.js';
@@ -1152,42 +1152,21 @@ export interface RecipeCodeExecution {
  *   itself, each derived at the resident's head for one look and ended.
  *   The fork shares the resident's provider prefix. `model` says whose
  *   weights run the fork and is never defaulted — the resident's own model
- *   for a copy of the resident, or another by name. `voice` is the framing
- *   the fork is handed. The host supplies the one field a recipe cannot: a
- *   `strategyFactory` building a fresh instance of the recipe's strategy
- *   per fork (the same pattern as `conversations`).
+ *   for a copy of the resident, or another by name. `voice` is the reader's
+ *   voice block, delivered to each fork after the fork point with the held
+ *   traffic, never a system prompt; how the fork is prompted (`framing`) is
+ *   the framework's, not a recipe field. The host supplies the one field a
+ *   recipe cannot: a `strategyFactory` building a fresh instance of the
+ *   recipe's strategy per fork (the same pattern as `conversations`; see
+ *   buildSubconsciousConfig).
+ *
+ * The types are the framework's own, minus the function-valued fields a
+ * recipe cannot state; agent-framework's src/tune-out/tools.ts documents
+ * each field.
  */
 export type RecipeSubconscious = RecipePersistentReader | RecipeForkReader;
-
-export interface RecipePersistentReader {
-  /** Master switch. Without it the `tune_out` tool is not offered (see `tuneOut`). */
-  enabled: boolean;
-  reader?: 'persistent';
-  /** Registry + participant name (default 'Subconscious'). */
-  name?: string;
-  /** Model id (default: the resident's model — same-model side-process). */
-  model?: string;
-  /** The voice/criteria mode block: report-shaped, second person toward the
-   *  resident. Co-authored with the resident; canary before fleet use. */
-  systemPrompt: string;
-  /** Allow `speak_in_channel` (default false until the voice block has
-   *  passed its canary). */
-  allowChannelSpeech?: boolean;
-  /** WindowedPassthroughStrategy re-anchor fraction in (0, 1] (default 0.5). */
-  reAnchorFraction?: number;
-}
-
-export interface RecipeForkReader {
-  enabled: boolean;
-  reader: 'forks';
-  /** Whose weights run a reader fork. Required; never defaulted. */
-  model: string;
-  /** The reader's framing block, handed to each fork with the held traffic. */
-  voice: string;
-  allowChannelSpeech?: boolean;
-  /** A reader fork that stays silent this long ends (ms). */
-  forkIdleTimeoutMs?: number;
-}
+export type RecipePersistentReader = PersistentReaderConfig;
+export type RecipeForkReader = Omit<ForkReaderConfig, 'strategyFactory' | 'framing'>;
 
 /**
  * Where a turn's plain prose lands when nothing names a destination
@@ -1198,9 +1177,7 @@ export interface RecipeForkReader {
  * `'latest-inbound'`: the previous rule, with the most recent delivered
  * inbound message as a global fallback locus.
  */
-export interface RecipeSpeech {
-  locus?: 'delivery' | 'latest-inbound';
-}
+export type RecipeSpeech = NonNullable<FrameworkConfig['speech']>;
 
 /**
  * Tune-out without a reader (agent-framework FrameworkConfig.tuneOut): offer
@@ -1208,23 +1185,10 @@ export interface RecipeSpeech {
  * A hold is then silent — nothing summarizes or wakes the resident; the
  * backlog is released on cancel or when the duration ends.
  */
-export interface RecipeTuneOut {
-  enabled?: boolean;
-  /** Announce the all-except scope's entry and release in the excepted channel. Default true. */
-  announce?: boolean;
-}
+export type RecipeTuneOut = NonNullable<FrameworkConfig['tuneOut']>;
 
 /** Dendrite lifecycle options (agent-framework FrameworkConfig.dendrite). */
-export interface RecipeDendrite {
-  /** Tell the first adoption candidate when task work is orphaned. Default true. */
-  announceOrphans?: boolean;
-  /**
-   * Every derivation tells the agent it was made from, in one line. After
-   * this many of one kind, the agent hears a count line every so many
-   * instead (agent-framework#270). Default 10; 0 never collapses.
-   */
-  collapseDerivationNoticesAfter?: number;
-}
+export type RecipeDendrite = NonNullable<FrameworkConfig['dendrite']>;
 
 /**
  * Per-channel conversation routing (agent-framework ConversationRouter):
@@ -2996,8 +2960,11 @@ export function validateRecipe(raw: unknown): Recipe {
       if (typeof sub.voice !== 'string' || !sub.voice.trim()) {
         throw new Error('Recipe subconscious.voice must be a non-empty string for reader "forks".');
       }
-      if (sub.forkIdleTimeoutMs !== undefined && (typeof sub.forkIdleTimeoutMs !== 'number' || !(sub.forkIdleTimeoutMs > 0))) {
-        throw new Error('Recipe subconscious.forkIdleTimeoutMs must be a positive number.');
+      // Finite: JSON `1e309` parses to Infinity, which saveRecipe() would
+      // write back as null and the next load would refuse.
+      const idle = sub.forkIdleTimeoutMs;
+      if (idle !== undefined && (typeof idle !== 'number' || !Number.isFinite(idle) || !(idle > 0))) {
+        throw new Error('Recipe subconscious.forkIdleTimeoutMs must be a positive finite number of milliseconds.');
       }
     } else {
       // The mode block is the subconscious's whole character; an enabled
