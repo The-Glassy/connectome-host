@@ -963,6 +963,15 @@ describe('mcpl_list labels', () => {
     expect(text).toMatch(/both: CONNECTED .*, node$/m);
     expect(text).toMatch(/shell: CONNECTED .*, node$/m);
   });
+
+  test("a url's credentials are masked in its label", async () => {
+    const { stub } = makeStubFramework();
+    await (stub as unknown as { connectMcplServer: (c: { id: string; url: string }) => Promise<void> })
+      .connectMcplServer({ id: 'world', url: 'wss://u:pw@x.test/mcpl?token=s3cret&room=a' });
+    const text = String((await call(makeModule(stub), 'mcpl_list')).data);
+    expect(text).toMatch(/world: CONNECTED .*, wss:\/\/\*\*\*@x\.test\/mcpl\?token=\*\*\*&room=a$/m);
+    expect(text).not.toContain('s3cret');
+  });
 });
 
 describe('mcpl_restart', () => {

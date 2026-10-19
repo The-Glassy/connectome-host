@@ -32,7 +32,7 @@ import { type IncomingCommand, matchesSubscription } from './modules/fleet-types
 import { AgentTreeReducer } from './state/agent-tree-reducer.js';
 import { takeRecipeWarnings } from './recipe.js';
 import { workspaceReadFields } from './workspace-read-result.js';
-import { redactChunk } from './credential-redaction.js';
+import { redactingWrite } from './credential-redaction.js';
 
 // ---------------------------------------------------------------------------
 // Local types
@@ -133,18 +133,14 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
   // writing it to the ended stream would make the stream error, drop the
   // lines still pending and, with nothing listening, end the process.
   const toStderr = process.stderr.write.bind(process.stderr) as (...args: unknown[]) => boolean;
-  const writeLog = (
-    chunk: string | Uint8Array,
-    encodingOrCb?: BufferEncoding | ((err?: Error | null) => void),
-    cb?: (err?: Error | null) => void,
-  ): boolean => {
-    // A dial error names its url, query included (credential-redaction.ts).
-    chunk = redactChunk(chunk);
+  // A dial error names its url, query included: the log gets it masked, a
+  // line at a time (credential-redaction.ts).
+  const writeLog = redactingWrite((chunk, encodingOrCb, cb) => {
     if (logStream.writableEnded) return toStderr(chunk, encodingOrCb, cb);
     return typeof encodingOrCb === 'function'
       ? logStream.write(chunk, encodingOrCb)
       : logStream.write(chunk, encodingOrCb as BufferEncoding, cb);
-  };
+  });
   const makeRedirect = (): StdWrite => function (
     this: unknown,
     chunk: string | Uint8Array,

@@ -47,7 +47,7 @@ import { handleCommand, resetBranchState } from './commands.js';
 import { formatQuotaReadout } from './quota-meter.js';
 import { takeRecipeWarnings } from './recipe.js';
 import { effectiveContextBudgetTokens } from './framework-agent-config.js';
-import { redactChunk } from './credential-redaction.js';
+import { redactConsole, redactingWrite } from './credential-redaction.js';
 
 /** Format a token count compactly: 1.2M / 3.5k / 42. */
 export function fmtTokens(n: number): string {
@@ -436,13 +436,22 @@ export async function runTui(app: AppContext): Promise<void> {
   // The recipe was validated before the TUI took the terminal: its warnings go into this log.
   for (const warning of takeRecipeWarnings()) logStream.write(`warning: ${warning}\n`);
   const origStderrWrite = process.stderr.write.bind(process.stderr);
+  // A dial error names its url, query included (credential-redaction.ts).
+  const writeLog = redactingWrite((chunk, encodingOrCb, cb) => {
+    if (typeof encodingOrCb === 'function') logStream.write(chunk, encodingOrCb);
+    else logStream.write(chunk, encodingOrCb as BufferEncoding, cb);
+    return true;
+  });
   process.stderr.write = ((chunk: string | Uint8Array, ...args: unknown[]) => {
-    // A dial error names its url, query included (credential-redaction.ts).
-    logStream.write(redactChunk(chunk));
+    writeLog(chunk, ...(args as [BufferEncoding?, ((err?: Error | null) => void)?]));
     return true;
   }) as typeof process.stderr.write;
 
   const renderer = await createCliRenderer({ exitOnCtrlC: false });
+  // OpenTUI's console overlay assigns its own console.error/warn, and with
+  // OTUI_USE_CONSOLE puts a console object of its own in place: mask that one
+  // too.
+  redactConsole();
 
   // Set terminal title
   const recipeName = app.recipe?.name ?? 'connectome-host';
