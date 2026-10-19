@@ -13,7 +13,7 @@
 
 import { readFileSync, writeFileSync, existsSync, lstatSync, statSync, mkdirSync, rmSync, chmodSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
-import type { ForkReaderConfig, FrameworkConfig, MountConfig, PersistentReaderConfig } from '@animalabs/agent-framework';
+import { readerConsentDrift, type ForkReaderConfig, type FrameworkConfig, type MountConfig, type PersistentReaderConfig, type ReaderConsent } from '@animalabs/agent-framework';
 import { buildWorkspaceMounts } from './workspace-mounts.js';
 import { validateToolClassTable, validateToolLifecycle } from './tool-lifecycle-config.js';
 import { isLoopbackOrTailnetHost } from './history-semantic.js';
@@ -1163,6 +1163,32 @@ export interface RecipeCodeExecution {
  *
  * The types are the framework's own, minus those two fields;
  * agent-framework's src/tune-out/tools.ts documents each field.
+ *
+ * **Consent at intake.** A reader fork reads the resident's whole prefix on
+ * the model `subconscious.model` names: it is fork-grade (architecture
+ * channel, 2026-10-05), so it needs the resident's own yes, to the fork
+ * section as they saw it, before any fork runs. The recipe records that yes
+ * as `subconscious.consent` and refuses `reader: 'forks'` without one, or
+ * with one whose section differs from the live section (ask again after any
+ * change — the voice is co-written, and `allowChannelSpeech` changes what
+ * the fork does). Two rules from the first run (scout, 2026-10-12, Weft):
+ *
+ * 1. The yes is public-channel speech. A yes inside a private tool (scout's
+ *    first answer landed in `think`) does not count; the host asks again in
+ *    the open. A no counts however it reaches the host: the resident can
+ *    withdraw with the `withdraw_consent` tool at any time, after which no
+ *    fork is derived and a tune-out is a silent hold until a later yes is
+ *    recorded here.
+ * 2. The record travels with the configuration. `where` names the public
+ *    yes (a message id or link); the framework carries the record on every
+ *    fork's registry entry and in `dendrite:agent-created`, and names it in
+ *    each derivation notice.
+ *
+ * Describe the section truthfully when asking. With `allowChannelSpeech`
+ * off, a fork reports to the resident as mail under its own name and speaks
+ * nowhere. With it on, a fork's `speak_in_channel` posts through the
+ * resident's own publish path — the channel sees the resident's account, in
+ * the fork's words — until the framework can attribute the fork.
  */
 export type RecipeSubconscious = RecipePersistentReader | RecipeForkReader;
 export type RecipePersistentReader = PersistentReaderConfig;
@@ -2958,7 +2984,7 @@ export function validateRecipe(raw: unknown): Recipe {
     }
     const forks = sub.reader === 'forks';
     const allowedSubconsciousKeys = new Set(forks
-      ? ['enabled', 'reader', 'model', 'voice', 'allowChannelSpeech', 'forkIdleTimeoutMs']
+      ? ['enabled', 'reader', 'model', 'voice', 'allowChannelSpeech', 'forkIdleTimeoutMs', 'consent']
       : ['enabled', 'reader', 'name', 'model', 'systemPrompt', 'allowChannelSpeech', 'reAnchorFraction']);
     for (const key of Object.keys(sub)) {
       if (!allowedSubconsciousKeys.has(key)) {
@@ -2986,6 +3012,46 @@ export function validateRecipe(raw: unknown): Recipe {
       const idle = sub.forkIdleTimeoutMs;
       if (idle !== undefined && (typeof idle !== 'number' || !Number.isFinite(idle) || !(idle > 0))) {
         throw new Error('Recipe subconscious.forkIdleTimeoutMs must be a positive finite number of milliseconds.');
+      }
+      // The resident's yes, required: silence about whether they agreed is
+      // the dangerous case, as silence about whose weights is. The record
+      // is to the whole section as they saw it; a section that has changed
+      // since is refused until asked again (see RecipeSubconscious).
+      const consent = sub.consent;
+      if (!consent || typeof consent !== 'object' || Array.isArray(consent)) {
+        throw new Error(
+          'Recipe subconscious.consent is required for reader "forks": a reader fork reads the resident\'s whole prefix on the weights ' +
+          '`subconscious.model` names, so it needs their yes, given in the open. Record { by, at, where, section } — who said yes, ' +
+          'when (ISO 8601), where the public yes can be read, and the fork section (model, voice, allowChannelSpeech, forkIdleTimeoutMs) as they saw it.',
+        );
+      }
+      const c = consent as Record<string, unknown>;
+      const allowedConsentKeys = new Set(['by', 'at', 'where', 'section']);
+      for (const key of Object.keys(c)) {
+        if (!allowedConsentKeys.has(key)) throw new Error(`Recipe subconscious.consent has unknown field ${JSON.stringify(key)} (expected: by, at, where, section).`);
+      }
+      for (const key of ['by', 'at', 'where'] as const) {
+        if (typeof c[key] !== 'string' || !(c[key] as string).trim()) throw new Error(`Recipe subconscious.consent.${key} must be a non-empty string.`);
+      }
+      if (Number.isNaN(Date.parse(c.at as string))) throw new Error(`Recipe subconscious.consent.at must be an ISO 8601 time, got ${JSON.stringify(c.at)}.`);
+      if (!c.section || typeof c.section !== 'object' || Array.isArray(c.section)) {
+        throw new Error('Recipe subconscious.consent.section must be an object: the fork section the yes covered (model, voice, allowChannelSpeech, forkIdleTimeoutMs).');
+      }
+      const section = c.section as Record<string, unknown>;
+      const allowedSectionKeys = new Set(['model', 'voice', 'allowChannelSpeech', 'forkIdleTimeoutMs']);
+      for (const key of Object.keys(section)) {
+        if (!allowedSectionKeys.has(key)) throw new Error(`Recipe subconscious.consent.section has unknown field ${JSON.stringify(key)} (expected: model, voice, allowChannelSpeech, forkIdleTimeoutMs).`);
+      }
+      if (typeof section.model !== 'string' || typeof section.voice !== 'string') {
+        throw new Error('Recipe subconscious.consent.section must record the model and the voice the resident agreed to.');
+      }
+      const drift = readerConsentDrift(consent as ReaderConsent, sub as unknown as ForkReaderConfig);
+      if (drift) {
+        throw new Error(
+          `Recipe subconscious.consent covers a different fork section: \`${drift.field}\` was ${JSON.stringify(drift.agreed)} when ` +
+          `${String(c.by)} said yes on ${String(c.at)}, and is ${JSON.stringify(drift.live)} now. Ask ${String(c.by)} again, in the open, ` +
+          'and record the new yes with the section as they saw it.',
+        );
       }
     } else {
       // The mode block is the subconscious's whole character; an enabled

@@ -20,6 +20,10 @@ function baseRecipe(extra: Record<string, unknown> = {}): Record<string, unknown
 }
 
 const MODE = 'You are the Subconscious. Watch tuned-out channels and report in second person.';
+/** A yes to a fork section, as the recipe records it (who, when, where, and the section as the resident saw it). */
+const yesTo = (section: Record<string, unknown>) => ({ by: 'sherlock', at: '2026-10-12T21:32:18.817Z', where: 'discord:cafe/1561581816215896197', section });
+/** A fork section with the consent record that covers it. */
+const agreed = (section: Record<string, unknown>) => ({ enabled: true, reader: 'forks', ...section, consent: yesTo(section) });
 
 describe('validateRecipe — subconscious schema', () => {
   test('absent block is accepted', () => {
@@ -88,11 +92,11 @@ describe('validateRecipe — subconscious schema', () => {
   });
 
   test('reader "forks": model and voice are required; its keys are its own', () => {
-    const forks = { enabled: true, reader: 'forks', model: 'claude-sonnet-4-5', voice: 'You are reading for sherlock.' };
+    const forks = agreed({ model: 'claude-sonnet-4-5', voice: 'You are reading for sherlock.' });
     expect(validateRecipe(baseRecipe({ subconscious: forks })).subconscious).toEqual(forks);
-    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', voice: 'v' } })))
+    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', voice: 'v', consent: yesTo({ model: 'm', voice: 'v' }) } })))
       .toThrow(/subconscious\.model is required for reader "forks"/);
-    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', model: 'm' } })))
+    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', model: 'm', consent: yesTo({ model: 'm', voice: 'v' }) } })))
       .toThrow(/subconscious\.voice must be a non-empty string/);
     expect(() => validateRecipe(baseRecipe({ subconscious: { ...forks, systemPrompt: MODE } })))
       .toThrow(/unknown field "systemPrompt".*for reader "forks"/);
@@ -101,26 +105,25 @@ describe('validateRecipe — subconscious schema', () => {
   });
 
   test('reader "forks": a blank model or voice is refused like a missing one', () => {
-    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', model: '  ', voice: 'v' } })))
+    expect(() => validateRecipe(baseRecipe({ subconscious: { ...agreed({ model: 'm', voice: 'v' }), model: '  ' } })))
       .toThrow(/subconscious\.model is required for reader "forks"/);
-    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', model: 7, voice: 'v' } })))
+    expect(() => validateRecipe(baseRecipe({ subconscious: { ...agreed({ model: 'm', voice: 'v' }), model: 7 } })))
       .toThrow(/subconscious\.model is required for reader "forks"/);
-    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', model: 'm', voice: '\n' } })))
+    expect(() => validateRecipe(baseRecipe({ subconscious: { ...agreed({ model: 'm', voice: 'v' }), voice: '\n' } })))
       .toThrow(/subconscious\.voice must be a non-empty string/);
   });
 
   test('reader "forks": forkIdleTimeoutMs is a positive finite number — JSON 1e309 is Infinity, which a saved recipe would not survive', () => {
-    const forks = { enabled: true, reader: 'forks', model: 'm', voice: 'v' };
     for (const bad of [0, -1, '600000', Infinity, Number.NaN, JSON.parse('1e309')]) {
-      expect(() => validateRecipe(baseRecipe({ subconscious: { ...forks, forkIdleTimeoutMs: bad } })))
+      expect(() => validateRecipe(baseRecipe({ subconscious: agreed({ model: 'm', voice: 'v', forkIdleTimeoutMs: bad }) })))
         .toThrow(/forkIdleTimeoutMs must be a positive finite number/);
     }
-    expect(validateRecipe(baseRecipe({ subconscious: { ...forks, forkIdleTimeoutMs: 600_000 } })).subconscious)
-      .toEqual({ ...forks, forkIdleTimeoutMs: 600_000 });
+    const timed = agreed({ model: 'm', voice: 'v', forkIdleTimeoutMs: 600_000 });
+    expect(validateRecipe(baseRecipe({ subconscious: timed })).subconscious).toEqual(timed);
   });
 
   test('reader "forks": the persistent reader\'s fields and the framework-only fields are refused by name', () => {
-    const forks = { enabled: true, reader: 'forks', model: 'm', voice: 'v' };
+    const forks = agreed({ model: 'm', voice: 'v' });
     for (const [key, value] of [['name', 'Reader'], ['reAnchorFraction', 0.5], ['strategyFactory', 'x'], ['framing', 'x']] as const) {
       expect(() => validateRecipe(baseRecipe({ subconscious: { ...forks, [key]: value } })))
         .toThrow(new RegExp(`unknown field "${key}".*for reader "forks"`));
@@ -128,7 +131,7 @@ describe('validateRecipe — subconscious schema', () => {
   });
 
   test('an omitted optional key stays absent, so the framework default applies', () => {
-    const forks = { enabled: true, reader: 'forks', model: 'm', voice: 'v' };
+    const forks = agreed({ model: 'm', voice: 'v' });
     const out = validateRecipe(baseRecipe({ subconscious: forks })).subconscious as Record<string, unknown>;
     expect('forkIdleTimeoutMs' in out).toBe(false);
     expect('allowChannelSpeech' in out).toBe(false);
@@ -182,7 +185,7 @@ describe('buildSubconsciousConfig — recipe → FrameworkConfig.subconscious ma
   });
 
   test('reader forks: every recipe field is forwarded and nothing else is set', () => {
-    const block = { enabled: true, reader: 'forks' as const, model: 'claude-sonnet-4-5', voice: VOICE, allowChannelSpeech: true, forkIdleTimeoutMs: 120_000 };
+    const block = agreed({ model: 'claude-sonnet-4-5', voice: VOICE, allowChannelSpeech: true, forkIdleTimeoutMs: 120_000 });
     const recipe = validateRecipe(baseRecipe({ subconscious: block })) as Recipe;
     const cfg = buildSubconsciousConfig(recipe, 'model-x', 'UTC')!;
     const { strategyFactory, ...forwarded } = cfg as typeof cfg & { strategyFactory?: unknown };
@@ -194,7 +197,7 @@ describe('buildSubconsciousConfig — recipe → FrameworkConfig.subconscious ma
   test('reader forks: strategyFactory builds a FRESH strategy of the recipe\'s own type on each call', () => {
     const recipe = validateRecipe(baseRecipe({
       agent: { name: 'sherlock', systemPrompt: 'test', strategy: { type: 'autobiographical' } },
-      subconscious: { enabled: true, reader: 'forks', model: 'm', voice: VOICE },
+      subconscious: agreed({ model: 'm', voice: VOICE }),
     })) as Recipe;
     const cfg = buildSubconsciousConfig(recipe, 'model-x', 'UTC')!;
     if (cfg.reader !== 'forks') throw new Error('expected the fork reader config');
@@ -208,11 +211,61 @@ describe('buildSubconsciousConfig — recipe → FrameworkConfig.subconscious ma
   test('reader forks: the factory honors a passthrough recipe strategy', () => {
     const recipe = validateRecipe(baseRecipe({
       agent: { name: 'p', systemPrompt: 'test', strategy: { type: 'passthrough' } },
-      subconscious: { enabled: true, reader: 'forks', model: 'm', voice: VOICE },
+      subconscious: agreed({ model: 'm', voice: VOICE }),
     })) as Recipe;
     const cfg = buildSubconsciousConfig(recipe, 'model-x', 'UTC')!;
     if (cfg.reader !== 'forks') throw new Error('expected the fork reader config');
     expect(cfg.strategyFactory!().constructor.name).toBe('PassthroughStrategy');
+  });
+});
+
+describe('validateRecipe — the resident\'s yes to reader forks (subconscious.consent)', () => {
+  const section = { model: 'claude-sonnet-4-5', voice: 'You are reading for sherlock.' };
+
+  test('reader "forks" is refused without a consent record, in words that say what to record', () => {
+    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', ...section } })))
+      .toThrow(/subconscious\.consent is required for reader "forks".*needs their yes, given in the open.*\{ by, at, where, section \}/);
+    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', ...section, consent: 'yes' } })))
+      .toThrow(/subconscious\.consent is required/);
+  });
+
+  test('the record names who, when (ISO 8601), where, and the section; nothing else', () => {
+    const ok = yesTo(section);
+    for (const key of ['by', 'at', 'where'] as const) {
+      expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', ...section, consent: { ...ok, [key]: ' ' } } })))
+        .toThrow(new RegExp(`subconscious\\.consent\\.${key} must be a non-empty string`));
+    }
+    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', ...section, consent: { ...ok, at: 'last Tuesday' } } })))
+      .toThrow(/consent\.at must be an ISO 8601 time/);
+    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', ...section, consent: { ...ok, signed: true } } })))
+      .toThrow(/consent has unknown field "signed"/);
+    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', ...section, consent: { ...ok, section: 'the usual' } } })))
+      .toThrow(/consent\.section must be an object/);
+    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', ...section, consent: { ...ok, section: { ...section, name: 'x' } } } })))
+      .toThrow(/consent\.section has unknown field "name"/);
+    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', ...section, consent: { ...ok, section: { model: 'm' } } } })))
+      .toThrow(/consent\.section must record the model and the voice/);
+  });
+
+  test('a live section that differs from the one agreed is refused, naming the field, the yes, and what to do', () => {
+    const consent = yesTo(section);
+    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', ...section, voice: 'a voice sherlock never saw', consent } })))
+      .toThrow(/consent covers a different fork section: `voice` was "You are reading for sherlock\." when sherlock said yes on 2026-10-12T21:32:18\.817Z, and is "a voice sherlock never saw" now\. Ask sherlock again, in the open/);
+    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', ...section, model: 'another-model', consent } })))
+      .toThrow(/`model` was "claude-sonnet-4-5"/);
+    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', ...section, allowChannelSpeech: true, consent } })))
+      .toThrow(/`allowChannelSpeech` was undefined .* and is true now/);
+    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', ...section, forkIdleTimeoutMs: 60_000, consent } })))
+      .toThrow(/`forkIdleTimeoutMs` was undefined .* and is 60000 now/);
+  });
+
+  test('speech off and speech absent are the same section; a matching record passes through to the framework', () => {
+    const consent = yesTo({ ...section, allowChannelSpeech: false });
+    const recipe = validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', ...section, consent } })) as Recipe;
+    expect(recipe.subconscious).toEqual({ enabled: true, reader: 'forks', ...section, consent });
+    const cfg = buildSubconsciousConfig(recipe, 'model-x', 'UTC')!;
+    if (cfg.reader !== 'forks') throw new Error('expected the fork reader config');
+    expect(cfg.consent).toEqual(consent);
   });
 });
 
@@ -257,7 +310,7 @@ describe('dendriteCreateOptions — what the host hands AgentFramework.create()'
   test('each stated block is passed through as validated; the reader carries its factory', () => {
     const recipe = validateRecipe(baseRecipe({
       agent: { name: 'sherlock', systemPrompt: 'test', strategy: { type: 'passthrough' } },
-      subconscious: { enabled: true, reader: 'forks', model: 'm', voice: 'v', forkIdleTimeoutMs: 1000 },
+      subconscious: agreed({ model: 'm', voice: 'v', forkIdleTimeoutMs: 1000 }),
       speech: { locus: 'latest-inbound' },
       tuneOut: { enabled: true, announce: false },
       dendrite: { announceOrphans: false, collapseDerivationNoticesAfter: 3 },
