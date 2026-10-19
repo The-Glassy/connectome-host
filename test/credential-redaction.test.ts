@@ -61,6 +61,14 @@ describe('redactCredentials', () => {
     expect(redactCredentials('Authorization: Digest username="alice", response="s3cret"')).toBe('Authorization: ***');
     expect(redactCredentials("{ authorization: 'Bearer s3cret', next: 1 }")).toBe("{ authorization: '***', next: 1 }");
     expect(redactCredentials('ws://user:pa@ss@host/mcpl')).toBe('ws://***@host/mcpl');
+    expect(redactCredentials("ws://u:pa'ss@host/mcpl?token=ab'cd&x=1")).toBe('ws://***@host/mcpl?token=***&x=1');
+    expect(redactCredentials("{ url: 'ws://h/mcpl?token=abcd' }")).toBe("{ url: 'ws://h/mcpl?token=***' }");
+  });
+
+  test('takes linear time over a long run of parentheses', () => {
+    const started = performance.now();
+    expect(redactCredentials(`?token=${')'.repeat(65_537)}`)).toBe(`?token=***${')'.repeat(65_537)}`);
+    expect(performance.now() - started).toBeLessThan(500);
   });
 
   test('leaves other text alone', () => {
@@ -90,13 +98,37 @@ describe('redactingWrite', () => {
     }
   });
 
-  test('writes a held partial line, masked, once no rest comes', async () => {
+  test('holds a partial line, however long its rest takes, until the write that ends it or flush()', async () => {
     const out: string[] = [];
-    const write = redactingWrite((chunk) => { out.push(String(chunk)); return true; });
-    write('progress ?key=s3cretvalue');
-    expect(out).toEqual([]);
+    const write = redactingWrite((chunk, cb) => { out.push(String(chunk)); (cb as (() => void) | undefined)?.(); return true; });
+    const done: string[] = [];
+    write('Authorization: Bearer firstHalf', () => done.push('first'));
     await Bun.sleep(60);
-    expect(out).toEqual(['progress ?key=***']);
+    expect(out).toEqual([]);
+    // Its callback waits for its text too.
+    expect(done).toEqual([]);
+    write('SECRET_REMAINDER\n', () => done.push('second'));
+    expect(out).toEqual(['Authorization: ***\n']);
+    expect(done).toEqual(['first', 'second']);
+    write('progress ?key=s3cretvalue');
+    write.flush();
+    expect(out[1]).toBe('progress ?key=***');
+  });
+
+  test('a line past the length cap is written, and a credential it cuts off is masked on into the next write', () => {
+    for (const [head, tail, shown] of [
+      ['?token=abc', 'def&room=a\n', '?token=***&room=a\n'],
+      ['Authorization: Basic abc', 'def, more\nnext\n', 'Authorization: ***\nnext\n'],
+      ['ws://user:pa', 'ss@host/mcpl\n', 'ws://***/mcpl\n'],
+    ] as const) {
+      const out: string[] = [];
+      const write = redactingWrite((chunk) => { out.push(String(chunk)); return true; });
+      const filler = 'x '.repeat(600 * 1024);
+      write(`${filler}${head}`);
+      write(tail);
+      const text = out.join('').slice(filler.length);
+      expect(text).toBe(shown);
+    }
   });
 });
 
@@ -136,12 +168,17 @@ describe('redactStderr', () => {
       globalThis.console = new Console({ stdout: process.stdout, stderr: process.stdout });
       redactConsole();
       console.warn('reconnect failed (ws://h/mcpl?token=s3cret)');
+      // Code that keeps the masked method and assigns one calling it.
+      const saved = console.error;
+      console.error = (...args) => saved('wrapped:', ...args);
+      console.error('?token=s3cret');
     `], { stdout: 'pipe', stderr: 'pipe' });
     const [code, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()]);
     expect(code).toBe(0);
     expect(stdout).not.toContain('s3cret');
     expect(stdout).toContain('overlay: reconnect failed (ws://h/mcpl?token=***)');
     expect(stdout).toContain('\nreconnect failed (ws://h/mcpl?token=***)');
+    expect(stdout).toContain('\nwrapped: ?token=***');
   });
 });
 

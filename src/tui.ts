@@ -442,6 +442,7 @@ export async function runTui(app: AppContext): Promise<void> {
     else logStream.write(chunk, encodingOrCb as BufferEncoding, cb);
     return true;
   });
+  process.once('exit', writeLog.flush);
   process.stderr.write = ((chunk: string | Uint8Array, ...args: unknown[]) => {
     writeLog(chunk, ...(args as [BufferEncoding?, ((err?: Error | null) => void)?]));
     return true;
@@ -2987,7 +2988,8 @@ export async function runTui(app: AppContext): Promise<void> {
     rootTraces.stop();
     renderer.destroy();
     process.stdout.write('\x1b]0;\x07');
-    // Restore stderr
+    // Restore stderr, after the line the masking write holds goes to the log.
+    writeLog.flush();
     process.stderr.write = origStderrWrite;
     logStream.end();
     app.framework.stop().then(() => {

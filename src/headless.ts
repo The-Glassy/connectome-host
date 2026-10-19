@@ -72,6 +72,8 @@ const LOG_FLUSH_LIMIT_MS = 2_000;
  *  ends the same stream: it resolves at that stream's finish, or at once if
  *  the stream has already finished. */
 let activeLog: WriteStream | null = null;
+/** Writes out the line the log's masking write holds (redactingWrite). */
+let flushActiveLog: (() => void) | null = null;
 
 /**
  * End headless.log's stream, resolving once what was written to it is in
@@ -85,6 +87,7 @@ let activeLog: WriteStream | null = null;
 export function endHeadlessLog(): Promise<void> {
   const stream = activeLog;
   if (!stream) return Promise.resolve();
+  if (!stream.writableEnded) flushActiveLog?.();
   return new Promise((done) => {
     const limit = setTimeout(() => {
       // This reaches the process's own stderr: under Bun console.error
@@ -141,6 +144,8 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
       ? logStream.write(chunk, encodingOrCb)
       : logStream.write(chunk, encodingOrCb as BufferEncoding, cb);
   });
+  flushActiveLog = writeLog.flush;
+  process.once('exit', writeLog.flush);
   const makeRedirect = (): StdWrite => function (
     this: unknown,
     chunk: string | Uint8Array,

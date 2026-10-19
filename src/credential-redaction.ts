@@ -13,30 +13,32 @@ import { format, inspect } from 'node:util';
 const MASK = '***';
 
 /** A query value, everything up to the next parameter, fragment, space or
- *  quote, masked. A `)` it ends with stays out of the mask when the value
- *  holds more `)` than `(`, since that one closes prose around the url; any
- *  other parenthesis is part of the value. */
+ *  double quote, masked. What ends it and closes text around the url stays
+ *  out of the mask: a `)` while the value holds more `)` than `(`, and a
+ *  `'` that is the value's only one. Any other parenthesis or apostrophe is
+ *  part of the value. Counted once, so a long value costs linear time. */
 function maskQueryValue(_match: string, name: string, value: string): string {
-  let closing = '';
-  while (value.endsWith(')') && value.split('(').length < value.split(')').length) {
-    value = value.slice(0, -1);
-    closing = `)${closing}`;
+  let opens = 0;
+  let closes = 0;
+  let quotes = 0;
+  for (const c of value) {
+    if (c === '(') opens++;
+    else if (c === ')') closes++;
+    else if (c === "'") quotes++;
   }
-  return `${name}${MASK}${closing}`;
+  let end = value.length;
+  for (;;) {
+    if (value[end - 1] === ')' && closes > opens) { end--; closes--; }
+    else if (value[end - 1] === "'" && quotes === 1) { end--; quotes--; }
+    else break;
+  }
+  return `${name}${MASK}${value.slice(end)}`;
 }
 
-/**
- * `text` with every credential it recognizes replaced by `***`: the value of
- * a `token`, `access_token` or `key` query parameter, an `Authorization`
- * header's whole value, a bare `Bearer` credential, and the user and
- * password of a url. Recognized by shape, so a credential spelled any other
- * way passes; the masks are for text the host writes about a connection
- * (urls, errors, headers), not a scrubber for arbitrary output.
- */
 export function redactCredentials(text: string): string {
   return text
     // A query parameter: after `?` or `&`, so `monkey=` is left alone.
-    .replace(/([?&](?:token|access_token|key)=)([^&#\s"'<>]*)/gi, maskQueryValue)
+    .replace(/([?&](?:token|access_token|key)=)([^&#\s"<>]*)/gi, maskQueryValue)
     // A header's whole value, its scheme and parameters included: to its
     // closing quote when it's quoted (JSON, an inspected object), which
     // stays, else to the end of the line.
@@ -47,8 +49,9 @@ export function redactCredentials(text: string): string {
       })
     // A bearer credential on its own, with the scheme as it is sent.
     .replace(/\b(Bearer\s+)[A-Za-z0-9\-._~+/]+=*/g, `$1${MASK}`)
-    // A url's user and password, through the authority's last `@`.
-    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/?#"'<>]*@/gi, `$1${MASK}@`);
+    // A url's user and password, through the authority's last `@`; an
+    // apostrophe can be part of them.
+    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/?#"<>]*@/gi, `$1${MASK}@`);
 }
 
 /** A stream's write, in the overloads process.stderr.write takes. */
@@ -58,55 +61,92 @@ export type StreamWrite = (
   cb?: (err?: Error | null) => void,
 ) => boolean;
 
-/** How long a line with no newline yet waits for the rest of it. */
-const PARTIAL_LINE_WAIT_MS = 25;
-/** A partial line longer than this is masked and written as it stands. */
-const PARTIAL_LINE_MAX = 64 * 1024;
+/** A partial line this long is masked and written as it stands. */
+const PARTIAL_LINE_MAX = 1024 * 1024;
+
+/**
+ * Where a credential the masked text runs into the end of goes on in the
+ * next write, as the pattern that ends it there; null when none does. An
+ * Authorization header's value runs to the end of the line; a query value
+ * or a bearer credential to a space, quote or the next parameter; an
+ * authority that may still turn out to hold a user and password to the
+ * path, query or fragment.
+ */
+function openCredentialEnd(text: string): RegExp | null {
+  if (/\bauthorization["']?\s*[:=]/i.test(text)) return /\n/;
+  if (/(?:[?&](?:token|access_token|key)=[^&#\s"<>]*|\bBearer\s+[A-Za-z0-9\-._~+/]*=*)$/i.test(text)) return /[&#\s"<>]/;
+  if (/\b[a-z][a-z0-9+.-]*:\/\/[^\s/?#"<>]*$/i.test(text)) return /[/?#\s"<>]/;
+  return null;
+}
+
+/** A redacting write, and how to write out the line it holds. */
+export type RedactingWrite = StreamWrite & { flush(): void };
 
 /**
  * `write`, masking credentials (redactCredentials) a line at a time, so one
- * split across two writes is masked whole. A line with no newline yet is
- * held for the write that ends it, for at most PARTIAL_LINE_WAIT_MS or
- * PARTIAL_LINE_MAX characters, and written at exit; a credential whose
- * halves are written further apart than that isn't joined. Bytes are
- * decoded as UTF-8 across writes. A string in another encoding (`hex`,
- * `base64`) is no text to mask: it is written as it came, after the held
- * line.
+ * split across writes is masked whole. A line with no newline yet is held
+ * until the write that ends it, or until `flush()`, which an owner calls
+ * before it closes the destination and at exit. A write's callback is
+ * called once its text has gone to `write`. A line that outgrows
+ * PARTIAL_LINE_MAX is written as it stands; a credential it cuts off is
+ * masked on into the next write too (openCredentialEnd). Bytes are decoded
+ * as UTF-8 across writes. A string in another encoding (`hex`, `base64`) is
+ * no text to mask: it is written as it came, after the held line.
  */
-export function redactingWrite(write: StreamWrite): StreamWrite {
+export function redactingWrite(write: StreamWrite): RedactingWrite {
   const decoder = new TextDecoder();
   let held = '';
-  let timer: ReturnType<typeof setTimeout> | null = null;
+  let carry: RegExp | null = null;
+  let waiting: Array<(err?: Error | null) => void> = [];
+  // The callbacks of the writes whose text goes out now, as one.
+  const settle = (callback?: (err?: Error | null) => void): ((err?: Error | null) => void) | undefined => {
+    const all = callback ? [...waiting, callback] : waiting;
+    waiting = [];
+    return all.length > 0 ? (err) => { for (const done of all) done(err); } : undefined;
+  };
   const flush = (): void => {
-    if (timer) { clearTimeout(timer); timer = null; }
-    if (!held) return;
     const line = held;
     held = '';
-    write(redactCredentials(line));
+    const done = settle();
+    if (line) write(redactCredentials(line), done);
+    else done?.();
   };
-  process.once('exit', flush);
-  return (chunk, encodingOrCb, cb) => {
+  const redactingWriter = (
+    chunk: string | Uint8Array,
+    encodingOrCb?: BufferEncoding | ((err?: Error | null) => void),
+    cb?: (err?: Error | null) => void,
+  ): boolean => {
     const callback = typeof encodingOrCb === 'function' ? encodingOrCb : cb;
     const encoding = typeof encodingOrCb === 'string' ? encodingOrCb : undefined;
     if (typeof chunk === 'string' && encoding && !/^utf-?8$/i.test(encoding)) {
       flush();
       return write(chunk, encoding, callback);
     }
-    if (timer) { clearTimeout(timer); timer = null; }
-    const text = held + (typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true }));
-    let end = text.lastIndexOf('\n') + 1;
-    if (text.length - end > PARTIAL_LINE_MAX) end = text.length;
-    held = text.slice(end);
-    if (held) {
-      timer = setTimeout(flush, PARTIAL_LINE_WAIT_MS);
-      timer.unref?.();
+    let text = typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+    if (carry) {
+      // The rest of a credential the last write cut off: masked (dropped,
+      // its mask is written) up to where it ends.
+      const at = text.search(carry);
+      if (at < 0) text = '';
+      else { text = text.slice(at); carry = null; }
     }
+    text = held + text;
+    let end = text.lastIndexOf('\n') + 1;
+    let cut = false;
+    if (text.length - end > PARTIAL_LINE_MAX) { end = text.length; cut = true; }
+    held = text.slice(end);
     if (end === 0) {
-      if (callback) queueMicrotask(() => callback());
+      if (callback) waiting.push(callback);
       return true;
     }
-    return write(redactCredentials(text.slice(0, end)), callback);
+    let out = redactCredentials(text.slice(0, end));
+    if (cut) {
+      carry = openCredentialEnd(text);
+      if (carry && carry.source.startsWith('[/?#')) out = out.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/?#"<>]*$/i, `$1${MASK}`);
+    }
+    return write(out, settle(callback));
   };
+  return Object.assign(redactingWriter, { flush });
 }
 
 /** The console methods agent-framework reports connections with. */
@@ -137,26 +177,33 @@ export function redactConsole(): void {
   for (const method of CONSOLE_METHODS) {
     const getter = Object.getOwnPropertyDescriptor(target, method)?.get as { [MASKING]?: true } | undefined;
     if (getter?.[MASKING]) continue;
-    let inner = target[method] as (...args: unknown[]) => void;
-    const masked = (...args: unknown[]): void => { inner.call(target, redactCredentials(consoleLine(args))); };
+    // Each wrapper calls the method it was made for, so code that keeps the
+    // masked method and assigns one calling it gets a chain, not a loop.
+    const mask = (inner: (...args: unknown[]) => void) => (...args: unknown[]): void => {
+      inner.call(target, redactCredentials(consoleLine(args)));
+    };
+    let masked = mask(target[method] as (...args: unknown[]) => void);
     Object.defineProperty(target, method, {
       configurable: true,
       enumerable: true,
       get: Object.assign(() => masked, { [MASKING]: true as const }),
-      set: (next: (...args: unknown[]) => void) => { inner = next; },
+      set: (next: (...args: unknown[]) => void) => { masked = mask(next); },
     });
   }
 }
 
 /**
  * Mask credentials in what this process writes to stderr from now on: every
- * `process.stderr.write`, a line at a time (redactingWrite), and
+ * `process.stderr.write`, a line at a time (redactingWrite, its held line
+ * written at exit), and
  * `console.error` / `console.warn` (redactConsole). The TUI and headless
  * modes then send `process.stderr.write` to their own log files through a
  * redactingWrite of their own (they replace this write, not wrap it).
  */
 export function redactStderr(): void {
-  process.stderr.write = redactingWrite(process.stderr.write.bind(process.stderr) as StreamWrite) as typeof process.stderr.write;
+  const write = redactingWrite(process.stderr.write.bind(process.stderr) as StreamWrite);
+  process.once('exit', write.flush);
+  process.stderr.write = write as typeof process.stderr.write;
   redactConsole();
 }
 
