@@ -296,6 +296,7 @@ async function createFramework(
       provider: resolveProvider(recipe),
       defaultModel: subagentConfig.defaultModel || model,
       defaultMaxTokens: subagentConfig.defaultMaxTokens,
+      ...(subagentConfig.orientation ? { orientation: subagentConfig.orientation } : {}),
     });
     moduleInstances.push(subagentModule);
   }

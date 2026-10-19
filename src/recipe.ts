@@ -13,7 +13,7 @@
 
 import { readFileSync, writeFileSync, existsSync, lstatSync, statSync, mkdirSync, rmSync, chmodSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
-import { readerConsentDrift, type ForkReaderConfig, type FrameworkConfig, type MountConfig, type PersistentReaderConfig, type ReaderConsent } from '@animalabs/agent-framework';
+import type { ForkReaderConfig, FrameworkConfig, MountConfig, PersistentReaderConfig } from '@animalabs/agent-framework';
 import { buildWorkspaceMounts } from './workspace-mounts.js';
 import { validateToolClassTable, validateToolLifecycle } from './tool-lifecycle-config.js';
 import { isLoopbackOrTailnetHost } from './history-semantic.js';
@@ -737,8 +737,8 @@ export interface RecipeModules {
      * What a forked or spawned stream is told at its start (connectome-host
      * #213's orientation and the fork's "two parallel streams of you"
      * framing). `'full'` (default) describes the launch and the stream's
-     * place in it; `'none'` hands the stream its task alone. A policy for
-     * minds that do or don't want the stamp (tel0s and Antra, 2026-10-19).
+     * place in it; `'none'` hands the stream its task alone. What a stream
+     * is told is the deployment's to decide, not the host's.
      */
     orientation?: 'full' | 'none';
   };
@@ -1174,40 +1174,6 @@ export interface RecipeCodeExecution {
  *
  * The types are the framework's own, minus those two fields;
  * agent-framework's src/tune-out/tools.ts documents each field.
- *
- * **Consent at intake.** A reader fork reads the resident's whole prefix on
- * the model `subconscious.model` names: fork-grade (architecture channel,
- * 2026-10-05), so where a mind wants to be asked, it is asked for its own
- * yes, to the fork section as it saw it, before any fork runs. The recipe
- * records that yes as `subconscious.consent`, and `dendrite.consent` says
- * what the host asks of it: `'recorded'` (the default) checks a record that
- * is given against the live section and refuses one that has drifted (ask
- * again after any change — the voice is co-written, and `allowChannelSpeech`
- * changes what the fork does), but demands none; `'required'` also refuses
- * `reader: 'forks'` without a record; `'none'` reads the field not at all.
- * A policy rather than a rule, because what a yes must look like — and
- * whether a mind wants to be told it is a fork at all
- * (`dendrite.announceDerivations`, `modules.subagents.orientation`) —
- * assumes one kind of mind's preferences, and this host runs more than one
- * kind (tel0s and Antra, 2026-10-19). Two rules from the first run (scout,
- * 2026-10-12, Weft), for hosts that ask:
- *
- * 1. The yes is public-channel speech. A yes inside a private tool (scout's
- *    first answer landed in `think`) does not count; the host asks again in
- *    the open. A no counts however it reaches the host: the resident can
- *    withdraw with the `withdraw_consent` tool at any time, after which no
- *    fork is derived and a tune-out is a silent hold until a later yes is
- *    recorded here.
- * 2. The record travels with the configuration. `where` names the public
- *    yes (a message id or link); the framework carries the record on every
- *    fork's registry entry and in `dendrite:agent-created`, and names it in
- *    each derivation notice.
- *
- * Describe the section truthfully when asking. With `allowChannelSpeech`
- * off, a fork reports to the resident as mail under its own name and speaks
- * nowhere. With it on, a fork's `speak_in_channel` posts through the
- * resident's own publish path — the channel sees the resident's account, in
- * the fork's words — until the framework can attribute the fork.
  */
 export type RecipeSubconscious = RecipePersistentReader | RecipeForkReader;
 export type RecipePersistentReader = PersistentReaderConfig;
@@ -3003,7 +2969,7 @@ export function validateRecipe(raw: unknown): Recipe {
     }
     const forks = sub.reader === 'forks';
     const allowedSubconsciousKeys = new Set(forks
-      ? ['enabled', 'reader', 'model', 'voice', 'allowChannelSpeech', 'forkIdleTimeoutMs', 'consent']
+      ? ['enabled', 'reader', 'model', 'voice', 'allowChannelSpeech', 'forkIdleTimeoutMs']
       : ['enabled', 'reader', 'name', 'model', 'systemPrompt', 'allowChannelSpeech', 'reAnchorFraction']);
     for (const key of Object.keys(sub)) {
       if (!allowedSubconsciousKeys.has(key)) {
@@ -3031,55 +2997,6 @@ export function validateRecipe(raw: unknown): Recipe {
       const idle = sub.forkIdleTimeoutMs;
       if (idle !== undefined && (typeof idle !== 'number' || !Number.isFinite(idle) || !(idle > 0))) {
         throw new Error('Recipe subconscious.forkIdleTimeoutMs must be a positive finite number of milliseconds.');
-      }
-      // The resident's yes, as the host's policy asks for it
-      // (dendrite.consent, see RecipeSubconscious): 'required' refuses forks
-      // without a record; 'recorded', the default, checks one that is given
-      // against the whole section as the resident saw it, and refuses a
-      // section that has changed since until asked again; 'none' reads no
-      // consent at all. A policy, not a rule: what a yes must look like
-      // assumes one kind of mind, and the host runs more than one.
-      const consentPolicy = ((obj.dendrite as { consent?: string } | undefined)?.consent ?? 'recorded') as 'required' | 'recorded' | 'none';
-      const consent = sub.consent;
-      if (consentPolicy === 'required' && (!consent || typeof consent !== 'object' || Array.isArray(consent))) {
-        throw new Error(
-          'Recipe subconscious.consent is required for reader "forks" under dendrite.consent "required": a reader fork reads the resident\'s whole prefix on the weights ' +
-          '`subconscious.model` names, so this host asks for their yes, given in the open. Record { by, at, where, section } — who said yes, ' +
-          'when (ISO 8601), where the public yes can be read, and the fork section (model, voice, allowChannelSpeech, forkIdleTimeoutMs) as they saw it.',
-        );
-      }
-      if (consent !== undefined && consentPolicy !== 'none') {
-      if (!consent || typeof consent !== 'object' || Array.isArray(consent)) {
-        throw new Error('Recipe subconscious.consent must be an object: { by, at, where, section }.');
-      }
-      const c = consent as Record<string, unknown>;
-      const allowedConsentKeys = new Set(['by', 'at', 'where', 'section']);
-      for (const key of Object.keys(c)) {
-        if (!allowedConsentKeys.has(key)) throw new Error(`Recipe subconscious.consent has unknown field ${JSON.stringify(key)} (expected: by, at, where, section).`);
-      }
-      for (const key of ['by', 'at', 'where'] as const) {
-        if (typeof c[key] !== 'string' || !(c[key] as string).trim()) throw new Error(`Recipe subconscious.consent.${key} must be a non-empty string.`);
-      }
-      if (Number.isNaN(Date.parse(c.at as string))) throw new Error(`Recipe subconscious.consent.at must be an ISO 8601 time, got ${JSON.stringify(c.at)}.`);
-      if (!c.section || typeof c.section !== 'object' || Array.isArray(c.section)) {
-        throw new Error('Recipe subconscious.consent.section must be an object: the fork section the yes covered (model, voice, allowChannelSpeech, forkIdleTimeoutMs).');
-      }
-      const section = c.section as Record<string, unknown>;
-      const allowedSectionKeys = new Set(['model', 'voice', 'allowChannelSpeech', 'forkIdleTimeoutMs']);
-      for (const key of Object.keys(section)) {
-        if (!allowedSectionKeys.has(key)) throw new Error(`Recipe subconscious.consent.section has unknown field ${JSON.stringify(key)} (expected: model, voice, allowChannelSpeech, forkIdleTimeoutMs).`);
-      }
-      if (typeof section.model !== 'string' || typeof section.voice !== 'string') {
-        throw new Error('Recipe subconscious.consent.section must record the model and the voice the resident agreed to.');
-      }
-      const drift = readerConsentDrift(consent as ReaderConsent, sub as unknown as ForkReaderConfig);
-      if (drift) {
-        throw new Error(
-          `Recipe subconscious.consent covers a different fork section: \`${drift.field}\` was ${JSON.stringify(drift.agreed)} when ` +
-          `${String(c.by)} said yes on ${String(c.at)}, and is ${JSON.stringify(drift.live)} now. Ask ${String(c.by)} again, in the open, ` +
-          'and record the new yes with the section as they saw it.',
-        );
-      }
       }
     } else {
       // The mode block is the subconscious's whole character; an enabled
@@ -3139,19 +3056,13 @@ export function validateRecipe(raw: unknown): Recipe {
       throw new Error('Recipe dendrite must be an object.');
     }
     const dendrite = obj.dendrite as Record<string, unknown>;
-    const dendriteKeys = ['announceOrphans', 'collapseDerivationNoticesAfter', 'announceDerivations', 'consent'];
     for (const key of Object.keys(dendrite)) {
-      if (!dendriteKeys.includes(key)) {
-        throw new Error(`Recipe dendrite has unknown field ${JSON.stringify(key)} (expected: ${dendriteKeys.join(', ')}).`);
+      if (key !== 'announceOrphans' && key !== 'collapseDerivationNoticesAfter') {
+        throw new Error(`Recipe dendrite has unknown field ${JSON.stringify(key)} (expected: announceOrphans, collapseDerivationNoticesAfter).`);
       }
     }
-    for (const key of ['announceOrphans', 'announceDerivations'] as const) {
-      if (dendrite[key] !== undefined && typeof dendrite[key] !== 'boolean') {
-        throw new Error(`Recipe dendrite.${key} must be a boolean.`);
-      }
-    }
-    if (dendrite.consent !== undefined && !['required', 'recorded', 'none'].includes(dendrite.consent as string)) {
-      throw new Error('Recipe dendrite.consent must be "required", "recorded" or "none".');
+    if (dendrite.announceOrphans !== undefined && typeof dendrite.announceOrphans !== 'boolean') {
+      throw new Error('Recipe dendrite.announceOrphans must be a boolean.');
     }
     const after = dendrite.collapseDerivationNoticesAfter;
     if (after !== undefined && !(typeof after === 'number' && Number.isInteger(after) && after >= 0)) {

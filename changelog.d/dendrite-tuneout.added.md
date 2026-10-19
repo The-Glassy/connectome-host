@@ -4,26 +4,20 @@
   way it does for `conversations`); top-level `speech.locus` (`delivery` |
   `latest-inbound`) chooses where plain prose lands when nothing names a
   destination; top-level `tuneOut.enabled` offers `tune_out` / `focus` without
-  a reader (a silent hold). `subconscious.consent` is required for forks: the
-  resident's public yes — who, when, where to read it, and the fork section
-  as they saw it — and the recipe refuses a section that has changed since,
-  naming the field; the framework carries the record on every fork and names
-  it in each derivation notice, and the resident can withdraw with the
-  `withdraw_consent` tool, after which no fork is derived and a tune-out is a
-  silent hold until a later yes is recorded. The recipe fields are typed from
-  the framework's own config and need the agent-framework release that
-  carries #546; the dependency range rises with it.
+  a reader (a silent hold). The recipe fields are typed from the framework's
+  own config and need the agent-framework release that carries #546; the
+  dependency range rises with it.
 - The framework's speech rule changes with that release: plain prose with
   nothing naming a destination lands by `delivery` (the waking delivery's
   channel, a fork's home channel, or a channel opened this turn; with none,
   the prose stays private and a `[routing]` notice says so). A recipe that
   leaves `speech.locus` unset gets the new rule; `"speech": { "locus":
   "latest-inbound" }` keeps the previous one.
-- The consent gate, the derivation notices and the fork orientation are
-  policies with defaults, not rules (tel0s and Antra, 2026-10-19):
-  `dendrite.consent` (`required` | `recorded` — the default — | `none`) says
-  what the host asks of `subconscious.consent`, `dendrite.announceDerivations`
-  whether an agent is told of its derivations, and
-  `modules.subagents.orientation` (`full` | `none`) whether a stream is told
-  what it runs on and that it is one of two. A consent gate and a derivation
-  stamp assume one kind of mind's preferences; the host runs more than one.
+- What a forked or spawned stream is told at its start is a recipe policy,
+  `modules.subagents.orientation` (`full`, the default, or `none`). The host
+  carries no consent gate on reader forks: the framework attaches no
+  consent model to a derivation and offers `dendrite.beforeDerive` and
+  `dendrite.derivationNotice` to a deployment that wants one, and a consent
+  module is to come as a package of its own (tel0s, Antra and Ra,
+  2026-10-19). What the host guarantees instead: a reader fork can post
+  nowhere unless `subconscious.allowChannelSpeech` is on.

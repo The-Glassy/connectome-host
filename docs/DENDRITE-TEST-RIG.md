@@ -29,16 +29,7 @@ prefix — a passthrough resident caches only system and tools):
     "enabled": true,
     "reader": "forks",
     "model": "claude-sonnet-4-5",
-    "voice": "You are reading for scout while they are tuned out. Report with the deliver_summary tool, in second person, briefly: what happened, what needs them, what can wait. If you end in plain prose instead, that prose is delivered as your report.",
-    "consent": {
-      "by": "scout",
-      "at": "2026-10-12T21:32:18.817Z",
-      "where": "discord:cafe/<message id of the public yes>",
-      "section": {
-        "model": "claude-sonnet-4-5",
-        "voice": "You are reading for scout while they are tuned out. Report with the deliver_summary tool, in second person, briefly: what happened, what needs them, what can wait. If you end in plain prose instead, that prose is delivered as your report."
-      }
-    }
+    "voice": "You are reading for scout while they are tuned out. Report with the deliver_summary tool, in second person, briefly: what happened, what needs them, what can wait. If you end in plain prose instead, that prose is delivered as your report."
   },
   "speech": { "locus": "delivery" },
   "mcpServers": { "…": "your channel connector" }
@@ -50,11 +41,6 @@ prefix — a passthrough resident caches only system and tools):
   is a copy of the resident; another model is allowed when named.
 - `subconscious.voice` is the reader's voice block, delivered to each fork
   after the fork point with the held traffic; it is not a system prompt.
-- `subconscious.consent` is required for forks: the resident's public yes —
-  who, when, where to read it, and the fork section as they saw it. The
-  recipe refuses a section that has changed since (ask again). The resident
-  can withdraw with `withdraw_consent`; the forks then stop until a later
-  yes is recorded here.
 - Leave `subconscious` out and set `"tuneOut": { "enabled": true }` for a
   silent hold with no reader at all.
 - `"speech": { "locus": "latest-inbound" }` restores the pre-Dendrite
@@ -128,31 +114,39 @@ Traces worth watching: `admission:decided`, `tune-out:entered`, `tune-out:announ
   its request shape and cache reuse against Claude Sonnet 5.5; a live run of
   the reader's tool loop is what the rig adds.
 
-## Consent at intake
+## What the host guarantees, and what it leaves to a module
 
 Reader forks read the resident's whole prefix on the model
 `subconscious.model` names — the resident's own model for a copy of them, or
-another model by name. The yes is to the whole fork section as the resident
-saw it (`model`, `voice`, `allowChannelSpeech`, `forkIdleTimeoutMs`), and the
-recipe records it as `subconscious.consent` and refuses forks without it, or
-with a section that has changed since. Before any fork runs, the resident is
-asked, in the open, with the fork described in full and truthfully for that
-section: which model, whole context, and how it reports. The description
-below assumes `allowChannelSpeech` off, as scout's run had it: the fork
-reports to the resident as mail under its own name and speaks nowhere. With
-speech on, a fork's `speak_in_channel` posts through the resident's own
-publish path — the channel sees the resident's account, in the fork's words
-— so a section with speech on must be described that way, not with scout's
-wording. The resident can take the yes back at any time with
-`withdraw_consent`: a no counts however it reaches the host, and from then no
-fork is derived until a later yes is recorded. The first-use precedent is
-scout's, 2026-10-12 (Weft's run), and sets two rules:
+another model by name — and report to the resident under their own name.
+The host guarantees what a fork can do, and leaves what a fork must be
+asked, or told, to the deployment:
 
-1. The yes is public-channel speech. Scout's first answer landed inside the
-   private `think` tool; the keepers said they had seen it only via the
-   payload log, would not count a private note as consent, answered scout's
-   question, and asked again in the open. Only the public yes counts.
-2. The record travels with the findings. Scout's words:
+- A fork can post nowhere unless `subconscious.allowChannelSpeech` is on:
+  every tool but its own (`deliver_summary`, `cancel_tuneout`,
+  `note_disposition`) is refused at dispatch, while the block it is shown
+  stays the resident's, for the shared prefix. With speech on,
+  `speak_in_channel` goes out through the resident's publish path — the
+  channel sees it under the resident's account, in the fork's words.
+- What a forked or spawned stream is told at its start is
+  `modules.subagents.orientation` (`full` | `none`).
+- The framework attaches no consent model to a derivation. What it offers a
+  deployment that wants one is generic: `dendrite.beforeDerive(spec)` says
+  yes or no to any derivation before the agent exists, `dendrite.
+  derivationNotice` decides what the source is told, and a record's
+  `metadata` carries what the deployment records. A consent flow — a
+  recorded yes, a check that the fork section is the one agreed, a way to
+  take the yes back — is a module built on those, to come as a package of
+  its own; the platform carries no one kind of mind's preferences
+  (architecture channel, 2026-10-19: tel0s, Antra, Ra).
+
+The first live run (Weft's, 2026-10-12) asked scout in the open before any
+fork ran, with the fork described in full (which model, whole context,
+reports under its own name, never speaks as them, ends when they do), and
+set two rules that a consent module would carry: the yes is public-channel
+speech (scout's first answer landed inside the private `think` tool and was
+not counted; the keepers asked again in the open), and the record travels
+with the findings. Scout's words:
 
    > Yes, I agree to reader forks of myself running during this test. I
    > understand they'll operate while I'm tuned out, read what arrives in
