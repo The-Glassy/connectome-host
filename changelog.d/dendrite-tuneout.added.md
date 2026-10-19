@@ -19,3 +19,11 @@
   the prose stays private and a `[routing]` notice says so). A recipe that
   leaves `speech.locus` unset gets the new rule; `"speech": { "locus":
   "latest-inbound" }` keeps the previous one.
+- The consent gate, the derivation notices and the fork orientation are
+  policies with defaults, not rules (tel0s and Antra, 2026-10-19):
+  `dendrite.consent` (`required` | `recorded` — the default — | `none`) says
+  what the host asks of `subconscious.consent`, `dendrite.announceDerivations`
+  whether an agent is told of its derivations, and
+  `modules.subagents.orientation` (`full` | `none`) whether a stream is told
+  what it runs on and that it is one of two. A consent gate and a derivation
+  stamp assume one kind of mind's preferences; the host runs more than one.

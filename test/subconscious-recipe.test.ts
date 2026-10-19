@@ -222,11 +222,24 @@ describe('buildSubconsciousConfig — recipe → FrameworkConfig.subconscious ma
 describe('validateRecipe — the resident\'s yes to reader forks (subconscious.consent)', () => {
   const section = { model: 'claude-sonnet-4-5', voice: 'You are reading for sherlock.' };
 
-  test('reader "forks" is refused without a consent record, in words that say what to record', () => {
-    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', ...section } })))
-      .toThrow(/subconscious\.consent is required for reader "forks".*needs their yes, given in the open.*\{ by, at, where, section \}/);
-    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', ...section, consent: 'yes' } })))
+  test('under dendrite.consent "required", reader "forks" is refused without a record, in words that say what to record', () => {
+    const required = { dendrite: { consent: 'required' } };
+    expect(() => validateRecipe(baseRecipe({ ...required, subconscious: { enabled: true, reader: 'forks', ...section } })))
+      .toThrow(/subconscious\.consent is required for reader "forks" under dendrite\.consent "required".*asks for their yes, given in the open.*\{ by, at, where, section \}/);
+    expect(() => validateRecipe(baseRecipe({ ...required, subconscious: { enabled: true, reader: 'forks', ...section, consent: 'yes' } })))
       .toThrow(/subconscious\.consent is required/);
+  });
+
+  test('under the default policy ("recorded") no record is demanded; one that is given is checked; under "none" nothing is read', () => {
+    const noRecord = validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', ...section } }));
+    expect((noRecord.subconscious as { consent?: unknown }).consent).toBeUndefined();
+    expect(() => validateRecipe(baseRecipe({ subconscious: { enabled: true, reader: 'forks', ...section, voice: 'drifted', consent: yesTo(section) } })))
+      .toThrow(/covers a different fork section/);
+    const none = validateRecipe(baseRecipe({ dendrite: { consent: 'none' }, subconscious: { enabled: true, reader: 'forks', ...section, voice: 'drifted', consent: yesTo(section) } }));
+    expect((none.subconscious as { voice: string }).voice).toBe('drifted');
+    expect(() => validateRecipe(baseRecipe({ dendrite: { consent: 'sometimes' } }))).toThrow(/dendrite\.consent must be "required", "recorded" or "none"/);
+    expect(validateRecipe(baseRecipe({ dendrite: { announceDerivations: false } })).dendrite).toEqual({ announceDerivations: false });
+    expect(() => validateRecipe(baseRecipe({ dendrite: { announceDerivations: 'no' } }))).toThrow(/dendrite\.announceDerivations must be a boolean/);
   });
 
   test('the record names who, when (ISO 8601), where, and the section; nothing else', () => {
@@ -291,7 +304,7 @@ describe('validateRecipe — speech and tuneOut (Dendrite admission options)', (
     expect(() => validateRecipe(baseRecipe({ dendrite: { collapseDerivationNoticesAfter: -1 } }))).toThrow(/collapseDerivationNoticesAfter must be a non-negative integer/);
     expect(() => validateRecipe(baseRecipe({ dendrite: { collapseDerivationNoticesAfter: 2.5 } }))).toThrow(/non-negative integer/);
     expect(() => validateRecipe(baseRecipe({ dendrite: { announceOrphans: 'no' } }))).toThrow(/dendrite\.announceOrphans must be a boolean/);
-    expect(() => validateRecipe(baseRecipe({ dendrite: { quiet: true } }))).toThrow(/dendrite has unknown field "quiet"/);
+    expect(() => validateRecipe(baseRecipe({ dendrite: { quiet: true } }))).toThrow(/dendrite has unknown field "quiet" \(expected: announceOrphans, collapseDerivationNoticesAfter, announceDerivations, consent\)/);
     expect(() => validateRecipe(baseRecipe({ dendrite: 10 }))).toThrow(/dendrite must be an object/);
   });
 
