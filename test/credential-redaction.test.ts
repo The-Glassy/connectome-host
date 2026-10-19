@@ -130,6 +130,21 @@ describe('redactingWrite', () => {
       expect(text).toBe(shown);
     }
   });
+
+  test('past the cap, a header an earlier line closed carries nothing on, and a dropped write still completes', async () => {
+    const out: string[] = [];
+    const write = redactingWrite((chunk) => { out.push(String(chunk)); return true; });
+    write(`Authorization: Basic abc\n${'x'.repeat(1024 * 1024 + 1)}`);
+    write('IMPORTANT TAIL\nnext\n');
+    expect(out.join('')).toEndWith('IMPORTANT TAIL\nnext\n');
+
+    const capped = redactingWrite(() => true);
+    capped(`${'x '.repeat(600 * 1024)}?token=abc`);
+    let done = 0;
+    for (let i = 0; i < 3; i++) capped('defdefdef', () => { done++; });
+    await Promise.resolve();
+    expect(done).toBe(3);
+  });
 });
 
 describe('redactStderr', () => {

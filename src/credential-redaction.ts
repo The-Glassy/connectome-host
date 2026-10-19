@@ -73,7 +73,12 @@ const PARTIAL_LINE_MAX = 1024 * 1024;
  * path, query or fragment.
  */
 function openCredentialEnd(text: string): RegExp | null {
-  if (/\bauthorization["']?\s*[:=]/i.test(text)) return /\n/;
+  // Only the line the cut falls in: a header an earlier line closed is done.
+  text = text.slice(text.lastIndexOf('\n') + 1);
+  // A header value still open at the cut: unquoted (to the end of the
+  // line), or quoted without its closing quote yet.
+  if (/\bauthorization["']?\s*[:=]\s*(?:[^"'\s][^\r\n]*)?$/i.test(text)) return /\n/;
+  if (/\bauthorization["']?\s*[:=]\s*(?:"(?:[^"\\\r\n]|\\.)*|'(?:[^'\\\r\n]|\\.)*)$/i.test(text)) return /["'\n]/;
   if (/(?:[?&](?:token|access_token|key)=[^&#\s"<>]*|\bBearer\s+[A-Za-z0-9\-._~+/]*=*)$/i.test(text)) return /[&#\s"<>]/;
   if (/\b[a-z][a-z0-9+.-]*:\/\/[^\s/?#"<>]*$/i.test(text)) return /[/?#\s"<>]/;
   return null;
@@ -125,10 +130,15 @@ export function redactingWrite(write: StreamWrite): RedactingWrite {
     let text = typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
     if (carry) {
       // The rest of a credential the last write cut off: masked (dropped,
-      // its mask is written) up to where it ends.
+      // its mask is written) up to where it ends. A write that is all of
+      // it is done: its mask went out with the write before.
       const at = text.search(carry);
-      if (at < 0) text = '';
-      else { text = text.slice(at); carry = null; }
+      if (at < 0) {
+        if (callback) queueMicrotask(() => callback());
+        return true;
+      }
+      text = text.slice(at);
+      carry = null;
     }
     text = held + text;
     let end = text.lastIndexOf('\n') + 1;
