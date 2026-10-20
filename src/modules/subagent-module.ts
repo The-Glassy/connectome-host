@@ -77,6 +77,14 @@ export interface SubagentModuleConfig {
    * Antra, 2026-10-19).
    */
   orientation?: 'full' | 'none';
+  /**
+   * How far the lifecycle tools reach (list, stop, message, adopt, resume).
+   * `'subtree'` (default): a caller sees and acts on the subagents it
+   * started, and theirs — the scoping `peek` has (postmortem 2026-05-28 P3
+   * #8: sibling gossip caused retry storms). `'all'`: every subagent the
+   * host knows.
+   */
+  lifecycleReach?: 'subtree' | 'all';
 }
 
 export interface SubagentResult {
@@ -1673,7 +1681,7 @@ export class SubagentModule implements Module {
       {
         name: 'list',
         description:
-          'List the subagents this host knows (Dendrite registry): name, kind (worker or task-fork), who spawned it, its task, ' +
+          'List the subagents within your reach (Dendrite registry) — the ones you started, and theirs: name, kind (worker or task-fork), who spawned it, its task, ' +
           'whether it is running, ended (and why) or orphaned (its spawner ended), and where its result goes. Ended ones are listed too.',
         inputSchema: { type: 'object', properties: {} },
       },
@@ -1697,7 +1705,7 @@ export class SubagentModule implements Module {
       },
       {
         name: 'adopt',
-        description: "Adopt an orphaned subagent (one whose spawner ended while it ran): you become its parent, its result comes to you, and results it already produced for the lost parent are delivered to you.",
+        description: "Adopt an orphaned subagent (one whose spawner ended while it ran) that was offered to you — one from your own tree, or offered to you as the primary: you become its parent, its result comes to you, and results it already produced for the lost parent are delivered to you.",
         inputSchema: {
           type: 'object',
           properties: { name: { type: 'string', description: 'The orphaned subagent to adopt' } },
@@ -1707,7 +1715,7 @@ export class SubagentModule implements Module {
       {
         name: 'resume',
         description:
-          'Resume an ended subagent from the context it left (a run a restart cut off, a time limit stopped, or that failed): a new incarnation under the same name, continuing on its own branch, its result delivered to you as a message when it ends. Tools it ran before have had their effect.',
+          'Resume an ended subagent of yours from the context it left (a run a restart cut off, a time limit stopped, or that failed): a new incarnation under the same name, continuing on its own branch, with the tools it was launched with — never more than you have. Its result is delivered as a message when it ends, to you unless it was started with a route to someone else who is still running; the answer says which. Tools it ran before have had their effect.',
         inputSchema: {
           type: 'object',
           properties: { name: { type: 'string', description: 'The ended subagent to resume' } },
@@ -1750,7 +1758,7 @@ export class SubagentModule implements Module {
       case 'peek':
         return this.handlePeek(input as { name?: string }, caller);
       case 'list':
-        return this.handleList();
+        return this.handleList(caller);
       case 'stop':
         return this.handleStop(input as { name: string; reason?: string }, caller);
       case 'message':
@@ -3143,9 +3151,28 @@ export class SubagentModule implements Module {
     if (!this.ctx) return;
 
     const message = err instanceof Error ? err.message : String(err);
+    // A failure follows the same path as a success: to a caller that is a
+    // subagent, or one that has ended, as attributed mail from the run's own
+    // agent (held for an ended caller until it is adopted), not a line in
+    // the primary's context. Only the primary's own, live, is told directly
+    // — or a run that never had an agent to speak as.
+    const fw = this.framework;
+    const callerRecord = fw?.getAgentRecord(parentAgentName) ?? null;
+    if (fw && callerRecord && (parentAgentName !== this.config.parentAgentName || callerRecord.ended)) {
+      const from = [...this.runOfAttempt.entries()].filter(([, display]) => display === name).map(([agent]) => agent).reverse().find((agent) => fw.getAgentRecord(agent));
+      if (from) {
+        try {
+          fw.sendAgentMessage(from, parentAgentName, [{ type: 'text', text: `[Subagent '${name}' failed]\n\nError: ${message}` }], { wake: true });
+          return;
+        } catch (routeErr) {
+          console.error(`[subagent] ${name}'s failure by its route: ${routeErr instanceof Error ? routeErr.message : String(routeErr)}; telling ${this.config.parentAgentName ?? 'the primary'} directly`);
+        }
+      }
+    }
+    const started = parentAgentName !== this.config.parentAgentName ? ` (started by ${parentAgentName})` : '';
     this.ctx.addMessage('user', [{
       type: 'text',
-      text: `[Subagent '${name}' failed]\n\nError: ${message}`,
+      text: `[Subagent '${name}'${started} failed]\n\nError: ${message}`,
     }]);
     this.ctx.pushEvent({
       type: 'inference-request',
@@ -3316,9 +3343,9 @@ export class SubagentModule implements Module {
       .sort((a, b) => b.createdAt - a.createdAt);
   }
 
-  /** The live record under a subagent's display name, else its most recent ended one. */
+  /** The live record under a subagent's display name — or its framework name, as the adoption offer gives it — else its most recent ended one. */
   private recordNamed(name: string): AgentRecord | null {
-    const all = this.subagentRecords(true).filter((r) => (r.metadata as { subagent: string }).subagent === name);
+    const all = this.subagentRecords(true).filter((r) => (r.metadata as { subagent: string }).subagent === name || r.name === name);
     return all.find((r) => !r.ended) ?? all[0] ?? null;
   }
 
@@ -3339,15 +3366,70 @@ export class SubagentModule implements Module {
     };
   }
 
-  private handleList(): ToolResult {
+  /**
+   * Whether a record is within the caller's reach: the caller itself, or a
+   * descendant of it through the registry's spawner links (an orphan through
+   * its former parent). Under `lifecycleReach: 'all'`, everything is. The
+   * same scoping `peek` has (postmortem 2026-05-28 P3 #8): a sibling is out
+   * of reach, and so is a caller's own parent.
+   */
+  private inReach(caller: string | undefined, record: AgentRecord): boolean {
+    if ((this.config.lifecycleReach ?? 'subtree') === 'all' || !caller) return true;
+    const fw = this.framework;
+    if (!fw) return false;
+    const seen = new Set<string>();
+    let cur: string | undefined = record.name;
+    while (cur && !seen.has(cur)) {
+      if (cur === caller) return true;
+      seen.add(cur);
+      const r: AgentRecord | null = cur === record.name ? record : fw.getAgentRecord(cur);
+      cur = r?.orphaned?.formerParent.agent ?? r?.relationships.spawnedBy;
+    }
+    return false;
+  }
+
+  private outOfReach(verb: string, name: string, record: AgentRecord): ToolResult {
+    const by = record.orphaned?.formerParent.agent ?? record.relationships.spawnedBy;
+    return {
+      success: false,
+      isError: true,
+      error: `Nothing was ${verb}: '${name}' is not in your tree${by ? ` (it was started by ${by})` : ''}. You reach the subagents you started, and theirs.`,
+    };
+  }
+
+  /**
+   * What a launch's tool list has that the caller's own rule does not: a
+   * resume gives the new incarnation its launch's tools, and a caller
+   * cannot hand out more than it has (the rule a spawn enforces at launch).
+   * Null when nothing exceeds it.
+   */
+  private beyondCallerRule(caller: string | undefined, launchTools: 'all' | string[]): string | null {
+    const rule = (caller ? this.framework?.getAgent(caller)?.allowedTools : undefined) ?? 'all';
+    if (rule === 'all') return null;
+    if (launchTools === 'all') return 'all tools, where your own list is limited';
+    const mine = new Set(rule);
+    const extra = launchTools.filter((tool) => tool !== 'subagent--return' && !mine.has(tool));
+    return extra.length ? extra.join(', ') : null;
+  }
+
+  private handleList(caller?: string): ToolResult {
     if (!this.framework) return { success: false, isError: true, error: 'Nothing was listed: the subagent module has no framework yet.' };
-    const records = this.subagentRecords(true);
-    return { success: true, data: { subagents: records.map((r) => this.describeRecord(r)), running: records.filter((r) => !r.ended).length } };
+    const records = this.subagentRecords(true).filter((r) => this.inReach(caller, r));
+    return {
+      success: true,
+      data: {
+        subagents: records.map((r) => this.describeRecord(r)),
+        running: records.filter((r) => !r.ended).length,
+        ...((this.config.lifecycleReach ?? 'subtree') === 'subtree' ? { reach: 'the subagents you started, and theirs' } : {}),
+      },
+    };
   }
 
   private handleStop(input: { name: string; reason?: string }, caller?: string): ToolResult {
     const fw = this.framework;
     if (!fw) return { success: false, isError: true, error: 'Nothing was stopped: the subagent module has no framework yet.' };
+    const known = this.recordNamed(input.name);
+    if (known && !this.inReach(caller, known)) return this.outOfReach('stopped', input.name, known);
     // A run this module drives is stopped through its own cancel (its
     // children first), which ends the registry record as the framework
     // tears the run down; any other live record under the name is stopped
@@ -3373,6 +3455,7 @@ export class SubagentModule implements Module {
     if (!caller) return { success: false, isError: true, error: 'Nothing was sent: a message to a subagent is sent by an agent, under its name.' };
     const record = this.recordNamed(input.name);
     if (!record || record.ended) return { success: false, isError: true, error: `Nothing was sent: no subagent named '${input.name}' is running${record?.ended ? ` (it ended: ${record.ended.reason})` : ''}.` };
+    if (!this.inReach(caller, record)) return this.outOfReach('sent', input.name, record);
     try {
       const sent = fw.sendAgentMessage(caller, record.name, [{ type: 'text', text: input.text }], { wake: true });
       return { success: true, data: { to: input.name, agent: record.name, delivered: sent.delivered, note: sent.delivered ? 'In its context under your name; it wakes for it.' : 'Held for it until it can receive.' } };
@@ -3388,6 +3471,19 @@ export class SubagentModule implements Module {
     const record = this.recordNamed(input.name);
     if (!record || record.ended) return { success: false, isError: true, error: `Nothing was adopted: no subagent named '${input.name}' is running.` };
     if (!record.orphaned) return { success: false, isError: true, error: `Nothing was adopted: '${input.name}' has its parent (${record.relationships.spawnedBy ?? 'none'}); only an orphan is adopted.` };
+    // Offered to the caller: the framework's candidates (the nearest live
+    // ancestor of the former parent, then the primary), or anyone in whose
+    // tree the orphan hung. An unrelated agent would take the held results
+    // meant for the lost parent with it.
+    if (!record.orphaned.candidates.includes(caller) && !this.inReach(caller, record)) {
+      const former = record.orphaned.formerParent.agent;
+      const offered = record.orphaned.candidates.length ? record.orphaned.candidates.join(', ') : 'no one yet';
+      return {
+        success: false,
+        isError: true,
+        error: `Nothing was adopted: '${input.name}' was ${former}'s, and it is offered to ${offered} — an ancestor of its former parent, or the primary — not to you.`,
+      };
+    }
     try {
       const adopted = fw.reparentAgent(record.name, caller, { by: caller });
       return { success: true, data: { adopted: input.name, agent: record.name, parent: caller, resultTo: adopted.relationships.resultTo ?? null } };
@@ -3402,11 +3498,27 @@ export class SubagentModule implements Module {
     const record = this.recordNamed(input.name);
     if (!record) return { success: false, isError: true, error: `Nothing was resumed: no subagent named '${input.name}' is known.` };
     if (!record.ended) return { success: false, isError: true, error: `Nothing was resumed: '${input.name}' is still running.` };
+    if (!this.inReach(caller, record)) return this.outOfReach('resumed', input.name, record);
     const inUse = this.nameInUse(input.name);
     if (inUse) return inUse;
     const launch = (record.metadata as { launch?: ResumableLaunch } | undefined)?.launch;
     if (!launch) return { success: false, isError: true, error: `Nothing was resumed: '${input.name}' left no launch to rebuild its configuration from.` };
+    const beyond = this.beyondCallerRule(caller, launch.allowedTools);
+    if (beyond) {
+      return {
+        success: false,
+        isError: true,
+        error:
+          `Nothing was resumed: '${input.name}' was launched with tools you do not have (${beyond}), and a resume runs it with its launch's tools. ` +
+          'A subagent cannot have more than the agent that starts it; start a narrower one instead.',
+      };
+    }
     const parentAgentName = caller ?? this.config.parentAgentName ?? 'agent';
+    // Where its result goes: a resume keeps the record's route (the
+    // framework's rule), so an async record started with a message route to
+    // someone else who is still running reports to them, not the resumer.
+    const route = record.relationships.resultTo;
+    const elsewhere = route?.as === 'message' && route.to !== parentAgentName && fw.getAgentRecord(route.to)?.ended === undefined && fw.getAgentRecord(route.to) ? route.to : null;
     const promise = this.runResumed(input.name, record, launch, parentAgentName);
     this.asyncHandles.set(input.name, { name: input.name, type: launch.kind, promise, parentAgentName });
     promise
@@ -3415,7 +3527,18 @@ export class SubagentModule implements Module {
         (err) => this.deliverAsyncError(input.name, err, parentAgentName),
       )
       .catch((err) => console.error(`[subagent] delivering ${input.name}'s resumed result: ${err instanceof Error ? err.message : String(err)}`));
-    return { success: true, data: { resumed: input.name, agent: record.name, incarnation: record.incarnation + 1, note: 'Running from the context it left; its result is delivered to you as a message when it ends. Tools it ran before have had their effect.' } };
+    return {
+      success: true,
+      data: {
+        resumed: input.name,
+        agent: record.name,
+        incarnation: record.incarnation + 1,
+        resultTo: elsewhere ?? parentAgentName,
+        note: elsewhere
+          ? `Running from the context it left; its result goes to ${elsewhere} as a message when it ends — the route it was started with, which a resume keeps. Tools it ran before have had their effect.`
+          : 'Running from the context it left; its result is delivered to you as a message when it ends. Tools it ran before have had their effect.',
+      },
+    };
   }
 
   /** Drive a resumed incarnation as this module drives any run: a slot, the live register, the watchdogs, the result. */

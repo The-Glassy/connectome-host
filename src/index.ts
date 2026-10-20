@@ -297,6 +297,7 @@ async function createFramework(
       defaultModel: subagentConfig.defaultModel || model,
       defaultMaxTokens: subagentConfig.defaultMaxTokens,
       ...(subagentConfig.orientation ? { orientation: subagentConfig.orientation } : {}),
+      ...(subagentConfig.lifecycleReach ? { lifecycleReach: subagentConfig.lifecycleReach } : {}),
     });
     moduleInstances.push(subagentModule);
   }

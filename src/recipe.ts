@@ -741,6 +741,13 @@ export interface RecipeModules {
      * is told is the deployment's to decide, not the host's.
      */
     orientation?: 'full' | 'none';
+    /**
+     * How far the lifecycle tools (list, stop, message, adopt) reach.
+     * `'subtree'` (default): a caller sees and acts on the subagents it
+     * started and theirs, as `peek` is scoped (postmortem 2026-05-28 P3 #8);
+     * `'all'`: every subagent the host knows.
+     */
+    lifecycleReach?: 'subtree' | 'all';
   };
   /**
    * Lesson library (persistent knowledge store + lesson tools). OPT-IN —
