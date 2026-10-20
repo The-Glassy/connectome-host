@@ -3374,6 +3374,11 @@ export class SubagentModule implements Module {
    * of reach, and so is a caller's own parent.
    */
   private inReach(caller: string | undefined, record: AgentRecord): boolean {
+    // No caller is never an agent's call: the framework attributes every
+    // call it dispatches (`callerAgentName`, set at dispatch, not by the
+    // caller). An unattributed call is the host's own path — the TUI, a
+    // slash command, headless — acting as the operator, with full reach,
+    // as a launch without a caller runs for the configured parent.
     if ((this.config.lifecycleReach ?? 'subtree') === 'all' || !caller) return true;
     const fw = this.framework;
     if (!fw) return false;
