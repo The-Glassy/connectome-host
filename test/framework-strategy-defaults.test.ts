@@ -303,5 +303,11 @@ describe('the per-message cap retrieval fits under', () => {
     expect(configView(buildFrameworkStrategy(set, 'some-model', 'UTC')).maxMessageTokens).toBe(4_000);
     expect(strategyMessageCap(recipe({ strategy: { type: 'passthrough' } }))).toBeUndefined();
   });
+
+  test('for an extension strategy, is the recipe\'s value it is told, and none when the recipe sets none', () => {
+    const extension = (strategy: Record<string, unknown>) => ({ name: 'x', agent: { systemPrompt: 'sys', strategy } }) as never;
+    expect(strategyMessageCap(extension({ type: 'my-strategy', maxMessageTokens: 3_000 }))).toBe(3_000);
+    expect(strategyMessageCap(extension({ type: 'my-strategy' }))).toBeUndefined();
+  });
 });
 

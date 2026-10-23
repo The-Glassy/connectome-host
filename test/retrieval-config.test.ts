@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import type { Membrane } from '@animalabs/membrane';
 import { validateRecipe } from '../src/recipe.js';
-import { buildRetrievalModuleConfig } from '../src/retrieval-config.js';
+import { buildRetrievalModuleConfig, retrievalMessageCap } from '../src/retrieval-config.js';
+import { SUBAGENT_MESSAGE_CAP } from '../src/modules/subagent-module.js';
 
 const membrane = {} as Membrane;
 
@@ -70,5 +71,30 @@ describe('retrieval recipe config', () => {
       { reasoningEffort: 'high' },
       'openai-codex',
     )).toThrow(/model must be a non-empty string/);
+  });
+});
+
+// context-manager #155 part 5: retrieval's block is stored as a message in
+// whichever agent's window it gathers for, and one cap serves them all.
+describe('the cap retrieval fits its block under', () => {
+  const capOf = (agent: Record<string, unknown>, modules: Record<string, unknown> = {}) =>
+    retrievalMessageCap({ name: 'x', agent: { systemPrompt: 'sys', ...agent }, modules } as never);
+
+  test('is the strategy\'s cap, with no subagents', () => {
+    expect(capOf({})).toBe(10_000);
+    expect(capOf({ strategy: { type: 'autobiographical', maxMessageTokens: 20_000 } })).toBe(20_000);
+    expect(capOf({ strategy: { type: 'passthrough' } })).toBeUndefined();
+  });
+
+  test('is the smaller of it and a subagent\'s window\'s, with the subagent module on', () => {
+    expect(SUBAGENT_MESSAGE_CAP).toBe(10_000);
+    expect(capOf({ strategy: { type: 'autobiographical', maxMessageTokens: 20_000 } }, { subagents: true })).toBe(10_000);
+    expect(capOf({ strategy: { type: 'frontdesk', maxMessageTokens: 4_000 } }, { subagents: {} })).toBe(4_000);
+    expect(capOf({ strategy: { type: 'passthrough' } }, { subagents: true })).toBe(10_000);
+  });
+
+  test('takes a cap that isn\'t a positive number as none, as the strategy does', () => {
+    expect(capOf({ strategy: { type: 'autobiographical', maxMessageTokens: 0 } })).toBeUndefined();
+    expect(capOf({ strategy: { type: 'autobiographical', maxMessageTokens: 0 } }, { subagents: true })).toBe(10_000);
   });
 });

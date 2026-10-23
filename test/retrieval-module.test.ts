@@ -923,10 +923,11 @@ describe('RetrievalModule observability', () => {
 });
 
 // context-manager #155 part 5: agent-framework stores an `afterUser`
-// injection where the compile placed it, and stores it again only when its
-// text changes. So a turn's lessons are kept per agent and keyed on the
-// turn's opening message: a later start of the same turn gets the same
-// block with no model calls, whatever the framework stored since.
+// injection where the compile placed it, and stores it again when its text
+// differs from what the agent's last request held. So a turn's lessons are
+// kept per agent and keyed on the turn's opening message: a later start of
+// the same turn gets the same block with no model calls, whatever the
+// framework stored since.
 describe('RetrievalModule keyed on the turn\'s opening message', () => {
   const AGENT = 'alice';
 
@@ -1286,6 +1287,38 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     ]);
     expect(Math.ceil(text.length / 4)).toBeLessThanOrEqual(60);
     expect(h.mod.getRetrievalTraces()[0]!.injected?.lessonIds).toEqual(['l1', 'l3']);
+  });
+
+  test('a block whose lessons all fit is kept whole, with no room held for a note it doesn\'t need', async () => {
+    const whole = '## Retrieved Knowledge, for the message beginning "Tell me the memory detail."\n- [90%] memory detail (tags: memory)';
+    const h = turnHarness(['["memory"]'], { maxMessageTokens: Math.ceil(whole.length / 4) });
+    h.say('user', 'Tell me the memory detail.');
+    expect(h.block(await h.mod.gatherContext(AGENT))).toBe(whole);
+  });
+
+  test('a cap that isn\'t a positive number is no cap, as the strategy reads it', async () => {
+    const lessons = [lesson('l1', `memory ${'large '.repeat(200)}`)];
+    const h = turnHarness(['["memory"]'], { lessons, maxMessageTokens: 0 });
+    h.say('user', 'Tell me the memory detail.');
+    expect(h.block(await h.mod.gatherContext(AGENT))).toContain('large large');
+    expect(h.mod.getRetrievalTraces()[0]!.outcome).toBe('injected');
+  });
+
+  test('a start the framework\'s timeout left behind doesn\'t replace the block a later start of the same turn kept', async () => {
+    let release!: (text: string) => void;
+    const held = new Promise<string>((resolve) => { release = resolve; });
+    const h = turnHarness([held, '["memory"]']);
+    h.say('user', 'Tell me the memory detail.');
+    const behind = h.mod.gatherContext(AGENT); // waits at its concept call
+    const later = await h.mod.gatherContext(AGENT); // the same turn, started again
+    expect(h.block(later)).toContain('memory detail');
+    release('["zebra"]'); // the left-behind start finds nothing
+    expect(await behind).toEqual([]);
+    expect(await h.mod.gatherContext(AGENT)).toEqual(later); // the later start's block stays the turn's
+    expect(h.calls).toHaveLength(2);
+    // A start that has returned holds no place: the record is only of
+    // starts under way.
+    expect((h.mod as unknown as { latestStarts: Map<string, number> }).latestStarts.size).toBe(0);
   });
 
   test('when no lesson fits the cap, nothing is injected, and that is kept for the turn', async () => {

@@ -1,12 +1,12 @@
 /**
  * context-manager #155 part 5: agent-framework stores the fleet status where
- * the compile placed it, and stores it again whenever its text changes. So
- * the status is built from state changes alone: the running subagents, each
- * with its start as a clock time in the recipe's zone, under "as of" the
- * latest start or end, so the same state gives the same text at every start.
- * A finished run leaves the list, having reported in the conversation, which
- * keeps each stored copy as short as the concurrency limit (Agnes-1009,
- * room-203 #196238).
+ * the compile placed it, and stores it again when its text differs from what
+ * the agent's last request held. So the status is built from state changes
+ * alone: the subagents running or waiting, each started one with its start
+ * as a clock time in the recipe's zone, under "as of" the latest start or
+ * end, so the same state gives the same text at every start. A finished run
+ * leaves the list, having reported in its launcher's conversation (Agnes-1009,
+ * room-203 #196238, #197184).
  */
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { SubagentModule, type ActiveSubagent } from '../src/modules/subagent-module.js';
@@ -96,5 +96,94 @@ describe('the fleet status', () => {
     (f.mod as unknown as { asyncHandles: Map<string, unknown> }).asyncHandles.set('later', {});
     f.mod.parentMap.set('later', 'resident');
     expect(await f.status()).toBe('[Fleet Status]\n  later [async] pending');
+  });
+
+  test('an agent shown a status hears when what it listed ends before it started', async () => {
+    const f = fleet();
+    // A queued async run, waiting for a slot: no start yet, so no "as of".
+    (f.mod as unknown as { asyncHandles: Map<string, unknown> }).asyncHandles.set('later', {});
+    f.mod.parentMap.set('later', 'resident');
+    expect(await f.status()).toBe('[Fleet Status]\n  later [async] pending');
+    // Cancelled while it waited: its handle and its parent link go.
+    (f.mod as unknown as { asyncHandles: Map<string, unknown> }).asyncHandles.delete('later');
+    f.mod.parentMap.delete('later');
+    expect(await f.status()).toBe('[Fleet Status]\n  (none running)');
+    // Told once: its context's newest status says so, and nothing is kept
+    // for it any more.
+    expect(await f.status()).toBeUndefined();
+    expect((f.mod as unknown as { fleetStatusListedFor: Set<string> }).fleetStatusListedFor.size).toBe(0);
+  });
+});
+
+describe('the hud setting', () => {
+  test('stays on across a lifecycle transition, whose state write replaces the module\'s state', async () => {
+    const mod = new SubagentModule({ provider: 'mock', timeZone: 'UTC' });
+    let state: Record<string, unknown> = {};
+    (mod as unknown as { ctx: unknown }).ctx = {
+      getState: () => state,
+      setState: (next: Record<string, unknown>) => { state = next; },
+    };
+    await mod.handleToolCall({ id: 't1', name: 'hud', input: { enabled: true } } as never);
+    mod.activeSubagents.set('entry-scout', {
+      name: 'scout', type: 'spawn', task: 'task for scout', status: 'running',
+      startedAt: T0, lastActivityAt: T0, toolCallsCount: 0, findingsCount: 0,
+    });
+    mod.parentMap.set('scout', 'resident');
+    (mod as unknown as { persistState: () => void }).persistState();
+    expect(state.hudEnabled).toBe(true);
+    const text = ((await mod.gatherContext('resident'))[0]?.content[0] as { text: string } | undefined)?.text;
+    expect(text).toContain('scout [spawn] running since');
+  });
+});
+
+describe('an async run\'s result', () => {
+  function delivering(registered: string[]) {
+    const mod = new SubagentModule({ provider: 'mock', timeZone: 'UTC', parentAgentName: 'resident' });
+    const written: Array<{ text: string; forAgent?: string }> = [];
+    (mod as unknown as { ctx: unknown }).ctx = {
+      getAgents: () => registered.map((name) => ({ name, model: 'mock', status: 'idle' })),
+      addMessage: (_participant: string, content: Array<{ text: string }>, _metadata?: unknown, opts?: { forAgent?: string }) => {
+        // As agent-framework's module write: a name it doesn't list throws.
+        if (opts?.forAgent !== undefined && !registered.includes(opts.forAgent)) throw new Error(`Unknown agent: "${opts.forAgent}"`);
+        written.push({ text: content[0]!.text, ...(opts?.forAgent !== undefined ? { forAgent: opts.forAgent } : {}) });
+        return 'm1';
+      },
+      pushEvent: () => {},
+    };
+    const deliver = mod as unknown as {
+      deliverAsyncResult: (name: string, result: { summary: string }, launcher: string | undefined) => void;
+      deliverAsyncError: (name: string, err: unknown, launcher: string | undefined) => void;
+    };
+    return { written, deliver };
+  }
+
+  test('lands in the window of the agent that launched it, naming a launcher that isn\'t the primary', () => {
+    const d = delivering(['resident', 'fork-y']);
+    d.deliver.deliverAsyncResult('scout', { summary: 'done' }, 'fork-y');
+    d.deliver.deliverAsyncError('miner', new Error('broke'), 'fork-y');
+    d.deliver.deliverAsyncResult('lead', { summary: 'mine' }, 'resident');
+    expect(d.written).toEqual([
+      { text: "[Subagent 'scout' returned, for 'fork-y']\n\ndone", forAgent: 'fork-y' },
+      { text: "[Subagent 'miner' failed, for 'fork-y']\n\nError: broke", forAgent: 'fork-y' },
+      { text: "[Subagent 'lead' returned]\n\nmine", forAgent: 'resident' },
+    ]);
+  });
+
+  test('whose launcher has ended lands in the residents\' slot, naming whom it was for', () => {
+    const d = delivering(['resident']);
+    d.deliver.deliverAsyncResult('scout', { summary: 'done' }, 'fork-y');
+    expect(d.written).toEqual([{ text: "[Subagent 'scout' returned, for 'fork-y', which has ended]\n\ndone" }]);
+  });
+
+  test('with no launcher named lands in the residents\' slot as before', () => {
+    const d = delivering(['resident']);
+    d.deliver.deliverAsyncResult('scout', { summary: 'done' }, undefined);
+    expect(d.written).toEqual([{ text: "[Subagent 'scout' returned]\n\ndone" }]);
+  });
+
+  test('a write that fails for another reason throws, as before', () => {
+    const d = delivering(['resident', 'fork-y']);
+    (d.deliver as unknown as { ctx: { addMessage: () => never } }).ctx.addMessage = () => { throw new Error('store unavailable'); };
+    expect(() => d.deliver.deliverAsyncResult('scout', { summary: 'done' }, 'fork-y')).toThrow('store unavailable');
   });
 });

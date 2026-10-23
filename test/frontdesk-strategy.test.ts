@@ -264,6 +264,19 @@ describe('server-attributed messages (zulip-mcp `attributed` stamp)', () => {
     expect(state.has(question.id)).toBe(true);
   });
 
+  test('stored injections don\'t count toward the rows an answer is looked for in', () => {
+    const s = makeStrategy();
+    const question = attributed('which env do I use?');
+    const injected = Array.from({ length: 8 }, (_, i) => msg('system_context:retrieval', `## Retrieved Knowledge\n- [90%] lesson ${i}`, {
+      system: true, kind: 'context-injection',
+      contextInjection: { agent: 'Claude', namespace: 'retrieval', contentHash: `h${i}`, part: 0, parts: 1 },
+    }));
+    const answer = msg('Claude', 'Staging.');
+    s.pub_updateSalience(makeStore([question, ...injected, answer]));
+    const state = (s as unknown as { salientSourceIds: Set<string> }).salientSourceIds;
+    expect(state.has(question.id)).toBe(false);
+  });
+
   test('the compression instruction quotes the open question without the prefix', () => {
     const s = makeStrategy();
     const q = attributed('where are the packet retry constants defined?');

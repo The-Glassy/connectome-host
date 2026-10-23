@@ -53,7 +53,7 @@ import { SubagentModule } from './modules/subagent-module.js';
 import { historyModuleOptions, assertSemanticSearchRegistered } from './history-semantic.js';
 import { LessonsModule } from './modules/lessons-module.js';
 import { RetrievalModule } from './modules/retrieval-module.js';
-import { buildRetrievalModuleConfig } from './retrieval-config.js';
+import { buildRetrievalModuleConfig, retrievalMessageCap } from './retrieval-config.js';
 import { TuiModule } from './modules/tui-module.js';
 import { TimeModule } from './modules/time-module.js';
 import { waitToBeListed } from './fleet-begin.js';
@@ -97,7 +97,7 @@ import {
 } from './recipe.js';
 import { createBranchState, resetBranchState, handleExport, type BranchState } from './commands.js';
 import { buildFrameworkAgentConfig, membraneCachingOverride, recipeModel, autoContinueSupportWarning } from './framework-agent-config.js';
-import { buildFrameworkStrategy, buildConversationsConfig, strategyMessageCap } from './framework-strategy.js';
+import { buildFrameworkStrategy, buildConversationsConfig } from './framework-strategy.js';
 import { AUDIT_STORES_FLAG, auditStoresFromEntry, checkActiveStore, placesOnTrial } from './update/audit-stores.js';
 import { buildWorkspaceMounts } from './workspace-mounts.js';
 import { quarantineAlarm, type QuarantineStatus } from './web/quarantine-alert.js';
@@ -363,7 +363,7 @@ async function createFramework(
   if (modules.retrieval && lessonsModule) {
     moduleInstances.push(new RetrievalModule({
       ...buildRetrievalModuleConfig(membrane, modules.retrieval, recipe.agent.provider),
-      maxMessageTokens: strategyMessageCap(recipe),
+      maxMessageTokens: retrievalMessageCap(recipe),
     }));
   }
 

@@ -281,10 +281,11 @@ export class FrontdeskStrategy extends AutobiographicalStrategy {
    * a user message that contains `?` or an @mention and has no assistant
    * message within the following WINDOW messages. A stored context
    * injection, such as a lessons block, is no one's message, so it's never
-   * taken for a question.
+   * taken for a question, and it doesn't count toward the WINDOW messages
+   * an answer is looked for in.
    */
   protected updateSalience(store: MessageStoreView): void {
-    const messages = store.getAll();
+    const messages = store.getAll().filter((m) => storedInjectionMarkOf(m.metadata) === undefined);
     const assistant = this.config.summaryParticipant ?? 'Claude';
     const salient = new Set<string>();
     const WINDOW = 8;
@@ -292,7 +293,6 @@ export class FrontdeskStrategy extends AutobiographicalStrategy {
     for (let i = 0; i < messages.length; i++) {
       const m = messages[i];
       if (m.participant === assistant) continue;
-      if (storedInjectionMarkOf(m.metadata) !== undefined) continue;
       if (!this.messageIsQuestionOrMention(m)) continue;
 
       let answered = false;

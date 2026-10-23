@@ -189,12 +189,14 @@ describe('readers of a compile leave stored injections out by its provenance', (
 
   test('a message the compile can\'t account for stays', () => {
     expect(compiledWithoutStoredInjections({ messages: ['a', 'b'] })).toEqual(['a', 'b']);
+    // Provenance naming stored rows, with no record of them as read.
+    expect(compiledWithoutStoredInjections({ messages: ['a'], provenance: { messages: [raw('i1')] } as never })).toEqual(['a']);
     expect(compiledWithoutStoredInjections(compiled([raw('gone'), raw()], {}))).toEqual(['message 0', 'message 1']);
   });
 });
 
 describe('peek', () => {
-  test('a subagent\'s last message is its own, not the lessons block stored after it', async () => {
+  test('a subagent\'s last message and its count are its own, not the lessons block stored after it', async () => {
     const mod = new SubagentModule({ provider: 'mock' });
     const view = mod as unknown as { liveSubagents: Map<string, unknown>; frameworkNameIndex: Map<string, string> };
     const mark = { contextInjection: { agent: 'fw-scout', namespace: 'retrieval', contentHash: 'h1', part: 0, parts: 1 } };
@@ -218,6 +220,6 @@ describe('peek', () => {
     view.frameworkNameIndex.set('fw-scout', 'scout');
     const [snapshot] = await mod.peek('scout');
     expect(snapshot!.lastMessageSnippet).toBe('Scout task: find the vault.');
-    expect(snapshot!.messageCount).toBe(2);
+    expect(snapshot!.messageCount).toBe(1);
   });
 });

@@ -117,15 +117,15 @@ async function makeRepairStore(path: string, namespace = 'agents/agent'): Promis
  *  agent's stored context injections (`run: 'injected'`, context-manager #155
  *  part 5). The seed opens with `auditOnly` only so that adding the messages
  *  makes no chunk records. */
-async function makeSpanStore(path: string, run?: 'tuned-out' | 'injected'): Promise<void> {
+async function makeSpanStore(path: string, run?: 'tuned-out' | 'injected' | 'own-injected'): Promise<void> {
   const seed = new AutobiographicalStrategy({ adaptiveResolution: true, hierarchical: true, autoTickOnNewMessage: false, auditOnly: true });
   const manager = await ContextManager.open({ path, namespace: 'agents/agent', strategy: seed, membrane: MODEL });
   const ids: string[] = [];
   for (let i = 0; i < 120; i++) {
     const inRun = i >= 50 && i <= 59;
     const diverted = inRun && run === 'tuned-out' ? { tuneOut: { epochId: 'test' } }
-      : inRun && run === 'injected'
-        ? { system: true, kind: 'context-injection', contextInjection: { agent: 'other', namespace: 'retrieval', contentHash: `h${i}`, part: 0, parts: 1 } }
+      : inRun && (run === 'injected' || run === 'own-injected')
+        ? { system: true, kind: 'context-injection', contextInjection: { agent: run === 'injected' ? 'other' : 'agent', namespace: 'retrieval', contentHash: `h${i}`, part: 0, parts: 1 } }
         : undefined;
     ids.push(manager.addMessage(i % 2 ? 'agent' : 'user', [{ type: 'text', text: `message ${i} ` + 'word '.repeat(60) }], diverted));
   }
@@ -471,6 +471,7 @@ describe('the store audit', () => {
       'unowned run inside a span': { make: (store) => makeSpanStore(store) },
       'tuned-out run inside a span': { make: (store) => makeSpanStore(store, 'tuned-out') },
       "another agent's stored injections inside a span": { make: (store) => makeSpanStore(store, 'injected') },
+      "the agent's own stored injections inside a span": { make: (store) => makeSpanStore(store, 'own-injected') },
       'a subconscious that opens': { make: (store) => makeStore(store, 'agents/agent', false), subconscious: true },
       "a subconscious whose context a start can't read": { make: makeBrokenSubconsciousStore, subconscious: true },
       'the same store, its subconscious off': { make: makeBrokenSubconsciousStore, off: true },
@@ -515,6 +516,7 @@ describe('the store audit', () => {
       'unowned run inside a span': 'refused',
       'tuned-out run inside a span': 'opens',
       "another agent's stored injections inside a span": 'opens',
+      "the agent's own stored injections inside a span": 'refused',
       'a subconscious that opens': 'opens',
       "a subconscious whose context a start can't read": 'refused',
       'the same store, its subconscious off': 'opens',

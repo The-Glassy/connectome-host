@@ -438,6 +438,15 @@ const SUBAGENT_STRATEGY = {
 } as const;
 const SUBAGENT_STREAM_TOKENS = 500_000;
 
+/** The launcher a subagent's bookkeeping and wake name when neither the
+ *  call nor the module's config names one, as before. */
+const UNNAMED_LAUNCHER = 'agent';
+
+/** The per-message cap of every subagent's and fork's window
+ *  (SUBAGENT_STRATEGY), which retrieval fits its block under too
+ *  (retrievalMessageCap). */
+export const SUBAGENT_MESSAGE_CAP = SUBAGENT_STRATEGY.maxMessageTokens;
+
 /**
  * What a launch must deliver to its stream, in the shape it composed it.
  * Each message in a stream's context is capped alone (SUBAGENT_STRATEGY's
@@ -1328,6 +1337,9 @@ export class SubagentModule implements Module {
 
   /** Observable registry of active/recent subagents for TUI display. */
   readonly activeSubagents = new Map<string, ActiveSubagent>();
+  /** The agents whose last fleet status listed a run, by framework name, so
+   *  each is told once nothing is running or waiting (gatherContext). */
+  private readonly fleetStatusListedFor = new Set<string>();
 
   /** Parent agent name for each subagent (for fleet tree reconstruction). */
   readonly parentMap = new Map<string, string>();
@@ -1552,7 +1564,9 @@ export class SubagentModule implements Module {
         parent: this.parentMap.get(sa.name),
       };
     }
-    this.ctx.setState({ agents });
+    // setState replaces the module's state, so the rest of it, such as
+    // the hud tool's hudEnabled, is carried over.
+    this.ctx.setState({ ...(this.ctx.getState<Record<string, unknown>>() ?? {}), agents });
   }
 
   /**
@@ -1641,7 +1655,7 @@ export class SubagentModule implements Module {
       },
       {
         name: 'hud',
-        description: 'Toggle the subagent fleet HUD. When enabled, a compact status of the running subagents is added to your context, again each time one starts or ends. Disabling it stops new ones; a status already in your context stays there, as history.',
+        description: 'Toggle the subagent fleet HUD. When enabled, a compact status of the subagents running or waiting is added to your context, and again at your next start after one starts or ends. Disabling it stops new ones; a status already in your context stays there, as history.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -1772,16 +1786,18 @@ export class SubagentModule implements Module {
     const allowed = this.getDescendantDisplayNames(agentName);
 
     // agent-framework stores this injection where the compile placed it, and
-    // stores it again whenever its text changes (context-manager #155 part
-    // 5). So the status lists what's running, each with its start as a clock
-    // time, under "as of" its latest start or end: the same state gives the
-    // same text, where an elapsed count changed it at nearly every start. A
-    // finished run has reported in the conversation already, as its tool
-    // result or `[Subagent '…' returned]`, so it leaves the list, which
-    // keeps each stored copy as short as the concurrency limit. When the
-    // last one ends, the status says none is running, so the newest copy in
-    // the context isn't one that lists runs since ended. A running
-    // subagent's progress is `peek`'s to show.
+    // stores it again when its text differs from what the agent's last
+    // request held (context-manager #155 part 5). So the status lists what's
+    // running or waiting, each started one with its start as a clock time,
+    // under "as of" its latest start or end: the same state gives the same
+    // text, where an elapsed count changed it at nearly every start. A
+    // finished run has reported in its launcher's conversation already, as
+    // its tool result or `[Subagent '…' returned]` (addForLauncher), so it
+    // leaves the list, which keeps each stored copy to the runs under way:
+    // as many running as the concurrency limit, and the async runs waiting
+    // for a slot. When the last one ends, the status says none is running,
+    // so the newest copy in the context isn't one that lists runs since
+    // ended. A running subagent's progress is `peek`'s to show.
     const lines: string[] = [];
     let latestChange: number | undefined;
     for (const [, sa] of this.activeSubagents) {
@@ -1807,8 +1823,16 @@ export class SubagentModule implements Module {
     }
 
     if (lines.length === 0) {
-      if (latestChange === undefined) return [];
+      // Nothing running or waiting: an agent whose last status listed
+      // something gets one saying so, so the newest copy in its context
+      // isn't one that lists work since ended. That includes work that ended
+      // before it started, as a queued async run cancelled while waiting for
+      // a slot, which leaves no start or end to be "as of".
+      const listed = this.fleetStatusListedFor.delete(agentName);
+      if (latestChange === undefined && !listed) return [];
       lines.push('  (none running)');
+    } else {
+      this.fleetStatusListedFor.add(agentName);
     }
 
     const asOf = latestChange !== undefined ? `, as of ${this.clockTime(latestChange)} ${this.timeZone}` : '';
@@ -2483,12 +2507,13 @@ export class SubagentModule implements Module {
       // over the budget it compiles at is returned, where a real compile
       // refuses it.
       const compiled = await live.contextManager.compile(undefined, undefined, { dryRun: true });
-      messageCount = compiled.messages.length;
-      // Extract a short snippet from the last message for observability
-      // without dumping the entire context into the caller's window. A
-      // stored injection, such as the subagent's lessons block, is no one's
-      // message, so the snippet is the last message before it.
+      // A stored injection, such as the subagent's lessons block, is no one's
+      // message, so neither the count nor the snippet takes one, as a dry
+      // compile held none before injections were stored.
       const said = compiledWithoutStoredInjections(compiled);
+      messageCount = said.length;
+      // Extract a short snippet from the last message for observability
+      // without dumping the entire context into the caller's window.
       if (said.length > 0) {
         const last = said[said.length - 1];
         const textBlocks = last.content
@@ -2888,7 +2913,8 @@ export class SubagentModule implements Module {
       };
     }
 
-    const parentAgentName = callerAgentName ?? this.config.parentAgentName ?? 'agent';
+    const launcher = callerAgentName ?? this.config.parentAgentName;
+    const parentAgentName = launcher ?? UNNAMED_LAUNCHER;
     // Resolved once, before any slot, and kept through the slot wait and
     // every retry: the caller's settings, context and tool rules as they are
     // now. A caller that can't be resolved, or a module with no framework
@@ -2909,7 +2935,7 @@ export class SubagentModule implements Module {
     // goes on; a sync run has no hard limit.
     if (input.sync) {
       const promise = this.runSpawn(launch, input, callerAgentName, callerDepth, undefined, ticket);
-      return await this.runDetachable(input.name, 'spawn', promise, parentAgentName, input.timeoutMs ?? this.maxExecutionMs, launch);
+      return await this.runDetachable(input.name, 'spawn', promise, launcher, input.timeoutMs ?? this.maxExecutionMs, launch);
     }
 
     // Async mode (default): fire-and-forget, deliver result as message.
@@ -2920,8 +2946,8 @@ export class SubagentModule implements Module {
 
     promise
       .then(
-        result => this.deliverAsyncResult(input.name, result, parentAgentName),
-        err => this.deliverAsyncError(input.name, err, parentAgentName),
+        result => this.deliverAsyncResult(input.name, result, launcher),
+        err => this.deliverAsyncError(input.name, err, launcher),
       )
       .catch(err => console.error(`[subagent] delivering ${input.name}'s result: ${err instanceof Error ? err.message : String(err)}`));
 
@@ -2940,7 +2966,8 @@ export class SubagentModule implements Module {
       };
     }
 
-    const parentAgentName = callerAgentName ?? this.config.parentAgentName ?? 'agent';
+    const launcher = callerAgentName ?? this.config.parentAgentName;
+    const parentAgentName = launcher ?? UNNAMED_LAUNCHER;
     // Resolved once, before any slot, and kept through the slot wait and
     // every retry: the caller's settings, context and tool rules as they are
     // now. A caller that can't be resolved, or a module with no framework
@@ -2961,7 +2988,7 @@ export class SubagentModule implements Module {
     // goes on; a sync run has no hard limit.
     if (input.sync) {
       const promise = this.runFork(launch, input, callerAgentName, callerDepth, undefined, callToolUseId, ticket);
-      return await this.runDetachable(input.name, 'fork', promise, parentAgentName, input.timeoutMs ?? this.maxExecutionMs, launch);
+      return await this.runDetachable(input.name, 'fork', promise, launcher, input.timeoutMs ?? this.maxExecutionMs, launch);
     }
 
     // Async mode (default): fire-and-forget, deliver result as message.
@@ -2972,8 +2999,8 @@ export class SubagentModule implements Module {
 
     promise
       .then(
-        result => this.deliverAsyncResult(input.name, result, parentAgentName),
-        err => this.deliverAsyncError(input.name, err, parentAgentName),
+        result => this.deliverAsyncResult(input.name, result, launcher),
+        err => this.deliverAsyncError(input.name, err, launcher),
       )
       .catch(err => console.error(`[subagent] delivering ${input.name}'s result: ${err instanceof Error ? err.message : String(err)}`));
 
@@ -3008,37 +3035,53 @@ export class SubagentModule implements Module {
     };
   }
 
-  private deliverAsyncResult(name: string, result: SubagentResult, parentAgentName: string): void {
+  private deliverAsyncResult(name: string, result: SubagentResult, launcher: string | undefined): void {
     this.asyncHandles.delete(name);
     if (!this.ctx) return;
 
-    this.ctx.addMessage('user', [{
-      type: 'text',
-      text: `[Subagent '${name}' returned]\n\n${result.summary}`,
-    }]);
+    this.addForLauncher(launcher, name, 'returned', result.summary);
     this.ctx.pushEvent({
       type: 'inference-request',
-      agentName: parentAgentName,
+      agentName: launcher ?? UNNAMED_LAUNCHER,
       reason: `subagent-completed:${name}`,
       source: 'subagent',
     });
   }
 
-  private deliverAsyncError(name: string, err: unknown, parentAgentName: string): void {
+  private deliverAsyncError(name: string, err: unknown, launcher: string | undefined): void {
     this.asyncHandles.delete(name);
     if (!this.ctx) return;
 
     const message = err instanceof Error ? err.message : String(err);
-    this.ctx.addMessage('user', [{
-      type: 'text',
-      text: `[Subagent '${name}' failed]\n\nError: ${message}`,
-    }]);
+    this.addForLauncher(launcher, name, 'failed', `Error: ${message}`);
     this.ctx.pushEvent({
       type: 'inference-request',
-      agentName: parentAgentName,
+      agentName: launcher ?? UNNAMED_LAUNCHER,
       reason: `subagent-failed:${name}`,
       source: 'subagent',
     });
+  }
+
+  /** An async run's result, in the window of the agent that launched it,
+   *  whose wake reads it there: a resident's is the residents' slot, a
+   *  fork's or a subagent's its own. Its line names a launcher that isn't
+   *  the primary (config.parentAgentName), so it reads right in whatever
+   *  window it ends up in, the residents' slot included. A result is work
+   *  done, so one whose launcher agent-framework no longer lists lands
+   *  in the residents' slot, as every async result did before, its line
+   *  adding that the launcher has ended, so no resident takes it for its own
+   *  (Agnes-1009, room-203 #197191, #197307). With no launcher named, it
+   *  lands there as before. A write that fails otherwise throws, as
+   *  before. */
+  private addForLauncher(launcher: string | undefined, name: string, outcome: 'returned' | 'failed', body: string): void {
+    const ctx = this.ctx!;
+    const listed = launcher === undefined || ctx.getAgents().some((agent) => agent.name === launcher);
+    const forWhom = launcher === undefined || launcher === this.config.parentAgentName
+      ? ''
+      : `, for '${launcher}'${listed ? '' : ', which has ended'}`;
+    const content = [{ type: 'text' as const, text: `[Subagent '${name}' ${outcome}${forWhom}]\n\n${body}` }];
+    if (launcher !== undefined && listed) ctx.addMessage('user', content, undefined, { forAgent: launcher });
+    else ctx.addMessage('user', content);
   }
 
   /** A spawn's or fork's failure as the agent reads it, in the call's answer
@@ -3073,13 +3116,16 @@ export class SubagentModule implements Module {
     name: string,
     type: 'spawn' | 'fork',
     promise: Promise<SubagentResult>,
-    parentAgentName: string,
+    /** The agent that launched it, as handleSpawn names it: undefined when
+     *  neither the call nor the module's config names one. */
+    launcher: string | undefined,
     autoDetachMs?: number,
     /** Rendered into both returns, so a sync caller gets the same launch
      *  description an async caller's receipt carries. */
     launch?: SubagentLaunch,
   ): Promise<ToolResult> {
     const launchText = launch ? describeSubagentLaunch(launch) : undefined;
+    const parentAgentName = launcher ?? UNNAMED_LAUNCHER;
     let detachResolve: ((value: 'detached') => void) | null = null;
     const detachPromise = new Promise<'detached'>(resolve => { detachResolve = resolve; });
 
@@ -3139,8 +3185,8 @@ export class SubagentModule implements Module {
       this.asyncHandles.set(name, { name, type, promise, parentAgentName });
       promise
         .then(
-          result => this.deliverAsyncResult(name, result, parentAgentName),
-          err => this.deliverAsyncError(name, err, parentAgentName),
+          result => this.deliverAsyncResult(name, result, launcher),
+          err => this.deliverAsyncError(name, err, launcher),
         )
         .catch(err => console.error(`[subagent] delivering ${name}'s result: ${err instanceof Error ? err.message : String(err)}`));
 

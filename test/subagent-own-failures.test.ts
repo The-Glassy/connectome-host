@@ -1232,6 +1232,17 @@ describe('a name means one subagent until its result has come back', () => {
     } finally { await h.cleanup(); }
   }, 20_000);
 
+  test('an async result with no launcher named, by the call or the config, lands as before', async () => {
+    const h = await harness({ parentAgentName: undefined, maxRetries: 0 }, async () => ran('done'));
+    const delivered = deliveries(h);
+    try {
+      const { callerAgentName: _caller, ...noCaller } = spawn('scout');
+      expect((await h.subagent.handleToolCall(noCaller as ToolCall)).success).toBe(true);
+      await until(() => delivered.requests.length > 0);
+      expect(delivered.messages.filter((m) => m.startsWith("[Subagent 'scout'"))).toEqual(["[Subagent 'scout' returned]\n\ndone"]);
+    } finally { await h.cleanup(); }
+  }, 20_000);
+
   for (const call of [spawn, fork]) {
     test(`a cancel of a new ${call.name} under a name doesn't reach a child the name's last run left running`, async () => {
       const isLead = (agentName: string) => agentName.startsWith(call === spawn ? 'spawn-lead-' : 'lead-d');
