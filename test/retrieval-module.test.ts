@@ -1335,6 +1335,9 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     // The later start's block is the turn's: the next start reuses it.
     expect(await h.mod.gatherContext(AGENT)).toEqual(kept);
     expect(h.calls).toHaveLength(2);
+    // The record holds only starts under way, so it doesn't grow with every
+    // subagent and fork name: a memory bound, which nothing else observes.
+    expect((h.mod as unknown as { latestStarts: Map<string, number> }).latestStarts.size).toBe(0);
   });
 
   test('when no lesson fits the cap, nothing is injected, and that is kept for the turn', async () => {
