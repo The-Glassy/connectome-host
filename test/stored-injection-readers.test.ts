@@ -6,7 +6,7 @@
  * that shows the transcript labels it as injected.
  */
 import { describe, expect, test } from 'bun:test';
-import { storedInjectionLabel, storedInjectionOf } from '../src/stored-injection.js';
+import { storedInjectionLabel } from '../src/stored-injection.js';
 import { namingSummary } from '../src/synesthete.js';
 import { historyInjectionLine } from '../src/tui.js';
 import { toWireEntry } from '../src/modules/web-ui-module.js';
@@ -21,21 +21,17 @@ const lessonsRow = (agent = 'alice') => ({
 });
 
 describe('the mark', () => {
-  test('reads agent-framework\'s mark, and a partial one as no mark, as the compile does', () => {
-    const whole = { agent: 'alice', namespace: 'retrieval', contentHash: 'h1' };
-    expect(storedInjectionOf({ contextInjection: whole })).toEqual(whole);
-    for (const metadata of [undefined, null, 'x', {}, { contextInjection: true }, { contextInjection: null },
-      { contextInjection: { namespace: 'retrieval', contentHash: 'h1' } },
-      { contextInjection: { agent: 'alice', contentHash: 'h1' } },
-      { contextInjection: { agent: 'alice', namespace: 'retrieval' } },
-      { contextInjection: { ...whole, agent: 7 } },
-      { system: true, kind: 'clock' }]) {
-      expect(storedInjectionOf(metadata)).toBeUndefined();
-    }
+  test('a partial mark is no mark to the host\'s readers, as it\'s none to the compile', () => {
+    // agent-framework's storedInjectionMarkOf, which every reader here goes
+    // through, wants all three strings; its own tests pin the rule.
+    const partial = { ...lessonsRow(), metadata: { contextInjection: { agent: 'alice', namespace: 'retrieval' } } };
+    expect(toWireEntry(partial, 4).participant).toBe('assistant');
+    expect(historyInjectionLine(partial)).toBeUndefined();
+    expect(namingSummary([partial])).toContain('Retrieved Knowledge');
   });
 
   test('its label names the namespace and the agent', () => {
-    expect(storedInjectionLabel({ agent: 'alice', namespace: 'retrieval', contentHash: 'h1' })).toBe('[retrieval, injected for alice]');
+    expect(storedInjectionLabel({ agent: 'alice', namespace: 'retrieval' })).toBe('[retrieval, injected for alice]');
   });
 });
 

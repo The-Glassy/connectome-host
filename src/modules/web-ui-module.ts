@@ -40,7 +40,8 @@ import type {
 import { WorkspaceReadError } from '@animalabs/agent-framework';
 import { unknownToolResult } from './unknown-tool.js';
 import { workspaceReadFields } from '../workspace-read-result.js';
-import { storedInjectionLabel, storedInjectionOf } from '../stored-injection.js';
+import { storedInjectionMarkOf } from '@animalabs/agent-framework';
+import { storedInjectionLabel } from '../stored-injection.js';
 import type { ServerWebSocket } from 'bun';
 import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
@@ -3728,7 +3729,7 @@ export function toWireEntry(
   // A stored injection (stored-injection.ts), such as a lessons block, is a
   // labelled system row: as any participant but user, system and tool it
   // would show as the agent's own message.
-  const injection = storedInjectionOf(msg.metadata);
+  const injection = storedInjectionMarkOf(msg.metadata);
   if (injection) {
     const label = storedInjectionLabel(injection);
     blocks.unshift({ kind: 'text', text: label });

@@ -32,13 +32,12 @@ import type {
   ContextManager,
 } from '@animalabs/agent-framework';
 import type { Agent, AgentFramework } from '@animalabs/agent-framework';
-import { KnowledgeStrategy, formatZonedDateTime, resolveTimeZone } from '@animalabs/agent-framework';
+import { KnowledgeStrategy, formatZonedDateTime, resolveTimeZone, storedInjectionMarkOf } from '@animalabs/agent-framework';
 import { isToolResultContent, isToolUseContent } from '@animalabs/membrane';
 import type { ContentBlock } from '@animalabs/membrane';
 import { emptyUsage, foldUsageSample, type UsageCounts, type UsageSample } from '../state/stream-usage.js';
 import { traceError } from '../state/turn-trace.js';
 import { shown } from './shown.js';
-import { storedInjectionOf } from '../stored-injection.js';
 import { unknownToolResult } from './unknown-tool.js';
 
 // ---------------------------------------------------------------------------
@@ -3756,7 +3755,7 @@ export class SubagentModule implements Module {
       for (let i = messages.length - 1; i >= 0; i--) {
         const msg = messages[i];
         if (msg.participant === 'user' || msg.participant === 'User') continue;
-        if (storedInjectionOf(msg.metadata) !== undefined) continue;
+        if (storedInjectionMarkOf(msg.metadata) !== undefined) continue;
         const texts = msg.content
           .filter((b: ContentBlock) => b.type === 'text')
           .map((b: ContentBlock) => (b as { type: 'text'; text: string }).text);

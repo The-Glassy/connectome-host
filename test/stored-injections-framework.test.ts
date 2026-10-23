@@ -11,10 +11,9 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AgentFramework, type Module, type ModuleContext, type ProcessEvent } from '@animalabs/agent-framework';
+import { AgentFramework, storedInjectionMarkOf, type Module, type ModuleContext, type ProcessEvent } from '@animalabs/agent-framework';
 import { Membrane, MockAdapter, type NormalizedRequest } from '@animalabs/membrane';
 import { RetrievalModule } from '../src/modules/retrieval-module.js';
-import { storedInjectionOf } from '../src/stored-injection.js';
 import { toWireEntry } from '../src/modules/web-ui-module.js';
 import type { Lesson } from '../src/modules/lessons-module.js';
 
@@ -70,7 +69,7 @@ async function make() {
     await framework.runUntilIdle();
   };
   const window = () => framework.getAgent('prime')!.getContextManager().getAllMessages();
-  const lessonRows = () => window().filter((m) => storedInjectionOf(m.metadata)?.namespace === 'retrieval');
+  const lessonRows = () => window().filter((m) => storedInjectionMarkOf(m.metadata)?.namespace === 'retrieval');
   const textOf = (m: { content: unknown }) =>
     (m.content as Array<{ type: string; text?: string }>).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('');
   const replies = () => window().filter((m) => m.participant === 'prime').length;
@@ -96,7 +95,7 @@ describe('retrieval\'s block, stored by the framework', () => {
     const x = await make();
     await x.say('What is the memory detail?');
     const first = x.lessonRows()[0]!;
-    expect(storedInjectionOf(first.metadata)).toMatchObject({ agent: 'prime', namespace: 'retrieval' });
+    expect(storedInjectionMarkOf(first.metadata)).toMatchObject({ agent: 'prime', namespace: 'retrieval' });
     expect(x.textOf(first)).toStartWith('## Retrieved Knowledge, for the message beginning "What is the memory detail?"\n');
     // It's stored where the compile placed it: after the turn's message.
     const rows = x.window();

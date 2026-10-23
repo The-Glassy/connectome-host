@@ -32,7 +32,7 @@ import { unknownToolResult } from './unknown-tool.js';
 import type { Membrane, NormalizedRequest } from '@animalabs/membrane';
 import type { ContextInjection } from '@animalabs/context-manager';
 import type { LessonsModule, Lesson } from './lessons-module.js';
-import { storedInjectionOf } from '../stored-injection.js';
+import { storedInjectionMarkOf } from '@animalabs/agent-framework';
 import {
   RetrievalTraceStore,
   type RetrievalTraceListOptions,
@@ -599,7 +599,7 @@ export class RetrievalModule implements Module {
     // stored rows the residents are shown, injections left out.
     const { messages } = this.ctx.queryMessages({});
     const shown = messages.filter(m =>
-      m.held !== true && m.heldFromResidents !== true && storedInjectionOf(m.metadata) === undefined);
+      m.held !== true && m.heldFromResidents !== true && storedInjectionMarkOf(m.metadata) === undefined);
     if (shown.length === 0) return null;
 
     // Take the last 10 of them for context.

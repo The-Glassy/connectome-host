@@ -49,7 +49,8 @@ import { formatQuotaReadout } from './quota-meter.js';
 import { takeRecipeWarnings } from './recipe.js';
 import { bunFloorNotice } from './bun-floor-check.js';
 import { effectiveContextBudgetTokens } from './framework-agent-config.js';
-import { storedInjectionLabel, storedInjectionOf } from './stored-injection.js';
+import { storedInjectionMarkOf } from '@animalabs/agent-framework';
+import { storedInjectionLabel } from './stored-injection.js';
 
 /** Format a token count compactly: 1.2M / 3.5k / 42. */
 export function fmtTokens(n: number): string {
@@ -128,7 +129,7 @@ function headerMessage(message: string): string {
 export function historyInjectionLine(
   msg: { content: ReadonlyArray<{ type: string; text?: unknown }>; metadata?: unknown },
 ): string | undefined {
-  const mark = storedInjectionOf(msg.metadata);
+  const mark = storedInjectionMarkOf(msg.metadata);
   if (!mark) return undefined;
   const text = msg.content
     .filter((b) => b.type === 'text' && typeof b.text === 'string')

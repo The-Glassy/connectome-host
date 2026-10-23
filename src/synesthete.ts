@@ -6,7 +6,7 @@
  */
 
 import type { Membrane } from '@animalabs/membrane';
-import { storedInjectionOf } from './stored-injection.js';
+import { storedInjectionMarkOf } from '@animalabs/agent-framework';
 
 const DEFAULT_EXAMPLES = [
   'Context Window Budgeting',
@@ -39,7 +39,7 @@ export function namingSummary(
   messages: ReadonlyArray<{ participant: string; content: ReadonlyArray<{ type: string; text?: unknown }>; metadata?: unknown }>,
 ): string {
   return messages
-    .filter(m => m.content.some(b => b.type === 'text') && storedInjectionOf(m.metadata) === undefined)
+    .filter(m => m.content.some(b => b.type === 'text') && storedInjectionMarkOf(m.metadata) === undefined)
     .slice(0, 6)
     .map(m => {
       const text = m.content

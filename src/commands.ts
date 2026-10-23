@@ -35,7 +35,7 @@ import type { CredentialActionId, CredentialState } from './credential-state.js'
 import { readMcplServersFile, saveMcplServers, DEFAULT_CONFIG_PATH, DEFAULT_AGENT_OVERLAY_PATH } from './mcpl-config.js';
 import { buildBugReport, composedServerConfigs, gatherBugReportFacts, runtimeMode, type LiveSetup } from './bug-report.js';
 import { parseCommand } from './command-name.js';
-import { storedInjectionOf } from './stored-injection.js';
+import { storedInjectionMarkOf } from '@animalabs/agent-framework';
 import type { Line } from './output-line.js';
 import { fmtTokens } from './tui.js';
 import { formatToolClassRows, readToolClasses } from './tool-lifecycle-config.js';
@@ -999,7 +999,7 @@ function handleUndo(app: AppContext): CommandResult {
   // the undo point steps back past those just before the message, so the
   // branch ends where it did before the turn, with no block of it left.
   let undoPoint: string | undefined;
-  const injected = (i: number): boolean => storedInjectionOf(messages[i]!.metadata) !== undefined;
+  const injected = (i: number): boolean => storedInjectionMarkOf(messages[i]!.metadata) !== undefined;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i]!.participant !== 'user' && !injected(i)) {
       // Found an agent message — undo to the message before it
