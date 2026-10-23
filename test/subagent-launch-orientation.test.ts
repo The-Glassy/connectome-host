@@ -469,6 +469,31 @@ describe('fork orientation', () => {
     }
   });
 
+  // context-manager #155 part 5: agent-framework stores the parent's
+  // injections, such as its lessons block, in its window. They're the
+  // parent's context, not the conversation, and copied as messages they'd
+  // lose their mark and read as the fork's own.
+  test("a fork's seed leaves the parent's stored injections out", async () => {
+    const h = await makeHarness({});
+    try {
+      const parentCm = h.framework.getAgent('parent')!.getContextManager();
+      parentCm.addMessage('user', [{ type: 'text', text: 'BEFORE_THE_CALL' }]);
+      parentCm.addMessage('system_context:retrieval', [{ type: 'text', text: 'PARENT_LESSONS' }], {
+        system: true, kind: 'context-injection',
+        contextInjection: { agent: 'parent', namespace: 'retrieval', contentHash: 'h1', part: 0, parts: 1 },
+      } as never);
+      const input = { name: 'blind', task: 'look around' };
+      const res = await h.subagent.handleToolCall({ name: 'fork', input, callerAgentName: 'parent' } as unknown as ToolCall);
+      expect(res.success).toBe(true);
+      await h.asyncPromise('blind');
+      const run = h.runs[0]!;
+      expect(run.allText).toContain('BEFORE_THE_CALL');
+      expect(run.allText).not.toContain('PARENT_LESSONS');
+    } finally {
+      await h.cleanup();
+    }
+  });
+
   test("a parent whose tools can't be read isn't compared, and the stream is told so", async () => {
     const h = await makeHarness({});
     try {

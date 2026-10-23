@@ -10,7 +10,7 @@
  * opt-in modules (subagents/lessons/retrieval).
  */
 import { describe, expect, test } from 'bun:test';
-import { buildFrameworkStrategy, standardKvUnifiedConfig } from '../src/framework-strategy.js';
+import { buildFrameworkStrategy, standardKvUnifiedConfig, strategyMessageCap } from '../src/framework-strategy.js';
 import { buildFrameworkAgentConfig } from '../src/framework-agent-config.js';
 import { DEFAULT_RECIPE, validateRecipe } from '../src/recipe.js';
 
@@ -288,6 +288,20 @@ describe('carrierPolicy passthrough', () => {
       expect(() => recipe({ name: 'Mira', strategy: { type: 'autobiographical', carrierPolicy: bad } }))
         .toThrow(/carrierPolicy/);
     }
+  });
+});
+
+// What a module injects is stored as a message (context-manager #155 part 5),
+// so retrieval fits its block under the cap the strategy will cut at.
+describe('the per-message cap retrieval fits under', () => {
+  test('is the one the strategy applies, 10,000 unless the recipe sets it, and none for passthrough', () => {
+    const autobiographical = recipe();
+    expect(strategyMessageCap(autobiographical)).toBe(10_000);
+    expect(configView(buildFrameworkStrategy(autobiographical, 'some-model', 'UTC')).maxMessageTokens).toBe(10_000);
+    const set = recipe({ strategy: { type: 'frontdesk', maxMessageTokens: 4_000 } });
+    expect(strategyMessageCap(set)).toBe(4_000);
+    expect(configView(buildFrameworkStrategy(set, 'some-model', 'UTC')).maxMessageTokens).toBe(4_000);
+    expect(strategyMessageCap(recipe({ strategy: { type: 'passthrough' } }))).toBeUndefined();
   });
 });
 

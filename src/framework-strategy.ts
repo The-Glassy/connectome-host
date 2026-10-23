@@ -120,6 +120,22 @@ export function standardKvUnifiedConfig(recipe: Recipe, model: string): RecipeKv
   };
 }
 
+/**
+ * The per-message token cap the recipe's strategy applies, where it applies
+ * one: the autobiographical and frontdesk strategies cut a message at
+ * `maxMessageTokens`, 10,000 unless the recipe sets it; passthrough cuts
+ * none; an extension's strategy is told the recipe's value, if any. What a
+ * module injects is stored as a message (context-manager #155 part 5), so
+ * retrieval fits its block under this.
+ */
+export function strategyMessageCap(recipe: Recipe): number | undefined {
+  const strategyConfig = recipe.agent.strategy;
+  const strategyType = strategyConfig?.type ?? 'autobiographical';
+  if (strategyType === 'passthrough') return undefined;
+  if (!isBuiltinStrategyType(strategyType)) return strategyConfig?.maxMessageTokens;
+  return strategyConfig?.maxMessageTokens ?? 10000;
+}
+
 export function buildFrameworkStrategy(
   recipe: Recipe,
   model: string,
@@ -156,7 +172,7 @@ export function buildFrameworkStrategy(
       ? { compressionMaxTokens: strategyConfig.compressionMaxTokens }
       : {}),
     autoTickOnNewMessage: true,
-    maxMessageTokens: strategyConfig?.maxMessageTokens ?? 10000,
+    maxMessageTokens: strategyMessageCap(recipe),
     ...(strategyType === 'frontdesk' ? { timeZone } : {}),
   };
 

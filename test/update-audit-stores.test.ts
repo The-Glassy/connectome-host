@@ -112,15 +112,21 @@ async function makeRepairStore(path: string, namespace = 'agents/agent'): Promis
 /** A store of 120 messages in `agents/agent` whose summary L2-x merges an L1
  *  over 40..49 with one over 60..69, and no record owns 50..59 (Effie-2289's
  *  case, room-203 #164796). A start chunks that run before its topology
- *  check, which gives L2-x holes, unless the messages are ones a tune-out
- *  diverted (`tunedOut`), which a start's view leaves out. The seed opens with
- *  `auditOnly` only so that adding the messages makes no chunk records. */
-async function makeSpanStore(path: string, tunedOut: boolean): Promise<void> {
+ *  check, which gives L2-x holes, unless the messages are ones a start's view
+ *  leaves out: ones a tune-out diverted (`run: 'tuned-out'`), or another
+ *  agent's stored context injections (`run: 'injected'`, context-manager #155
+ *  part 5). The seed opens with `auditOnly` only so that adding the messages
+ *  makes no chunk records. */
+async function makeSpanStore(path: string, run?: 'tuned-out' | 'injected'): Promise<void> {
   const seed = new AutobiographicalStrategy({ adaptiveResolution: true, hierarchical: true, autoTickOnNewMessage: false, auditOnly: true });
   const manager = await ContextManager.open({ path, namespace: 'agents/agent', strategy: seed, membrane: MODEL });
   const ids: string[] = [];
   for (let i = 0; i < 120; i++) {
-    const diverted = tunedOut && i >= 50 && i <= 59 ? { tuneOut: { epochId: 'test' } } : undefined;
+    const inRun = i >= 50 && i <= 59;
+    const diverted = inRun && run === 'tuned-out' ? { tuneOut: { epochId: 'test' } }
+      : inRun && run === 'injected'
+        ? { system: true, kind: 'context-injection', contextInjection: { agent: 'other', namespace: 'retrieval', contentHash: `h${i}`, part: 0, parts: 1 } }
+        : undefined;
     ids.push(manager.addMessage(i % 2 ? 'agent' : 'user', [{ type: 'text', text: `message ${i} ` + 'word '.repeat(60) }], diverted));
   }
   const summary = (id: string, level: number, sourceIds: string[], first: string, last: string, mergedInto?: string) => ({
@@ -462,8 +468,9 @@ describe('the store audit', () => {
     const cases: Record<string, { make: (store: string) => Promise<void>; subconscious?: true; off?: true }> = {
       crossed: { make: (store) => makeStore(store, 'agents/agent', true) },
       plain: { make: (store) => makeStore(store, 'agents/agent', false) },
-      'unowned run inside a span': { make: (store) => makeSpanStore(store, false) },
-      'tuned-out run inside a span': { make: (store) => makeSpanStore(store, true) },
+      'unowned run inside a span': { make: (store) => makeSpanStore(store) },
+      'tuned-out run inside a span': { make: (store) => makeSpanStore(store, 'tuned-out') },
+      "another agent's stored injections inside a span": { make: (store) => makeSpanStore(store, 'injected') },
       'a subconscious that opens': { make: (store) => makeStore(store, 'agents/agent', false), subconscious: true },
       "a subconscious whose context a start can't read": { make: makeBrokenSubconsciousStore, subconscious: true },
       'the same store, its subconscious off': { make: makeBrokenSubconsciousStore, off: true },
@@ -507,6 +514,7 @@ describe('the store audit', () => {
       plain: 'opens',
       'unowned run inside a span': 'refused',
       'tuned-out run inside a span': 'opens',
+      "another agent's stored injections inside a span": 'opens',
       'a subconscious that opens': 'opens',
       "a subconscious whose context a start can't read": 'refused',
       'the same store, its subconscious off': 'opens',

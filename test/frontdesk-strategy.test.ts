@@ -248,6 +248,22 @@ describe('server-attributed messages (zulip-mcp `attributed` stamp)', () => {
     expect(state.has(question.id)).toBe(true);
   });
 
+  // context-manager #155 part 5: agent-framework stores a lessons block as a
+  // row of the agent's window, marked as a stored injection. It's no one's
+  // question, whatever it holds.
+  test('salience passes over a stored injection, even one holding a "?"', () => {
+    const s = makeStrategy();
+    const lessons = msg('system_context:retrieval', '## Retrieved Knowledge\n- [90%] Which env? Staging. (tags: env)', {
+      system: true, kind: 'context-injection',
+      contextInjection: { agent: 'Claude', namespace: 'retrieval', contentHash: 'h1', part: 0, parts: 1 },
+    });
+    const question = attributed('which env do I use?');
+    s.pub_updateSalience(makeStore([lessons, question]));
+    const state = (s as unknown as { salientSourceIds: Set<string> }).salientSourceIds;
+    expect(state.has(lessons.id)).toBe(false);
+    expect(state.has(question.id)).toBe(true);
+  });
+
   test('the compression instruction quotes the open question without the prefix', () => {
     const s = makeStrategy();
     const q = attributed('where are the packet retry constants defined?');

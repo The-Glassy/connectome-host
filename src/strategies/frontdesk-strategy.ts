@@ -9,7 +9,7 @@ import type {
   StoredMessage,
 } from '@animalabs/context-manager';
 import type { ContentBlock } from '@animalabs/membrane';
-import { formatZonedTime, resolveTimeZone } from '@animalabs/agent-framework';
+import { formatZonedTime, resolveTimeZone, storedInjectionMarkOf } from '@animalabs/agent-framework';
 
 export type FrontdeskStrategyOptions = Partial<AutobiographicalConfig> & { timeZone?: string };
 
@@ -279,7 +279,9 @@ export class FrontdeskStrategy extends AutobiographicalStrategy {
   /**
    * Recompute which user messages are "unanswered questions or mentions":
    * a user message that contains `?` or an @mention and has no assistant
-   * message within the following WINDOW messages.
+   * message within the following WINDOW messages. A stored context
+   * injection, such as a lessons block, is no one's message, so it's never
+   * taken for a question.
    */
   protected updateSalience(store: MessageStoreView): void {
     const messages = store.getAll();
@@ -290,6 +292,7 @@ export class FrontdeskStrategy extends AutobiographicalStrategy {
     for (let i = 0; i < messages.length; i++) {
       const m = messages[i];
       if (m.participant === assistant) continue;
+      if (storedInjectionMarkOf(m.metadata) !== undefined) continue;
       if (!this.messageIsQuestionOrMention(m)) continue;
 
       let answered = false;

@@ -1,9 +1,12 @@
 /**
  * context-manager #155 part 5: agent-framework stores the fleet status where
- * the compile placed it, and stores it again only when its text changes. So
- * the status is built from state changes alone, each subagent's start and
- * end as clock times in the recipe's zone, and the same state gives the same
- * text at every start.
+ * the compile placed it, and stores it again whenever its text changes. So
+ * the status is built from state changes alone: the running subagents, each
+ * with its start as a clock time in the recipe's zone, under "as of" the
+ * latest start or end, so the same state gives the same text at every start.
+ * A finished run leaves the list, having reported in the conversation, which
+ * keeps each stored copy as short as the concurrency limit (Agnes-1009,
+ * room-203 #196238).
  */
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { SubagentModule, type ActiveSubagent } from '../src/modules/subagent-module.js';
@@ -37,10 +40,10 @@ describe('the fleet status', () => {
     const first = await f.status();
     setSystemTime(new Date(T0 + 95_000));
     expect(await f.status()).toBe(first);
-    expect(first).toBe('[Fleet Status, as of 14:05:09 UTC]\n  scout [spawn] running started 14:05:09 parent:resident "task for scout"');
+    expect(first).toBe('[Fleet Status, as of 14:05:09 UTC]\n  scout [spawn] running since 14:05:09 parent:resident "task for scout"');
   });
 
-  test('an end changes it: the end\'s time, the calls of a completed run, and the "as of"', async () => {
+  test('a run that ends leaves the list, and its end moves the "as of"', async () => {
     const f = fleet();
     const scout = f.add('scout');
     f.add('miner', { startedAt: T0 + 60_000 });
@@ -50,27 +53,42 @@ describe('the fleet status', () => {
     scout.toolCallsCount = 7;
     const after = await f.status();
     expect(after).not.toBe(before);
-    expect(after).toBe(
-      '[Fleet Status, as of 14:07:14 UTC]\n'
-      + '  scout [spawn] completed started 14:05:09 ended 14:07:14 7calls parent:resident "task for scout"\n'
-      + '  miner [spawn] running started 14:06:09 parent:resident "task for miner"',
-    );
+    expect(after).toBe('[Fleet Status, as of 14:07:14 UTC]\n  miner [spawn] running since 14:06:09 parent:resident "task for miner"');
   });
 
-  test('a failed or stopped run shows its end, and no call count, which was never taken', async () => {
+  test('failed and stopped runs leave the list as a completed one does', async () => {
     const f = fleet();
     f.add('scout', { status: 'failed', completedAt: T0 + 3_000 });
     f.add('miner', { status: 'cancelled', completedAt: T0 + 4_000 });
-    const text = await f.status();
-    expect(text).toContain('  scout [spawn] failed started 14:05:09 ended 14:05:12 parent:resident');
-    expect(text).toContain('  miner [spawn] cancelled started 14:05:09 ended 14:05:13 parent:resident');
-    expect(text).not.toContain('calls');
+    f.add('clerk');
+    expect(await f.status()).toBe('[Fleet Status, as of 14:05:13 UTC]\n  clerk [spawn] running since 14:05:09 parent:resident "task for clerk"');
+  });
+
+  test('when the last run ends, the status says none is running, so no copy listing it is the newest', async () => {
+    const f = fleet();
+    const scout = f.add('scout');
+    scout.status = 'completed';
+    scout.completedAt = T0 + 30_000;
+    expect(await f.status()).toBe('[Fleet Status, as of 14:05:39 UTC]\n  (none running)');
+  });
+
+  test('a fleet that never started a subagent has no status at all', async () => {
+    expect(await fleet().status()).toBeUndefined();
+  });
+
+  test('however many runs have ended, the status lists only the running ones', async () => {
+    const f = fleet();
+    for (let i = 0; i < 300; i++) f.add(`done-${i}`, { status: 'completed', completedAt: T0 + i * 1000 });
+    f.add('scout', { startedAt: T0 + 400_000 });
+    const text = (await f.status())!;
+    expect(text.split('\n')).toHaveLength(2);
+    expect(text).toContain('scout [spawn] running since 14:11:49');
   });
 
   test('its clock times read in the recipe\'s zone, which the heading names', async () => {
     const f = fleet('Europe/Berlin');
     f.add('scout');
-    expect(await f.status()).toStartWith('[Fleet Status, as of 16:05:09 Europe/Berlin]\n  scout [spawn] running started 16:05:09 ');
+    expect(await f.status()).toStartWith('[Fleet Status, as of 16:05:09 Europe/Berlin]\n  scout [spawn] running since 16:05:09 ');
   });
 
   test('with only async handles pending, it has no time to be "as of"', async () => {

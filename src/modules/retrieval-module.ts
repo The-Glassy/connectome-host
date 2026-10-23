@@ -97,6 +97,10 @@ export interface RetrievalModuleConfig {
   retrievalReasoning?: RetrievalReasoningConfig;
   /** Max lessons to inject (default: 5) */
   maxInjectedLessons?: number;
+  /** The per-message token cap of the agents' strategy (the recipe's
+   *  `maxMessageTokens`), which the block is fitted under (fitUnderCap).
+   *  Absent, the block isn't fitted. */
+  maxMessageTokens?: number;
   /** Minimum lesson confidence for injection (default: 0.3) */
   minConfidence?: number;
 }
@@ -137,10 +141,11 @@ const SELF_WAKE_SOURCE = 'gate:self-wake';
 
 /**
  * The message a turn answers: the newest of the rows retrieval reads
- * (getRecentContext: those the residents are shown, stored injections left
- * out) that someone other than the agent wrote to it. Passed over, since
- * none of them is anyone's message:
+ * (getRecentContext: those the agent is shown, stored injections left out)
+ * that someone other than the agent wrote to it. Passed over, since none of
+ * them is anyone's message:
  * - the agent's own replies (participant `agentName`);
+ * - a row under participant `system`, as this host's subscription-gc note;
  * - a row with a tool call or its result;
  * - a row marked `metadata.system`, as agent-framework marks its notices
  *   (clock rows, autoContinue's `[continue]`, a turn's interruption or
@@ -149,9 +154,10 @@ const SELF_WAKE_SOURCE = 'gate:self-wake';
  *
  * A batched wake's `[Gate: …]` line counts: where it doesn't point at
  * messages already shown, it carries the events it reports. Another agent's
- * message counts too, as in a store the residents share, and so do the
- * notes this host stores unmarked: the session's start time, a self-restart's
- * note, a `[voice]` interruption.
+ * message counts too, as in a store the residents share, and so do a
+ * script's wake and the notes this host stores unmarked: the session's
+ * start time, a self-restart's note, a `[voice]` interruption, a subagent's
+ * result.
  *
  * Its key is the row's id, so a later start of the same turn sees the same
  * key whatever the framework stored since. (A message stored in shards is
@@ -176,7 +182,7 @@ function openingMessageOf(shown: readonly ShownRow[], agentName: string): Openin
 }
 
 function isAMessageTo(row: ShownRow, agentName: string): boolean {
-  if (row.participant === agentName) return false;
+  if (row.participant === agentName || row.participant === 'system') return false;
   if (row.content.some(b => b.type === 'tool_use' || b.type === 'tool_result')) return false;
   const metadata = row.metadata as { system?: unknown; source?: unknown } | undefined;
   return metadata?.system !== true && metadata?.source !== SELF_WAKE_SOURCE;
@@ -193,6 +199,42 @@ function textOfMessage(shown: readonly ShownRow[], row: ShownRow): string {
   const group = row.bodyGroupId;
   if (typeof group !== 'string' || group === '') return textOf(row);
   return shown.filter(r => r.bodyGroupId === group).map(textOf).join('');
+}
+
+/** A lesson's line in the block. */
+function lessonLine(l: Lesson): string {
+  return `- [${(l.confidence * 100).toFixed(0)}%] ${l.content} (tags: ${l.tags.join(', ')})`;
+}
+
+/**
+ * The block's text, fitted under the per-message cap of the agents' strategy.
+ * agent-framework stores the block as a message, which the strategy cuts at
+ * `maxMessageTokens` mid-text, where a block it placed went whole. So the
+ * block keeps whole lessons, most relevant first, while they fit, leaves out
+ * any that doesn't, a single lesson larger than the cap included, and says
+ * how many it left out. It counts as the strategy's own estimate does:
+ * a text block's characters / 4, rounded up (context-manager's
+ * `estimateTextOnlyTokens`, which decides whether its cap cuts). With no cap
+ * given, every lesson is kept.
+ */
+function fitUnderCap(heading: string, lessons: Lesson[], cap: number | undefined): { text: string; lessons: Lesson[] } {
+  const compose = (kept: string[], leftOut: number): string => [
+    heading,
+    ...kept,
+    ...(leftOut > 0 ? [`(${leftOut} more relevant lesson${leftOut === 1 ? '' : 's'} left out, to keep this message under its size limit)`] : []),
+  ].join('\n');
+  const fits = (text: string): boolean => cap === undefined || Math.ceil(text.length / 4) <= cap;
+  const kept: Lesson[] = [];
+  const lines: string[] = [];
+  for (const lesson of lessons) {
+    const line = lessonLine(lesson);
+    // Room for the note at its longest, so the count it ends up saying fits.
+    if (fits(compose([...lines, line], lessons.length))) {
+      kept.push(lesson);
+      lines.push(line);
+    }
+  }
+  return { text: compose(lines, lessons.length - kept.length), lessons: kept };
 }
 
 /** The start of a message's text on one line, or undefined when it has none. */
@@ -266,7 +308,7 @@ export class RetrievalModule implements Module {
   }
 
   /**
-   * Run the 3-step retrieval pipeline before each inference.
+   * Run the 3-step retrieval pipeline at a start, or reuse the turn's result.
    */
   async gatherContext(agentName: string): Promise<ContextInjection[]> {
     const trace = this.beginTrace(agentName);
@@ -309,8 +351,12 @@ export class RetrievalModule implements Module {
       trace?.setContext(this.hashContext(recentMessages), recentMessages, recent.messageCount, recent.messageIds);
       // The turn's block, where this start sees the opening message it was
       // found for: an empty one too, so a restart doesn't retrieve again.
+      // A use makes the agent's entry the newest, so the bound drops the
+      // least recently used.
       const kept = this.turnBlocks.get(agentName);
       if (opening && kept && kept.key === opening.key) {
+        this.turnBlocks.delete(agentName);
+        this.turnBlocks.set(agentName, kept);
         trace?.recordCacheHit(kept.sourceTraceId, kept.lessonIds, kept.lessons, kept.injections);
         trace?.finish('cache-hit');
         return kept.injections;
@@ -323,8 +369,10 @@ export class RetrievalModule implements Module {
     try {
       // Step 1: Flag concepts
       const concepts = await this.flagConcepts(recentMessages, trace);
-      if (concepts.length === 0) {
-        this.keepTurnBlock(agentName, opening, [], []);
+      if (concepts === null || concepts.length === 0) {
+        // A reply that didn't parse is a failed retrieval, which keeps
+        // nothing, so the turn's next start asks again.
+        if (concepts !== null) this.keepTurnBlock(agentName, opening, [], []);
         trace?.finish('no-concepts');
         return [];
       }
@@ -352,15 +400,17 @@ export class RetrievalModule implements Module {
         return [];
       }
 
-      const text = injected
-        .map(l => `- [${(l.confidence * 100).toFixed(0)}%] ${l.content} (tags: ${l.tags.join(', ')})`)
-        .join('\n');
-
       // The heading names the message the lessons were found for, so a block
       // agent-framework stores reads right as history, wherever it lands.
       const heading = opening?.excerpt !== undefined
         ? `## Retrieved Knowledge, for the message beginning "${opening.excerpt}"`
         : '## Retrieved Knowledge';
+      const fitted = fitUnderCap(heading, injected, this.config.maxMessageTokens);
+      if (fitted.lessons.length === 0) {
+        this.keepTurnBlock(agentName, opening, [], []);
+        trace?.finish('too-large');
+        return [];
+      }
       const injections: ContextInjection[] = [{
         namespace: 'retrieval',
         // 'afterUser', NOT 'system': retrieval content changes with each
@@ -368,11 +418,11 @@ export class RetrievalModule implements Module {
         // very front of the KV cache and invalidates the entire prefix every
         // turn. Tail injection keeps the stable prefix cached.
         position: 'afterUser',
-        content: [{ type: 'text', text: `${heading}\n${text}` }],
+        content: [{ type: 'text', text: fitted.text }],
       }];
 
-      this.keepTurnBlock(agentName, opening, injections, this.safeLessonSnapshots(injected), trace?.id);
-      trace?.recordInjection(injected, injections);
+      this.keepTurnBlock(agentName, opening, injections, this.safeLessonSnapshots(fitted.lessons), trace?.id);
+      trace?.recordInjection(fitted.lessons, injections);
       trace?.finish('injected');
       return injections;
     } catch (err) {
@@ -397,11 +447,13 @@ export class RetrievalModule implements Module {
 
   /**
    * Step 1: Use the configured retrieval model to identify concepts that might benefit from background knowledge.
+   * Null when its reply isn't an array, bare or in a wrapper: a failed step,
+   * not an answer of no concepts.
    */
   private async flagConcepts(
     recentContext: string,
     trace?: RetrievalTraceRun,
-  ): Promise<string[]> {
+  ): Promise<string[] | null> {
     const model = this.config.retrievalModel ?? 'claude-haiku-4-5-20251001';
     const providerParams = this.retrievalProviderParams();
     const input = `Recent conversation:\n${recentContext}`;
@@ -457,7 +509,7 @@ export class RetrievalModule implements Module {
       }
       trace?.finishConceptExtraction(text, [], 'invalid', response.content);
     }
-    return [];
+    return null;
   }
 
   /**
@@ -563,7 +615,11 @@ export class RetrievalModule implements Module {
 
   /** Keep a turn's result for the agent's later starts that see the same
    *  opening message. A start whose opening message couldn't be read keeps
-   *  nothing, so the agent's next start retrieves again. */
+   *  nothing, so the agent's next start retrieves again. The result was
+   *  found across the pipeline's model calls, and meanwhile a newer turn can
+   *  have begun and kept its own, as when the framework's gather timeout
+   *  left this run behind. So it's kept only while its opening message is
+   *  still the agent's, read again now. */
   private keepTurnBlock(
     agentName: string,
     opening: OpeningMessage | undefined,
@@ -572,6 +628,13 @@ export class RetrievalModule implements Module {
     sourceTraceId?: number,
   ): void {
     if (!opening) return;
+    let current: OpeningMessage | undefined;
+    try {
+      current = this.getRecentContext(agentName)?.opening;
+    } catch {
+      return;
+    }
+    if (!current || current.key !== opening.key) return;
     this.turnBlocks.delete(agentName);
     this.turnBlocks.set(agentName, {
       key: opening.key,
@@ -589,15 +652,21 @@ export class RetrievalModule implements Module {
   private getRecentContext(agentName: string): RecentRetrievalContext | null {
     if (!this.ctx) return null;
 
-    // Get the last few messages of the conversation the residents see. A row
-    // marked `held: true` is a write the framework still holds: it reaches the
-    // agent at a later boundary, not in the request these lessons go into. A
-    // row marked `heldFromResidents` arrived in a tuned-out channel, and no
-    // resident is shown it. A stored injection (stored-injection.ts) is no
-    // one's message, and a past lessons block among them would have the
-    // concept step read its own earlier output. So the window keeps to the
-    // stored rows the residents are shown, injections left out.
-    const { messages } = this.ctx.queryMessages({});
+    // Get the last few messages of the gathering agent's own window: a
+    // resident's is the slot the residents share, a fork's or a subagent's
+    // its own, so its lessons and its key come from the conversation it's
+    // in. A subconscious's is its own store, its summaries and tool rounds,
+    // which holds no message of anyone else's: its block is found once per
+    // process from those, and kept for the session (Agnes-1009, room-203
+    // #196733). A row marked `held: true` is a write the framework still
+    // holds: it reaches the agent at a later boundary, not in the request
+    // these lessons go into. A row marked `heldFromResidents` arrived in a
+    // tuned-out channel, and no resident is shown it. A stored injection
+    // (stored-injection.ts) is no one's message, and a past lessons block
+    // among them would have the concept step read its own earlier output. So
+    // the window keeps to the stored rows the agent is shown, injections
+    // left out.
+    const { messages } = this.ctx.queryMessages({}, { forAgent: agentName });
     const shown = messages.filter(m =>
       m.held !== true && m.heldFromResidents !== true && storedInjectionMarkOf(m.metadata) === undefined);
     if (shown.length === 0) return null;
@@ -665,7 +734,8 @@ export class RetrievalModule implements Module {
   }
 
   private hashContext(text: string): string {
-    // Simple hash for cache invalidation
+    // A hash of the window, for the trace's record of what retrieval read.
+    // The turn's kept block is keyed on its opening message, not on this.
     let hash = 0;
     for (let i = 0; i < text.length; i++) {
       const chr = text.charCodeAt(i);

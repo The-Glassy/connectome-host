@@ -97,7 +97,7 @@ import {
 } from './recipe.js';
 import { createBranchState, resetBranchState, handleExport, type BranchState } from './commands.js';
 import { buildFrameworkAgentConfig, membraneCachingOverride, recipeModel, autoContinueSupportWarning } from './framework-agent-config.js';
-import { buildFrameworkStrategy, buildConversationsConfig } from './framework-strategy.js';
+import { buildFrameworkStrategy, buildConversationsConfig, strategyMessageCap } from './framework-strategy.js';
 import { AUDIT_STORES_FLAG, auditStoresFromEntry, checkActiveStore, placesOnTrial } from './update/audit-stores.js';
 import { buildWorkspaceMounts } from './workspace-mounts.js';
 import { quarantineAlarm, type QuarantineStatus } from './web/quarantine-alert.js';
@@ -361,9 +361,10 @@ async function createFramework(
   // configured retrieval-model calls), which adds per-turn context churn.
   // Enable explicitly only when an agent actually curates a lesson library.
   if (modules.retrieval && lessonsModule) {
-    moduleInstances.push(new RetrievalModule(
-      buildRetrievalModuleConfig(membrane, modules.retrieval, recipe.agent.provider),
-    ));
+    moduleInstances.push(new RetrievalModule({
+      ...buildRetrievalModuleConfig(membrane, modules.retrieval, recipe.agent.provider),
+      maxMessageTokens: strategyMessageCap(recipe),
+    }));
   }
 
   // History browsing (native chronicle indexes + summary-backed overview).

@@ -25,6 +25,7 @@ export type RetrievalTraceOutcome =
   | 'no-concepts'
   | 'no-candidates'
   | 'no-relevant-lessons'
+  | 'too-large'
   | 'injected'
   | 'error';
 

@@ -15,6 +15,7 @@ import { AgentFramework, storedInjectionMarkOf, type Module, type ModuleContext,
 import { Membrane, MockAdapter, type NormalizedRequest } from '@animalabs/membrane';
 import { RetrievalModule } from '../src/modules/retrieval-module.js';
 import { toWireEntry } from '../src/modules/web-ui-module.js';
+import { compiledWithoutStoredInjections } from '../src/stored-injection.js';
 import type { Lesson } from '../src/modules/lessons-module.js';
 
 const dirs: string[] = [];
@@ -114,5 +115,16 @@ describe('retrieval\'s block, stored by the framework', () => {
     const entry = toWireEntry(row, 0);
     expect(entry.participant).toBe('system');
     expect(entry.text).toStartWith('[retrieval, injected for prime]\n');
+  });
+
+  test('a reader of a compile leaves the stored block out by the compile\'s own provenance', async () => {
+    const x = await make();
+    await x.say('What is the memory detail?');
+    const compiled = await x.framework.getAgent('prime')!.getContextManager().compile(undefined, undefined, { dryRun: true });
+    const kept = compiledWithoutStoredInjections(compiled);
+    expect(compiled.messages.some((m) => x.textOf(m).startsWith('## Retrieved Knowledge'))).toBe(true);
+    expect(kept.some((m) => x.textOf(m).startsWith('## Retrieved Knowledge'))).toBe(false);
+    expect(kept.some((m) => x.textOf(m) === 'What is the memory detail?')).toBe(true);
+    expect(kept).toHaveLength(compiled.messages.length - 1);
   });
 });

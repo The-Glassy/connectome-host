@@ -33,6 +33,7 @@ import type {
 } from '@animalabs/agent-framework';
 import type { Agent, AgentFramework } from '@animalabs/agent-framework';
 import { KnowledgeStrategy, formatZonedDateTime, resolveTimeZone, storedInjectionMarkOf } from '@animalabs/agent-framework';
+import { compiledWithoutStoredInjections } from '../stored-injection.js';
 import { isToolResultContent, isToolUseContent } from '@animalabs/membrane';
 import type { ContentBlock } from '@animalabs/membrane';
 import { emptyUsage, foldUsageSample, type UsageCounts, type UsageSample } from '../state/stream-usage.js';
@@ -204,7 +205,7 @@ const GIVE_MISSING: Record<string, Record<string, string>> = {
     task: 'give the intention the fork pursues',
   },
   hud: {
-    enabled: 'give true to show the fleet status summary before each inference, or false to hide it',
+    enabled: 'give true to show the fleet status summary, or false to stop showing it',
   },
 };
 
@@ -1640,7 +1641,7 @@ export class SubagentModule implements Module {
       },
       {
         name: 'hud',
-        description: 'Toggle the subagent fleet HUD overlay. When enabled, a compact fleet status summary is injected before each inference.',
+        description: 'Toggle the subagent fleet HUD. When enabled, a compact status of the running subagents is added to your context, again each time one starts or ends. Disabling it stops new ones; a status already in your context stays there, as history.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -1770,27 +1771,28 @@ export class SubagentModule implements Module {
     // the orchestrator's context.
     const allowed = this.getDescendantDisplayNames(agentName);
 
-    // The status is built from state changes alone, a subagent's start and
-    // its end, as clock times, so the same state gives the same text.
     // agent-framework stores this injection where the compile placed it, and
-    // stores it again only when its text changes (context-manager #155 part
-    // 5): an elapsed count or a running call count would change it at nearly
-    // every start. A running subagent's progress is `peek`'s to show.
+    // stores it again whenever its text changes (context-manager #155 part
+    // 5). So the status lists what's running, each with its start as a clock
+    // time, under "as of" its latest start or end: the same state gives the
+    // same text, where an elapsed count changed it at nearly every start. A
+    // finished run has reported in the conversation already, as its tool
+    // result or `[Subagent '…' returned]`, so it leaves the list, which
+    // keeps each stored copy as short as the concurrency limit. When the
+    // last one ends, the status says none is running, so the newest copy in
+    // the context isn't one that lists runs since ended. A running
+    // subagent's progress is `peek`'s to show.
     const lines: string[] = [];
     let latestChange: number | undefined;
     for (const [, sa] of this.activeSubagents) {
       if (!allowed.has(sa.name)) continue;
+      const changedAt = sa.completedAt ?? sa.startedAt;
+      if (latestChange === undefined || changedAt > latestChange) latestChange = changedAt;
+      if (sa.status !== 'running') continue;
       const parent = this.parentMap.get(sa.name) ?? 'agent';
       const parentShort = parent.replace(/^(spawn|fork)-/, '').replace(/-d\d+-\d+$/, '').replace(/-retry\d+$/, '');
       const task = sa.task.length > 50 ? sa.task.slice(0, 47) + '...' : sa.task;
-      const changedAt = sa.completedAt ?? sa.startedAt;
-      if (latestChange === undefined || changedAt > latestChange) latestChange = changedAt;
-      // The call count is set when a run completes, so it's shown there
-      // only; a failed or stopped run's count was never taken.
-      const ended = sa.completedAt !== undefined
-        ? ` ended ${this.clockTime(sa.completedAt)}${sa.status === 'completed' ? ` ${sa.toolCallsCount}calls` : ''}`
-        : '';
-      lines.push(`  ${sa.name} [${sa.type}] ${sa.status} started ${this.clockTime(sa.startedAt)}${ended} parent:${parentShort} "${task}"`);
+      lines.push(`  ${sa.name} [${sa.type}] running since ${this.clockTime(sa.startedAt)} parent:${parentShort} "${task}"`);
     }
 
     // Also show async handles still running, but only those owned by the
@@ -1804,7 +1806,10 @@ export class SubagentModule implements Module {
       }
     }
 
-    if (lines.length === 0) return [];
+    if (lines.length === 0) {
+      if (latestChange === undefined) return [];
+      lines.push('  (none running)');
+    }
 
     const asOf = latestChange !== undefined ? `, as of ${this.clockTime(latestChange)} ${this.timeZone}` : '';
     return [{
@@ -2480,9 +2485,12 @@ export class SubagentModule implements Module {
       const compiled = await live.contextManager.compile(undefined, undefined, { dryRun: true });
       messageCount = compiled.messages.length;
       // Extract a short snippet from the last message for observability
-      // without dumping the entire context into the caller's window.
-      if (compiled.messages.length > 0) {
-        const last = compiled.messages[compiled.messages.length - 1];
+      // without dumping the entire context into the caller's window. A
+      // stored injection, such as the subagent's lessons block, is no one's
+      // message, so the snippet is the last message before it.
+      const said = compiledWithoutStoredInjections(compiled);
+      if (said.length > 0) {
+        const last = said[said.length - 1];
         const textBlocks = last.content
           .filter((b: ContentBlock) => b.type === 'text')
           .map((b: ContentBlock) => (b as { type: 'text'; text: string }).text);
@@ -3542,10 +3550,15 @@ export class SubagentModule implements Module {
             // returned, where a real compile refused it and failed the fork;
             // the fork's own launch check, a real compile of its own context,
             // still refuses a first context the fork can't use.
-            const { messages: compiled } = await Promise.race([
+            // The parent's stored injections, its lessons block and its fleet
+            // status, are the parent's context, not the conversation, so the
+            // seed leaves them out, as agent-framework's own fork seed does.
+            // Copied as messages they would lose their mark and read as the
+            // fork's own conversation.
+            const compiled = compiledWithoutStoredInjections(await Promise.race([
               parentCM.compile(undefined, undefined, { dryRun: true }),
               cancel.promise,
-            ]);
+            ]));
             const cutAtCall = orient({ kind: 'cut-at-call' });
             const transformed = callToolUseId
               ? materialiseStructuralFork(

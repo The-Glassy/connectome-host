@@ -15,10 +15,34 @@
  * leaves it out. A reader that shows the transcript shows it, labelled as
  * injected (the TUI's history replay, the Web UI's entries).
  */
-import type { StoredInjectionMark } from '@animalabs/agent-framework';
+import { storedInjectionMarkOf, type StoredInjectionMark } from '@animalabs/agent-framework';
+import type { CompileResult } from '@animalabs/context-manager';
 
 /** The label a transcript view shows on a stored injection:
  *  `[retrieval, injected for alice]`. */
 export function storedInjectionLabel(mark: Pick<StoredInjectionMark, 'agent' | 'namespace'>): string {
   return `[${mark.namespace}, injected for ${mark.agent}]`;
+}
+
+/**
+ * A compile's messages without the stored injections, for a reader of a
+ * compile rather than of stored rows: peek's last message, a fork's seed. A
+ * compiled message carries no metadata, so it's a stored injection when every
+ * stored row it was rendered from is marked as one, by the compile's own
+ * account of where each message came from (its provenance, and the rows as it
+ * read them, `rawBodies`), as agent-framework's own fork seed tells them.
+ * A summary, a placed injection, or a message the compile can't account for
+ * is kept.
+ */
+export function compiledWithoutStoredInjections<M>(
+  result: { messages: M[] } & Pick<CompileResult, 'provenance' | 'rawBodies'>,
+): M[] {
+  return result.messages.filter((_, i) => {
+    const source = result.provenance?.messages[i];
+    if (source?.kind !== 'raw' || source.bodies.length === 0) return true;
+    return !source.bodies.every((body) => {
+      const head = result.rawBodies?.get(body.messageId)?.[0];
+      return head !== undefined && storedInjectionMarkOf(head.metadata) !== undefined;
+    });
+  });
 }

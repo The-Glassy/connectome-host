@@ -124,13 +124,15 @@ function headerMessage(message: string): string {
  * A stored injection's line in the history replay (stored-injection.ts), or
  * undefined for any other row. It's shown as what it is, such as a lessons
  * block: one line under its label, cut as replayed thinking is, never as
- * the user's words or the agent's.
+ * the user's words or the agent's. A block stored in shards is one line, its
+ * first shard's, so a later shard's is null: nothing to show.
  */
 export function historyInjectionLine(
-  msg: { content: ReadonlyArray<{ type: string; text?: unknown }>; metadata?: unknown },
-): string | undefined {
+  msg: { content: ReadonlyArray<{ type: string; text?: unknown }>; metadata?: unknown; shardIndex?: number },
+): string | null | undefined {
   const mark = storedInjectionMarkOf(msg.metadata);
   if (!mark) return undefined;
+  if (typeof msg.shardIndex === 'number' && msg.shardIndex > 0) return null;
   const text = msg.content
     .filter((b) => b.type === 'text' && typeof b.text === 'string')
     .map((b) => b.text as string)
@@ -1029,7 +1031,7 @@ export async function runTui(app: AppContext): Promise<void> {
     for (const msg of messages) {
       const injected = historyInjectionLine(msg);
       if (injected !== undefined) {
-        addLine(injected, DIM_GRAY);
+        if (injected !== null) addLine(injected, DIM_GRAY);
         continue;
       }
 
