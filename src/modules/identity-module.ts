@@ -52,13 +52,13 @@ import { unknownToolResult } from './unknown-tool.js';
  *  or a link that leads nowhere), ENOTDIR (a parent that's a file) or
  *  ENAMETOOLONG (a name disk can't hold), and mount_unavailable with ENOENT
  *  or ENOTDIR (the mount's directory gone, or a file in its place). A gone
- *  mount directory reaches agent-framework 0.22.2's read as not_found with
+ *  mount directory reaches agent-framework 0.22.3's read as not_found with
  *  ENOENT, since it lstats the path before it resolves the root, and a read
  *  that resolves the root first reports it as mount_unavailable with ENOENT.
  *  mount_unavailable with any other errno, or none, is a root the read
  *  couldn't resolve or trust, where disk may hold a file it couldn't reach,
  *  so the upload is refused. On a mount that doesn't follow links,
- *  agent-framework 0.22.2 reads a link among the path's directories that
+ *  agent-framework 0.22.3 reads a link among the path's directories that
  *  leads nowhere or to a file as not_found (ENOENT or ENOTDIR), so the
  *  workspace's copy stands in, and its release with
  *  anima-research/agent-framework#468 refuses either as parent_symlink, so
@@ -976,15 +976,18 @@ export class IdentityModule implements Module {
    * Why the workspace's write would refuse `path`, asked before the request
    * goes out, so a write never goes out with its answer refused for its
    * path: no mount has the path, it names a mount but no file, it has an
-   * empty part right after the mount's name or a "." or ".." part, it leads
-   * out of its mount, or its mount is read-only. Null when none holds. Each
-   * refusal is one agent-framework 0.22.2's writeBinary makes too, after the
-   * request has gone out: its path parser reads what follows an empty part
+   * empty part right after the mount's name or a "." or ".." part, its mount
+   * doesn't hold it (it leads out, lies in another mount's directory, falls
+   * outside the include, or can't name a file there), or its mount is
+   * read-only. Null when none holds. Each
+   * refusal is one agent-framework's writeBinary makes too, after the request
+   * has gone out (the include's from 0.24, the rest from 0.22.3): its path
+   * parser reads what follows an empty part
    * after the mount as absolute, which leads out of the mount unless it names
    * the mount's own directory, and its store refuses that tree path, as it
    * refuses an empty one or one with a "." or ".." part ("Invalid tree path"). The
    * check covers the path and the mount's mode. Whether the workspace is
-   * running isn't public in 0.22.2, and a response over the mount's size
+   * running isn't public in 0.22.3, and a response over the mount's size
    * limit can only be known once it arrives.
    */
   private cannotKeep(workspace: WorkspaceModule, path: string): string | null {
@@ -1000,18 +1003,21 @@ export class IdentityModule implements Module {
     if (!mount) return `\`saveAs\` names no mount the workspace has: "${path}".${remedy}`;
     if (slash < 0 || slash === path.length - 1) return `\`saveAs\` names the mount "${name}" but no file in it.${remedy}`;
     if (path.slice(slash + 1).startsWith('/')) {
-      return `\`saveAs\` "${path}" has an empty part right after the mount's name, which the workspace can't save to; name the file by its plain path, such as "${name}/out.json".${remedy}`;
+      return `\`saveAs\` "${path}" has an empty part right after the mount's name, which the workspace can't save to; name the file by its plain path.${remedy}`;
     }
     if (path.slice(slash + 1).split('/').some((part) => part === '.' || part === '..')) {
-      return `\`saveAs\` "${path}" has a "." or ".." in it, which the workspace can't save to; name the file by its plain path, such as "${name}/out.json".${remedy}`;
+      return `\`saveAs\` "${path}" has a "." or ".." in it, which the workspace can't save to; name the file by its plain path.${remedy}`;
     }
     // A write target is the use resolveAbsolutePath's doc keeps it for: it
-    // answers null for a path that leads out of its mount. After the checks
-    // above, no path found on Linux reaches this (a leading empty part and a
-    // ".." are refused first), so this isn't the containment check: it stays
-    // as the guard for whatever else the resolver itself puts outside a
-    // mount, on any platform.
-    if (workspace.resolveAbsolutePath(path) === null) return `\`saveAs\` "${path}" leads out of the mount "${name}".${remedy}`;
+    // answers null for a path its mount doesn't hold: one that leads out of
+    // it, lies in another mount's directory nested in it, falls outside its
+    // include, or can't name a file of it (a lone UTF-16 surrogate). After the checks above, no path found on Linux leads out
+    // (a leading empty part and a ".." are refused first), so this isn't the
+    // containment check: it stays as the guard for whatever else the
+    // resolver itself puts outside a mount, on any platform.
+    if (workspace.resolveAbsolutePath(path) === null) {
+      return `\`saveAs\` "${path}" isn't a path the mount "${name}" holds: it leads out of the mount, lies in another mount's directory, falls outside its include, or can't name a file there.${remedy}`;
+    }
     if (mount.mode === 'read-only') return `\`saveAs\` names the read-only mount "${name}", where nothing can be saved.${remedy}`;
     return null;
   }
@@ -1046,14 +1052,8 @@ export class IdentityModule implements Module {
     let onDisk: WorkspaceReadError;
     try {
       const fromDisk = await workspace.readFileFromDisk(path, { maxBytes: UPLOAD_BODY_MAX });
-      // A read cut at the cap is of a file over it. agent-framework 0.22.2
-      // reads a file that grows after the read's size check whole, so the
-      // bound is held here too. Once the host's agent-framework floor
-      // includes anima-research/agent-framework#409, readFileFromDisk keeps
-      // maxBytes itself, and this second condition can go.
-      if (fromDisk.truncated || fromDisk.bytes.byteLength > UPLOAD_BODY_MAX) {
-        return overLimit(Math.max(fromDisk.size, fromDisk.bytes.byteLength), `"${path}"`);
-      }
+      // A read cut at the cap is of a file over it.
+      if (fromDisk.truncated) return overLimit(fromDisk.size, `"${path}"`);
       return { bytes: fromDisk.bytes, from: 'disk' };
     } catch (err) {
       if (!(err instanceof WorkspaceReadError)) throw err;

@@ -21,7 +21,7 @@
 import type { AgentFramework } from '@animalabs/agent-framework';
 import { NativeFormatter } from '@animalabs/membrane';
 import type { ContentBlock, NormalizedMessage, NormalizedRequest, ToolDefinition } from '@animalabs/membrane';
-import type { Recipe } from '../recipe.js';
+import { resolveProvider, type Recipe } from '../recipe.js';
 import { anthropicXmlFormatter, xmlToolsInSystem } from '../recipe-formatter.js';
 import type { CallLedger } from '../call-ledger.js';
 import type { QuotaMeter } from '../quota-meter.js';
@@ -744,7 +744,8 @@ export async function buildQuotaSnapshot(app: PanelAppRef): Promise<Record<strin
     provider: app.quotaMeter.provider,
     windows: snapshot?.windows ?? [],
     fetchedAt: snapshot?.fetchedAt ?? 0,
-    ...(snapshot?.error ? { error: snapshot.error } : {}),
+    // A failed read is one with an error, whatever its text, even none.
+    ...(snapshot?.error !== undefined ? { error: snapshot.error } : {}),
     blockedUntil: app.quotaMeter.blockedUntil(app.recipe.agent.model) ?? null,
     parked: hostHoldActive(app),
   };
@@ -870,7 +871,8 @@ export function buildHealthSnapshot(app: PanelAppRef): Record<string, unknown> {
     // Health reads never throw.
   }
   // Compression DEBT per agent — the single-authority reduction from cm
-  // (healthy / degraded / critical + the numbers behind it). Every wedge of
+  // (healthy / degraded / critical, or unknown when it couldn't read what it
+  // reports, + the numbers behind it). Every wedge of
   // the 2026-08-06 five-resident day was weeks of silently-failing
   // compression surfacing as a sudden budget crisis; this block is what
   // lets fleet-watch (and later the resident notice, af #99) catch the
@@ -1131,7 +1133,11 @@ export type CountFormatter = Pick<NativeFormatter, 'buildMessages'>;
  * Tool pairs are normalized and same-role runs merged by the formatter
  * itself, and every block the formatter sends is counted: for the native
  * formatter that includes signed `thinking` / `redacted_thinking`,
- * `tool_use`, `tool_result` and images.
+ * `tool_use`, `tool_result` and images, and, when `anthropicServerBlocks` is
+ * true, an assistant turn's Anthropic server-tool blocks (web search and the
+ * like). Membrane sends those only through an adapter that replays them,
+ * which only its Anthropic API adapter does, so the caller passes whether
+ * inference does.
  *
  * The previous version flattened each message to its text blocks and sent no
  * tool definitions: on a keep-all model (Opus >= 4.5, Sonnet >= 4.6, Fable)
@@ -1148,6 +1154,7 @@ export function buildCountTokensPayload(
   agentName: string,
   formatter: CountFormatter = new NativeFormatter(),
   toolMode: 'native' | 'xml' = 'native',
+  anthropicServerBlocks = false,
 ): CountTokensPayload {
   const built = formatter.buildMessages(preview.messages ?? [], {
     participantMode: 'multiuser',
@@ -1163,6 +1170,7 @@ export function buildCountTokensPayload(
     ...(preview.prefillUserMessage ? { prefillUserMessage: preview.prefillUserMessage } : {}),
     promptCaching: false,
     cacheMarkers: 'membrane-system',
+    anthropicServerBlocks,
   });
   const tools = Array.isArray(built.nativeTools) ? built.nativeTools : undefined;
   const system = built.systemContent;
@@ -1223,6 +1231,11 @@ export async function buildContextMakeup(app: PanelAppRef, agentName: string): P
     agentName,
     xml ? anthropicXmlFormatter({ toolsInSystem: xmlToolsInSystem(app.recipe, requireAgent(app, resolveAgent(app)).model) }) : new NativeFormatter(),
     xml ? 'xml' : 'native',
+    // Membrane replays an assistant turn's server-tool blocks only through an
+    // adapter that declares replaysAnthropicServerBlocks, and of the host's
+    // adapters only LoggingAnthropicAdapter (an AnthropicAdapter) does, which
+    // the host builds for provider `anthropic` (index.ts), for every agent.
+    resolveProvider(app.recipe) === 'anthropic',
   );
   // What the provider actually billed for the last call (fresh + cache read +
   // cache creation): exact, free, and independent of the count below — the
@@ -1667,5 +1680,7 @@ export async function buildDebugContext(
   requireAgent(app, agentName);
   const injections = params.injections === true;
   const request = await app.framework.previewActivation(agentName, { injections });
-  return { agent: agentName, injections, transparent: !injections, request };
+  // The presentation captured with this request, or null for an agent without one.
+  return { agent: agentName, injections, transparent: !injections, request,
+    toolPresentation: app.framework.getRequestToolPresentation(request) };
 }

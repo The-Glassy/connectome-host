@@ -17,6 +17,7 @@
 
 import {
   createCliRenderer,
+  CliRenderEvents,
   type CliRenderer,
   BoxRenderable,
   TextRenderable,
@@ -46,6 +47,7 @@ import { parseFleetRoute } from './modules/fleet-types.js';
 import { handleCommand, resetBranchState } from './commands.js';
 import { formatQuotaReadout } from './quota-meter.js';
 import { takeRecipeWarnings } from './recipe.js';
+import { bunFloorNotice } from './bun-floor-check.js';
 import { effectiveContextBudgetTokens } from './framework-agent-config.js';
 
 /** Format a token count compactly: 1.2M / 3.5k / 42. */
@@ -160,8 +162,9 @@ export function resolveQuitConfirm(raw: string): QuitConfirmAction {
  * (state/turn-trace.ts): the status it shows next, whether a backgrounded
  * turn's output is shown or dropped, and the line it adds. Null for a trace
  * that isn't a stream end, and for an end while no turn is showing, so an
- * end that follows an end (`aborted` or `failed`, then `exhausted`) adds
- * nothing. A failure always shows: agent-framework 0.22.2 sends
+ * end that follows an end (`completed`, then `turn_ended`; `failed`, then
+ * `exhausted` or `aborted`) adds nothing. A failure always shows:
+ * agent-framework 0.22.3 sends
  * `inference:failed` only for an attempt it started, so with no turn
  * showing it's still the end of a turn, one whose start the TUI didn't
  * follow, as at startup or around a session switch. The TUI's interrupt
@@ -191,9 +194,10 @@ export function rootTurnEnd(
       return { status: 'idle', background: 'drop', line: { text: `(turn aborted${reason})`, tone: 'note' } };
     }
     case 'inference:exhausted':
-      // Alone, without a `failed` first, it ends a stream that something
-      // other than the framework aborted, with an agent's cancelStream.
-      return { status: 'idle', background: 'drop', line: { text: `(turn ended: ${traceError(event)})`, tone: 'note' } };
+      // Alone, without a `failed` first, it ends a stream aborted for a
+      // reason other than a stop, which agent-framework 0.22.3 doesn't treat
+      // as deliberate, so it shows as a failure; a stop ends with `aborted`.
+      return { status: 'error', background: 'drop', line: { text: `(turn ended: ${traceError(event)})`, tone: 'error' } };
     default:
       return null;
   }
@@ -308,6 +312,9 @@ interface AppContext {
   credentials?: import('./credential-state.js').CredentialMonitor | null;
   /** Subscription without a local meter (openai-codex through a gateway). */
   subscriptionUnmetered?: boolean;
+  /** Set by the TUI's stop once it has begun: a session switch then makes
+   *  nothing more (switchSessionSteps). */
+  stopping?: boolean;
   switchSession(id: string): Promise<void>;
 }
 
@@ -441,6 +448,11 @@ export async function runTui(app: AppContext): Promise<void> {
   }) as typeof process.stderr.write;
 
   const renderer = await createCliRenderer({ exitOnCtrlC: false });
+
+  /** Set when the TUI starts to stop, so it stops once however often it's
+   *  asked, and draws nothing after: cleanup destroys the renderables, and
+   *  a command's or a fleet call's late continuation would throw on them. */
+  let stopping = false;
 
   // Set terminal title
   const recipeName = app.recipe?.name ?? 'connectome-host';
@@ -620,6 +632,7 @@ export async function runTui(app: AppContext): Promise<void> {
     return `[paste #${n}: "${head}…" ${sizeHint}]`;
   }
   (input as any).handlePaste = (event: { bytes: Uint8Array }) => {
+    if (stopping) return;
     const text = stripAnsiSequences(decodePasteBytes(event.bytes));
     if (text.length <= INLINE_PASTE_THRESHOLD && !/[\r\n]/.test(text)) {
       (input as any).insertText(text);
@@ -747,6 +760,7 @@ export async function runTui(app: AppContext): Promise<void> {
   }
 
   function addLine(text: string, color: string = WHITE) {
+    if (stopping) return;
     scrollBox.add(new TextRenderable(renderer, {
       id: `msg-${++messageCounter}`,
       content: text,
@@ -780,6 +794,7 @@ export async function runTui(app: AppContext): Promise<void> {
   }
 
   function updateStatus() {
+    if (stopping) return;
     const topAlert = pickTopAlert([...opsAlerts.values()].map(a => a.kind));
     let left = formatStatusLeft(state, SPINNER[spinnerFrame], streamOutputTokens, opsAlerts.size, topAlert, interrupts.isRunning(rootAgentName));
     // An active ops alert repaints the whole left segment — a one-cell glyph
@@ -1419,6 +1434,7 @@ export async function runTui(app: AppContext): Promise<void> {
   let fleetNotice: string | null = null;
   let fleetNoticeTimer: ReturnType<typeof setTimeout> | null = null;
   function showFleetNotice(text: string): void {
+    if (stopping) return;
     fleetNotice = text;
     if (fleetNoticeTimer) clearTimeout(fleetNoticeTimer);
     fleetNoticeTimer = setTimeout(() => {
@@ -1478,6 +1494,7 @@ export async function runTui(app: AppContext): Promise<void> {
   }
 
   function updateFleetView() {
+    if (stopping) return;
     const tree = buildFleetTree();
     visibleNodeIds = [];
     visibleNodes.clear();
@@ -2198,8 +2215,10 @@ export async function runTui(app: AppContext): Promise<void> {
     treeAggregator?.dispose();
     treeAggregator = fleetMod ? new FleetTreeAggregator(fleetMod) : null;
     if (treeAggregator && fleetMod) {
-      // Register any fleet children that already exist (e.g. autoStart entries
-      // brought up before TUI init, or reattached survivors after parent restart).
+      // Register any fleet children that already exist, such as survivors
+      // reattached after a parent restart. AutoStart children launch as the
+      // agents start and usually register after this; the status tick below
+      // registers each child it finds in the fleet that isn't here yet.
       for (const childName of fleetMod.getChildren().keys()) {
         treeAggregator.registerChild(childName);
       }
@@ -2528,6 +2547,10 @@ export async function runTui(app: AppContext): Promise<void> {
   // ── Keyboard ───────────────────────────────────────────────────────
 
   renderer.keyInput.on('keypress', (key: { name?: string; ctrl?: boolean }) => {
+    // OpenTUI's destroy hands the keys still buffered to these handlers, so
+    // keys typed as the stop begins can reach them once it has: they start
+    // nothing then (handleSubmit too).
+    if (stopping) return;
     if (key.name === 'tab') {
       cleanupPeek();
       cleanupPeekProc();
@@ -2773,6 +2796,7 @@ export async function runTui(app: AppContext): Promise<void> {
   }
 
   function handleSubmit() {
+    if (stopping) return;
     const raw = ((input as any).plainText as string).trim();
     (input as any).clear();
 
@@ -2875,15 +2899,27 @@ export async function runTui(app: AppContext): Promise<void> {
         // Follow whichever framework the host holds once the switch ends,
         // as piped mode does: the new one, after the rebind, or after a
         // failed switch whatever the host was left with (switchFollowing).
+        // A switch that ends after the TUI's stop has begun follows nothing
+        // and draws nothing: the stop has ended the TUI's subscriptions, and
+        // the host's switch has stopped what it made.
         const sessionId = result.switchToSessionId;
-        switchFollowing(rootTraces, async () => {
+        const follower = {
+          follow: (source: Parameters<typeof rootTraces.follow>[0]) => { if (!stopping) rootTraces.follow(source); },
+          stop: () => rootTraces.stop(),
+        };
+        void switchFollowing(follower, async () => {
           await app.switchSession(sessionId);
+          // A switch that ends once the stop has begun returns without a new
+          // framework, and the stop has ended the subscriptions this rebind
+          // would make again.
+          if (stopping) return;
           // Rebind to new framework
           subMod = app.framework.getAllModules().find(m => m.name === 'subagent') as SubagentModule | undefined;
           fleetMod = app.framework.getAllModules().find(m => m.name === 'fleet') as FleetModule | undefined;
           subscribeFleetOps();
           resetObservabilityState();
         }, () => app.framework).then(() => {
+          if (stopping) return;
           const session = app.sessionManager.getActiveSession();
           refreshFromStore();
           addLine(`Session: ${session?.name ?? 'unknown'}`, GRAY);
@@ -2960,31 +2996,115 @@ export async function runTui(app: AppContext): Promise<void> {
   addLine(`Error log: ${logPath}`, DIM_GRAY);
   rootTraces.follow(app.framework);
   loadSessionHistory();
+  // Printed at start too, but the alternate screen hides that line. After the
+  // history, since the view keeps to its bottom and would scroll a line above
+  // a long history out of sight.
+  if (bunFloorNotice) addLine(bunFloorNotice, YELLOW);
 
   // ── Cleanup ────────────────────────────────────────────────────────
 
+  const describe = (error: unknown): string => error instanceof Error ? error.message : String(error);
+  const STOP_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP'] as const;
+  /** How long the stop waits for tui-error.log to take its last lines, as
+   *  headless mode waits for headless.log. */
+  const LOG_CLOSE_LIMIT_MS = 2_000;
+  /** Set once the stop has settled and its log has begun to end. */
+  let logEnded = false;
+
   function cleanup() {
-    releaseQuotaWatch?.();
-    unsubQuota?.();
-    cleanupPeek();
-    cleanupPeekProc();
-    if (fleetNoticeTimer) clearTimeout(fleetNoticeTimer);
-    fleetOpsUnsub?.();
-    treeAggregator?.dispose();
-    for (const unsub of subagentStreamUnsubs) unsub();
-    clearInterval(pollTimer);
-    rootTraces.stop();
-    renderer.destroy();
-    process.stdout.write('\x1b]0;\x07');
+    if (stopping) return;
+    stopping = true;
+    // The host's stop begins with the TUI's. A session switch, the TUI's or
+    // the Web UI's, that ends from here on stops what it made rather than
+    // installing it (switchSessionSteps), so the stop doesn't wait for one.
+    // This is the host's flag, beside the TUI's own `stopping`, which says
+    // the TUI's stop has begun.
+    app.stopping = true;
+    // OpenTUI's destroy removes its own signal listeners, so a second stop
+    // signal during the stop (a terminal closing after the Web UI's quit,
+    // say) would end the process by default. These join the stop instead,
+    // as headless mode's do, until it settles.
+    for (const signal of STOP_SIGNALS) process.on(signal, cleanup);
+    // Each step runs on its own, so one that throws is logged and the rest
+    // still put the terminal back and leave nothing to hold the process.
+    // The subscriptions end before the renderer goes, so none of them draws
+    // into it.
+    const step = (what: string, run: () => void): void => {
+      try {
+        run();
+      } catch (error) {
+        logStream.write(`stopping: ${what} failed (${describe(error)}); the stop goes on\n`);
+      }
+    };
+    step('clearing the poll timer', () => clearInterval(pollTimer));
+    step('clearing the fleet notice', () => { if (fleetNoticeTimer) clearTimeout(fleetNoticeTimer); });
+    step('ending the trace subscription', () => rootTraces.stop());
+    step('ending the fleet subscription', () => fleetOpsUnsub?.());
+    step('ending the subagent tree', () => treeAggregator?.dispose());
+    for (const unsub of subagentStreamUnsubs) step('ending a subagent stream', unsub);
+    step('releasing the quota watch', () => releaseQuotaWatch?.());
+    step('ending the quota subscription', () => unsubQuota?.());
+    step('closing the peek', cleanupPeek);
+    step('closing the fleet peek', cleanupPeekProc);
+    step('destroying the renderer', () => renderer.destroy());
+    step('resetting the title', () => { process.stdout.write('\x1b]0;\x07'); });
     // Restore stderr
     process.stderr.write = origStderrWrite;
-    logStream.end();
-    app.framework.stop().then(() => {
+    // Once the stop has settled, the log ends, and the TUI settles only once
+    // the log has its last lines, a failed stop's included, as headless
+    // mode's exit waits for its log: the host exits at once after a failed
+    // stop. The wait is bounded as headless's is. Then the stop's signal
+    // listeners go.
+    const settled = async (): Promise<void> => {
+      logEnded = true;
+      await new Promise<void>((done) => {
+        const limit = setTimeout(() => {
+          console.error(`[host] tui-error.log hadn't taken its last lines after ${LOG_CLOSE_LIMIT_MS / 1000} s, so the TUI ends without them`);
+          done();
+        }, LOG_CLOSE_LIMIT_MS);
+        logStream.end(() => { clearTimeout(limit); done(); });
+      });
+      for (const signal of STOP_SIGNALS) process.off(signal, cleanup);
+    };
+    // The framework the host holds now. A switch that has begun stopping it
+    // shares this stop, since agent-framework keeps a stop under way, and a
+    // finished one, for a later call. After a failed stop whose storage is
+    // still open, agent-framework lets a later stop() start its teardown
+    // again, so this call can be that later one.
+    Promise.resolve().then(() => app.framework.stop()).then(async () => {
+      await settled();
       resolveExit?.();
-    }, error => {
+    }, async (error) => {
+      await settled();
       rejectExit?.(error);
     });
   }
+
+  // The TUI ends with its renderer. OpenTUI destroys the renderer itself on
+  // SIGTERM, SIGINT, SIGHUP and its other exit signals (the Web UI's own quit
+  // sends SIGTERM), so stop then as /quit does. cleanup's own destroy() emits
+  // this too, and finds the TUI already stopping.
+  renderer.on(CliRenderEvents.DESTROY, cleanup);
+  // A terminal that has gone away (its window or SSH session closed) fails
+  // the TUI's own stop: OpenTUI's destroy turning raw mode off fails on
+  // stdin, and cleanup's title reset on stdout, each as an error on its
+  // stream. Unheard, either would end the process before the TUI stopped.
+  // A failing terminal ends the TUI as /quit does, and its first error gets
+  // a line in the log, whether it starts the stop or comes during it: a
+  // hangup's SIGHUP can start the stop before its error is heard. Later
+  // errors are the dead terminal answering the stop's own writes, so they
+  // get none, and the listeners stay after the stop, so a late one can't end
+  // the exiting process either.
+  let terminalReported = false;
+  const terminalFailed = (error: unknown): void => {
+    if (!terminalReported && !logEnded) {
+      terminalReported = true;
+      logStream.write(`terminal failed (${describe(error)}): stopping as /quit does\n`);
+    }
+    cleanup();
+  };
+  process.stdin.on('error', terminalFailed);
+  process.stdout.on('error', terminalFailed);
 
   // ── Wait for exit ──────────────────────────────────────────────────
 

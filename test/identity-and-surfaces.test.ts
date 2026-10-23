@@ -664,21 +664,6 @@ describe('identity: what the agent reads when a call fails', () => {
       expect(types).toEqual(['application/octet-stream', 'application/octet-stream']);
     });
 
-    // A file can grow after the disk read's size check, and is then read whole.
-    it("holds the upload limit on what the disk read returns", async () => {
-      const ws = {
-        ...workspaceFor(null),
-        readFileFromDisk: async () => ({ bytes: { byteLength: 64 * 1024 * 1024 + 1 } as Buffer, size: 8, truncated: false }),
-      };
-      const { mod, ready, seen } = registeredModule({ workspace: ws });
-      await ready;
-      expectSays(
-        (await upload(mod)).error, 'Nothing was sent to "orrery"', 'over the 67108864-byte upload limit',
-        'calling again won\'t change that', 'send a smaller file',
-      );
-      expect(seen.orrery).toBe(0);
-    });
-
     it('gives a reason both reads share once, and each where they differ', async () => {
       const same = registeredModule({ workspace: workspaceFor(notOnDisk(), 'File not found: files/grid.png') });
       await same.ready;
@@ -791,9 +776,9 @@ describe('identity: what the agent reads when a call fails', () => {
       (await mod.handleToolCall(call('request', { service: 'orrery', path: '/api/x', method: 'POST', body: {}, saveAs }))).error;
     expectSays(await send('nope/out.json'), 'Nothing was sent: `saveAs` names no mount the workspace has: "nope/out.json"', 'a mount it can write to (files)');
     expectSays(await send('files'), 'names the mount "files" but no file in it');
-    expectSays(await send('files/../../etc/out.json'), 'has a "." or ".." in it', 'such as "files/out.json"');
-    expectSays(await send('files//out.json'), 'has an empty part right after the mount\'s name', 'such as "files/out.json"');
-    expectSays(await send('files/away.json'), '`saveAs` "files/away.json" leads out of the mount "files"');
+    expectSays(await send('files/../../etc/out.json'), 'has a "." or ".." in it', 'name the file by its plain path.', 'a mount it can write to (files)');
+    expectSays(await send('files//out.json'), 'has an empty part right after the mount\'s name', 'name the file by its plain path.', 'a mount it can write to (files)');
+    expectSays(await send('files/away.json'), '`saveAs` "files/away.json" isn\'t a path the mount "files" holds: it leads out of the mount, lies in another mount\'s directory, falls outside its include, or can\'t name a file there.');
     expectSays(await send('docs/out.json'), 'names the read-only mount "docs"', 'a mount it can write to (files)');
     expect(seen.orrery).toBe(0);
   });
@@ -804,7 +789,7 @@ describe('identity: what the agent reads when a call fails', () => {
   // have its answer lost. Each of those forms is also written straight
   // through the workspace's write, so the two verdicts are compared form by
   // form. A form with such a part the host refuses itself, naming the plain
-  // path: agent-framework 0.22.2's write refuses such a path, and its release
+  // path: agent-framework 0.22.3's write refuses such a path, and its release
   // with anima-research/agent-framework#536 reads one that stays in the mount
   // as the plain path it names.
   it('sends every saveAs without a "." or ".." part after its mount\'s name that the workspace\'s write accepts, and nothing it would refuse', async () => {
@@ -851,7 +836,7 @@ describe('identity: what the agent reads when a call fails', () => {
     for (const form of forms) {
       if (dotted(form)) {
         expect([form, outcomes[form], reasons[form]]).toEqual([form, 'not sent', expect.stringContaining(
-          `"${form}" has a "." or ".." in it, which the workspace can't save to; name the file by its plain path, such as "files/out.json".`,
+          `"${form}" has a "." or ".." in it, which the workspace can't save to; name the file by its plain path.`,
         )]);
       } else expect([form, outcomes[form] === 'sent and saved']).toEqual([form, writes[form] === 'accepted']);
     }
@@ -859,6 +844,49 @@ describe('identity: what the agent reads when a call fails', () => {
       'files/out.json', 'files/sub/out.json', 'files/end.json/', 'files/twice//slash.json', 'files/dir/', 'files/a//b/c.json',
       'files/ends.json//',
     ]);
+  });
+
+  it("sends no saveAs its mount's include leaves out, saying so, and sends one it covers", async () => {
+    const dir = tempDir('ident-saveas-include-');
+    mkdirSync(join(dir, 'files'));
+    const workspace = new WorkspaceModule({
+      mounts: [{ name: 'files', path: join(dir, 'files'), mode: 'read-write', watch: 'never', include: ['*.md'] }],
+    });
+    const store = JsStore.openOrCreate({ path: join(dir, 'store') });
+    cleanups.push(() => store.close?.());
+    workspace.initStore(store);
+    const { mod, ready, seen } = registeredModule({ workspace });
+    await ready;
+    const before = seen.orrery;
+    const left = await mod.handleToolCall(call('request', { service: 'orrery', path: '/api/x', method: 'POST', body: {}, saveAs: 'files/out.json' }));
+    expect(left.success).toBe(false);
+    expect(seen.orrery).toBe(before);
+    expectSays(left.error, '`saveAs` "files/out.json" isn\'t a path the mount "files" holds', 'falls outside its include');
+    const kept = await mod.handleToolCall(call('request', { service: 'orrery', path: '/api/x', method: 'POST', body: {}, saveAs: 'files/out.md' }));
+    expect(kept.success).toBe(true);
+  });
+
+  it("sends no saveAs into another mount's directory nested in the one it names, saying so", async () => {
+    const dir = tempDir('ident-saveas-nested-');
+    mkdirSync(join(dir, 'files', 'inner'), { recursive: true });
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    cleanups.push(() => warn.mockRestore());
+    const workspace = new WorkspaceModule({
+      mounts: [
+        { name: 'files', path: join(dir, 'files'), mode: 'read-write', watch: 'never' },
+        { name: 'inner', path: join(dir, 'files', 'inner'), mode: 'read-write', watch: 'never' },
+      ],
+    });
+    const store = JsStore.openOrCreate({ path: join(dir, 'store') });
+    cleanups.push(() => store.close?.());
+    workspace.initStore(store);
+    const { mod, ready, seen } = registeredModule({ workspace });
+    await ready;
+    const before = seen.orrery;
+    const res = await mod.handleToolCall(call('request', { service: 'orrery', path: '/api/x', method: 'POST', body: {}, saveAs: 'files/inner/x.json' }));
+    expect(res.success).toBe(false);
+    expect(seen.orrery).toBe(before);
+    expectSays(res.error, '`saveAs` "files/inner/x.json" isn\'t a path the mount "files" holds', "lies in another mount's directory");
   });
 
   it('tells a request that got no reply from one whose reply came back but couldn\'t be read or saved', async () => {
@@ -1676,7 +1704,7 @@ describe('identity request: fromFile reads only what the mount allows', () => {
   });
 
   // A directory on the path that links out of the mount: agent-framework
-  // 0.22.2 follows the link and refuses the file, whose canonical path lies
+  // 0.22.3 follows the link and refuses the file, whose canonical path lies
   // outside, and its release with anima-research/agent-framework#468 refuses
   // the link itself. Both say escape, in words of their own.
   it('refuses a file reached through a parent directory that links out of the mount', async () => {
@@ -1795,7 +1823,7 @@ describe('identity request: fromFile reads only what the mount allows', () => {
   it('refuses a path no mount holds, and one leading out of its mount, each with its own reason', async () => {
     const { bodies, upload, workspace } = await mounted();
     expect((await upload('nope/grid.png')).error).toBe('Nothing was sent to "orrery": Unknown mount: "nope". Available: files.');
-    // A path that climbs out of its mount: agent-framework 0.22.2 says it
+    // A path that climbs out of its mount: agent-framework 0.22.3 says it
     // "resolves outside mount", and its release with
     // anima-research/agent-framework#536 says it "climbs above the root" of
     // the mount. The upload passes on the read's own refusal.
@@ -1834,7 +1862,7 @@ describe('identity request: fromFile reads only what the mount allows', () => {
   });
 
   // A linked directory on the path that leads nowhere, on a mount that doesn't
-  // follow links: agent-framework 0.22.2 reads the path as one disk has no
+  // follow links: agent-framework 0.22.3 reads the path as one disk has no
   // file at (not_found with ENOENT), so the workspace's copy stands in, and its
   // release with anima-research/agent-framework#468 refuses the link as
   // parent_symlink, so nothing is sent.

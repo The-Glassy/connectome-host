@@ -23,6 +23,8 @@
  *   DATA_DIR            - Data directory for sessions (default: ./data)
  */
 
+// First, so its warning about an old Bun prints before the modules below run.
+import './bun-floor-check.js';
 import {
   BedrockAdapter,
   Membrane,
@@ -53,23 +55,29 @@ import { RetrievalModule } from './modules/retrieval-module.js';
 import { buildRetrievalModuleConfig } from './retrieval-config.js';
 import { TuiModule } from './modules/tui-module.js';
 import { TimeModule } from './modules/time-module.js';
+import { waitToBeListed } from './fleet-begin.js';
 import { FleetModule, type FleetModuleConfig } from './modules/fleet-module.js';
 import { ActivityModule } from './modules/activity-module.js';
 import { NoticesModule } from './modules/notices-module.js';
 import { SubscriptionGcModule } from './modules/subscription-gc-module.js';
 import { ChannelModeModule } from './modules/channel-mode-module.js';
-import { WebUiModule } from './modules/web-ui-module.js';
+import { WebUiModule, stopWebUiServer } from './modules/web-ui-module.js';
 import { ObserversModule } from './modules/observers-module.js';
 import { IdentityModule } from './modules/identity-module.js';
 import { McplAdminModule } from './modules/mcpl-admin-module.js';
+import { LifecycleModule } from './modules/lifecycle-module.js';
 import { TtsRelayModule } from './modules/tts-relay-module.js';
 import { InstructionsModule } from './modules/instructions-module.js';
-import { loadMcplServers, applyAgentOverlay, mergeRecipeServers, composeMcplChildEnv, cleartextCredentialWarning, overlayWarnings, DEFAULT_CONFIG_PATH, DEFAULT_AGENT_OVERLAY_PATH } from './mcpl-config.js';
+import { loadMcplServers, applyAgentOverlay, mergeRecipeServers, composeMcplChildEnv, overlayWarnings, DEFAULT_CONFIG_PATH, DEFAULT_AGENT_OVERLAY_PATH } from './mcpl-config.js';
 import { toolClassConfig } from './tool-lifecycle-config.js';
-import { batchModeStartNotice, batchTeardownNotice, batchWebUiNotice, BATCH_MCPL_LOG_NOTE } from './batch-mode.js';
+import { batchModeStartNotice, batchTeardownNotice, batchWebUiNotice, batchEchoLine, BATCH_MCPL_LOG_NOTE } from './batch-mode.js';
 import { createPipedTurns, switchFollowing, traceFollower } from './piped-turns.js';
 import { setCallLogPath } from './bug-report.js';
 import { SessionManager } from './session-manager.js';
+import { startFramework } from './start-framework.js';
+import { currentForStart, releaseHere, type ReleaseHere } from './update/host.js';
+import { childrenFilePath, trialPlaces } from './update/contract.js';
+import { switchSessionSteps } from './session-switch.js';
 import { resolveAgentName } from './agent-name.js';
 import { generateSessionName } from './synesthete.js';
 import {
@@ -87,14 +95,16 @@ import {
   resolveProvider,
 } from './recipe.js';
 import { createBranchState, resetBranchState, handleExport, type BranchState } from './commands.js';
-import { buildFrameworkAgentConfig, membraneCachingOverride } from './framework-agent-config.js';
+import { buildFrameworkAgentConfig, membraneCachingOverride, recipeModel } from './framework-agent-config.js';
 import { buildFrameworkStrategy, buildConversationsConfig, dendriteCreateOptions } from './framework-strategy.js';
 import { holdBootTraces, type BootTraceHold } from './boot-traces.js';
+import { AUDIT_STORES_FLAG, auditStoresFromEntry, checkActiveStore, placesOnTrial } from './update/audit-stores.js';
 import { buildWorkspaceMounts } from './workspace-mounts.js';
 import { quarantineAlarm, type QuarantineStatus } from './web/quarantine-alert.js';
 import { logKeepaliveEvent } from './cache-keepalive-log.js';
-import { loadExtensions } from './extensions.js';
+import { loadExtensions, type ExtensionRegistry } from './extensions.js';
 import { QuotaMeter, AnthropicOAuthQuotaSource, CodexQuotaSource, quotaProviderHold } from './quota-meter.js';
+import { stopForSessionSwitch } from './session-switch-stop.js';
 
 export type { AppContext };
 
@@ -162,6 +172,10 @@ interface AppContext {
    * (src/boot-traces.ts).
    */
   bootTraces?: BootTraceHold;
+  /** Set by the TUI's stop once it has begun; the host's other modes don't
+   *  set it. A session switch then makes nothing more, and stops what it has
+   *  already made (switchSessionSteps). */
+  stopping?: boolean;
 
   /** Stop current framework, switch to a different session, start new framework. */
   switchSession(id: string): Promise<void>;
@@ -252,14 +266,16 @@ function stopAtSavedRecipe(failedTo: string, err: unknown): never {
 // ---------------------------------------------------------------------------
 
 function resolveModel(recipe: Recipe): string {
-  return config.model || recipe.agent.model ||
-    (recipe.agent.provider === 'openai-codex' ? 'gpt-5.4' : 'claude-opus-4-6');
+  return recipeModel(recipe, config.model);
 }
 
 /** The host's one NoticesModule, kept across session switches (see createFramework). */
 let noticesRef: NoticesModule | null = null;
 /** The host's one InstructionsModule, kept across session switches (see createFramework). */
 let instructionsRef: InstructionsModule | null = null;
+/** The install whose entry point started this host, and its release, or null
+ *  when none did. Set first thing in main(), and the same for the host's life. */
+let installHere: ReleaseHere | null = null;
 
 async function createFramework(
   membrane: Membrane,
@@ -271,6 +287,7 @@ async function createFramework(
   quotaMeter: QuotaMeter | null,
   credentials: CredentialMonitor | null,
   subscriptionUnmetered = false,
+  extensions?: ExtensionRegistry,
 ): Promise<AgentFramework> {
   const model = resolveModel(recipe);
   const modules = recipe.modules ?? {};
@@ -279,7 +296,10 @@ async function createFramework(
   // Load recipe extensions first — custom strategies must be registered
   // before buildFrameworkStrategy runs, and custom modules join the module
   // list below. The loader is a dumb local import; see src/extensions.ts.
-  const extensionRegistry = await loadExtensions(recipe);
+  // The start's own framework takes the ones main() loaded, which a trial's
+  // audit uses too; a session switch, once the framework before has stopped,
+  // loads them again.
+  const extensionRegistry = extensions ?? await loadExtensions(recipe);
 
   // -- Build module list --
   // SettingsModule is constructed in main() (before the adapter, so the
@@ -311,13 +331,16 @@ async function createFramework(
     moduleInstances.push(lessonsModule);
   }
 
-  // Fleet (cross-process child orchestration). Opt-in via recipe.
-  if (modules.fleet === true) {
-    moduleInstances.push(new FleetModule({ timeZone }));
-  } else if (modules.fleet && typeof modules.fleet === 'object') {
-    const fleetCfg = modules.fleet;
-    const fleetModuleConfig: FleetModuleConfig = {};
-    fleetModuleConfig.timeZone = timeZone;
+  // Fleet (cross-process child orchestration). Opt-in via recipe, as `true` or
+  // as its settings, which `true` leaves at their defaults. A host an install
+  // started keeps the children file its launcher reads before a switch.
+  let fleetModule: FleetModule | null = null;
+  if (modules.fleet === true || (modules.fleet && typeof modules.fleet === 'object')) {
+    const fleetCfg = modules.fleet === true ? {} : modules.fleet;
+    const fleetModuleConfig: FleetModuleConfig = {
+      timeZone,
+      childrenFile: installHere ? childrenFilePath(resolve(config.dataDir)) : undefined,
+    };
     if (fleetCfg.children) {
       fleetModuleConfig.autoStart = fleetCfg.children.map((c) => {
         const entry: NonNullable<FleetModuleConfig['autoStart']>[number] = {
@@ -338,7 +361,8 @@ async function createFramework(
     if (fleetCfg.readyTimeoutMs !== undefined) fleetModuleConfig.readyTimeoutMs = fleetCfg.readyTimeoutMs;
     if (fleetCfg.gracefulShutdownMs !== undefined) fleetModuleConfig.gracefulShutdownMs = fleetCfg.gracefulShutdownMs;
     if (fleetCfg.sigtermEscalationMs !== undefined) fleetModuleConfig.sigtermEscalationMs = fleetCfg.sigtermEscalationMs;
-    moduleInstances.push(new FleetModule(fleetModuleConfig));
+    fleetModule = new FleetModule(fleetModuleConfig);
+    moduleInstances.push(fleetModule);
   }
 
   // Retrieval (requires lessons). OPT-IN — not part of the standard recipe:
@@ -485,6 +509,18 @@ async function createFramework(
     moduleInstances.push(mcplAdminModule);
   }
 
+  // Self-restart (`lifecycle--restart`) — opt-in per recipe. The request and
+  // the last completed restart live in the data dir; only headless mode arms
+  // it (src/self-restart.ts).
+  if (modules.selfRestart !== undefined && modules.selfRestart !== false) {
+    const srCfg = typeof modules.selfRestart === 'object' ? modules.selfRestart : {};
+    moduleInstances.push(new LifecycleModule({
+      dataDir: resolve(config.dataDir),
+      timeZone,
+      ...(srCfg.cooldownMinutes !== undefined ? { cooldownMinutes: srCfg.cooldownMinutes } : {}),
+    }));
+  }
+
   // Archipelago identity — opt-in per recipe. Utilities-only: enrollment is
   // one-time and token refresh is rare, so it costs no tool slots (see
   // identity-module.ts header). Keypair lives at the dataDir level — an
@@ -602,15 +638,10 @@ async function createFramework(
         );
       }
     }
-    // A credential over ws:// to another machine is readable on the network
-    // between. mcpl_deploy refuses one; an operator's recipe, or an overlay
-    // entry saved before that refusal, still loads, with this warning. A
-    // grant counts only where the identity attaches its credential.
-    const cleartext = cleartextCredentialWarning(server.id, {
-      ...withEnv,
-      access: withEnv.accessProvider ? withEnv.access : undefined,
-    });
-    if (cleartext) console.error(cleartext);
+    // A credential over ws:// or http:// to another machine is readable on
+    // the network between. mcpl_deploy refuses one; an operator's recipe, or
+    // an overlay entry saved before that refusal, still loads, and
+    // agent-framework warns when it connects (serverConfigWarnings).
     return withEnv;
   });
 
@@ -722,6 +753,10 @@ agents: [agentConfig],
 
   if (workspaceModule) {
     workspaceModule.initStore(framework.getStore());
+  }
+
+  if (fleetModule) {
+    fleetModule.setStoreSync(() => framework.getStore().sync());
   }
 
   // Stash the WebUiModule reference on the framework so main() can call
@@ -909,7 +944,7 @@ async function runPiped(app: AppContext) {
     for await (const line of rl) lines.push(line);
     console.log(`Processing ${lines.length} commands...`);
     for (const line of lines) {
-      console.log(`> ${line}`);
+      console.log(`> ${batchEchoLine(line)}`);
       if (await processLine(line)) break;
     }
     console.log('Done.');
@@ -974,6 +1009,20 @@ function countLines(path: string): number {
 let beforeFatalExit: (() => Promise<void>) | undefined;
 
 async function main() {
+  // The store audit runs in place of a host: it opens the stores of the data
+  // directories given as a start of this release would, and starts no agent.
+  // It exits as soon as what it wrote has gone out, since an extension the
+  // saved recipe names can keep the process alive, as a timer can.
+  if (process.argv[2] === AUDIT_STORES_FLAG) {
+    process.exit(await auditStoresFromEntry(process.argv.slice(3)));
+  }
+  // First, a fleet child of a host that keeps the children file begins only
+  // once that file lists it (waitToBeListed).
+  await waitToBeListed();
+  // Then, before anything else a host does: a host an install's entry point
+  // started has to be one of that install's releases, or it refuses to start
+  // (releaseHere).
+  installHere = releaseHere();
   const recipe = await resolveRecipe();
   const provider = resolveProvider(recipe);
 
@@ -1293,6 +1342,20 @@ async function main() {
   });
 
   const storePath = sessionManager.getStorePath(activeSession.id);
+  // On trial, while `current` names another release, the places its fallback
+  // puts back are settled, and the active session's store held to them,
+  // before the framework opens that store, since its open writes in place
+  // like any other: one that reaches past them ends the start having opened
+  // nothing. startFramework audits the rest before the commit.
+  let placesForTrial: string[] | null = null;
+  if (installHere !== null) {
+    const install = installHere;
+    const current = currentForStart(install.root);
+    if (current !== null && current !== install.release) {
+      placesForTrial = placesOnTrial(current, () => trialPlaces(install.root));
+      checkActiveStore(storePath, current, placesForTrial);
+    }
+  }
   // Credential monitor: one named state for the provider credential (spent
   // quota, expiring/expired/rejected token, pending device-code login) and
   // the operator actions that fit it, announced through the ops-alert
@@ -1329,7 +1392,12 @@ async function main() {
     adapter.onProviderSuccess = () => credentials.observeSuccess();
   }
 
-  const framework = await createFramework(membrane, storePath, recipe, agentName, settingsModule, callLedger, quotaMeter, credentials, !!codexGate);
+  // Loaded once for this start: its framework's modules come from them, and
+  // a trial's audit builds its strategies from them while that framework is
+  // alive, making no register() call of its own. (A fleet child's audit, like
+  // the child itself, is a process of its own, which loads its own.)
+  const extensions = await loadExtensions(recipe);
+  const framework = await createFramework(membrane, storePath, recipe, agentName, settingsModule, callLedger, quotaMeter, credentials, !!codexGate, extensions);
 
   // Build app context
   const app: AppContext = {
@@ -1347,21 +1415,33 @@ async function main() {
     subscriptionUnmetered: !!codexGate,
 
     async switchSession(id: string) {
-      handleExport(this);
-      await this.framework.stop();
-      sessionManager.setActiveSession(id);
       const newStorePath = sessionManager.getStorePath(id);
-      // Note: agentName stays as resolved at startup. A per-session
-      // re-resolution would matter only if recipe.agent.name is absent
-      // AND the user switches between imports that used different
-      // --agent values; not the canonical flow.
-      this.framework = await createFramework(membrane, newStorePath, recipe, this.agentName, settingsModule, callLedger, quotaMeter, credentials, !!codexGate);
-      this.framework.start();
-      this.userMessageCount = 0;
-      resetBranchState(this.branchState);
-      setupSynesthete(this);
-      setupMcplStderrLog(this, newStorePath);
-      getWebUiModule(this.framework)?.setApp(this);
+      await switchSessionSteps(this, {
+        stopOld: async () => {
+          handleExport(this);
+          await stopForSessionSwitch(this.framework, id);
+        },
+        make: () => {
+          sessionManager.setActiveSession(id);
+          // Note: agentName stays as resolved at startup. A per-session
+          // re-resolution would matter only if recipe.agent.name is absent
+          // AND the user switches between imports that used different
+          // --agent values; not the canonical flow.
+          return createFramework(membrane, newStorePath, recipe, this.agentName, settingsModule, callLedger, quotaMeter, credentials, !!codexGate);
+        },
+        install: async (next) => {
+          this.framework = next;
+          // No install: a switch can't change the release, which the host's own
+          // start committed before any agent ran, so there is nothing to commit.
+          await startFramework(next, null);
+          this.userMessageCount = 0;
+          resetBranchState(this.branchState);
+          setupSynesthete(this);
+          setupMcplStderrLog(this, newStorePath);
+          getWebUiModule(next)?.setApp(this);
+        },
+        stopServer: stopWebUiServer,
+      }, (line) => console.error(`${line} (switching to session ${id})`));
     },
   };
 
@@ -1387,9 +1467,14 @@ async function main() {
 
   // The headless sink attaches inside runHeadless, after start() has
   // dropped the traces create() replays; hold them from here (see
-  // AppContext.bootTraces).
+  // AppContext.bootTraces), before startFramework calls start().
   if (headless) app.bootTraces = holdBootTraces(framework);
-  framework.start();
+  await startFramework(framework, installHere, {
+    dataDir: config.dataDir,
+    activeStore: storePath,
+    extensions,
+    places: () => placesForTrial ?? (installHere === null ? null : trialPlaces(installHere.root)),
+  });
   setupSynesthete(app);
   setupMcplStderrLog(app, storePath);
   getWebUiModule(framework)?.setApp(app);
@@ -1407,7 +1492,19 @@ async function main() {
       await runPiped(app);
     } else {
       const { runTui } = await import('./tui.js');
-      await runTui(app);
+      try {
+        await runTui(app);
+      } finally {
+        // WebUiModule.stop() leaves the web server up so it serves across
+        // session switches, and it would keep the process running. Once
+        // runTui settles, whether the TUI quit or its setup failed, the host
+        // is ending, so the server ends too. stopWebUiServer calls the
+        // server's stop first, so a throw in what it detaches after that is
+        // logged rather than failing a host whose stop succeeded.
+        await stopWebUiServer().catch((error: unknown) => {
+          console.error(`[webui] the TUI has ended, and closing the Web UI's server failed: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
     }
   } finally {
     credentials?.dispose();

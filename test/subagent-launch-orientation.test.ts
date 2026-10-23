@@ -17,7 +17,7 @@
  * real one against the mock provider and read the first request the child
  * actually sends.
  */
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, setDefaultTimeout } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,6 +29,12 @@ import type { Recipe } from '../src/recipe.js';
 import {
   SubagentModule, type SubagentModuleConfig, type SubagentLaunch, agentSettingsOf, describeSubagentStart, toolDifferences, undeliveredLaunchParts,
 } from '../src/modules/subagent-module.js';
+
+// Most tests here build subagent harnesses and run launches through them,
+// which is CPU work that a busy machine can slow many times over. The limit
+// is there to catch a hang, not slowness, so it's longer than bun's 5 s
+// default. bun applies it to every test in this file, and to no other file.
+setDefaultTimeout(20_000);
 
 interface Run {
   name: string;
@@ -856,6 +862,49 @@ describe('what a launch block says beyond the settings it compares', () => {
     }
   });
 
+  // A fork inherits its parent's clock rows and takes no more of its own, so
+  // it's told so, in minutes when the interval is whole minutes, else seconds,
+  // and with the parent's precision where it isn't its interval's default.
+  test('a fork of a parent with clock rows is told its own are off', async () => {
+    for (const [clock, every] of [
+      [{ intervalMinutes: 10 }, '10 minutes'],
+      [{ intervalMinutes: 10, precision: 'seconds' }, '10 minutes, read to the second'],
+      [{ intervalSeconds: 15 }, '15 seconds'],
+    ] as const) {
+      const h = await makeHarness({ parent: { clock } });
+      try {
+        const input = { name: 'timed', task: 't' };
+        seedForkCall(h.framework, 'toolu_timed', input);
+        await h.subagent.handleToolCall(call('fork', 'toolu_timed', input));
+        await h.asyncPromise('timed');
+        const start = startSection(h.runs.find((r) => r.name.startsWith('timed-'))!.firstContext);
+        expect(line(start, '- Agent settings')).toStartWith(
+          "- Agent settings not carried from the parent stream, so the framework's defaults apply: " +
+            `clock rows off (the parent stream's: every ${every}). The rest match: `,
+        );
+      } finally {
+        await h.cleanup();
+      }
+    }
+  });
+
+  // A spawn's caller is read the same way, and named as the calling stream.
+  test('a spawn from a caller with clock rows is told its own are off, beside the caller\'s', async () => {
+    const h = await makeHarness({ parent: { clock: { intervalMinutes: 10 } } });
+    try {
+      const input = { name: 'timed', systemPrompt: 'p', task: 't' };
+      await h.subagent.handleToolCall(call('spawn', 'toolu_timed_spawn', input));
+      await h.asyncPromise('timed');
+      const start = startSection(h.runs[0]!.firstContext);
+      expect(line(start, '- Agent settings')).toStartWith(
+        "- Agent settings not carried from the calling stream, so the framework's defaults apply: " +
+          "clock rows off (the calling stream's: every 10 minutes). The rest match: ",
+      );
+    } finally {
+      await h.cleanup();
+    }
+  });
+
   test('a fork from a parent on the defaults says they match', async () => {
     const h = await makeHarness({});
     try {
@@ -925,6 +974,11 @@ describe('each agent setting is read from its own field', () => {
       [{ refusalHandling: { mode: 'rewind' } }, 'refusal handling', 'set'],
       [{ toolResultGuard: { enabled: true } }, 'tool-result guard', 'on'],
       [{ toolWrapperProseGuard: true }, 'tool-wrapper prose guard', 'on'],
+      [{ clock: { intervalSeconds: 600, precision: 'minutes' } }, 'clock rows', 'every 10 minutes'],
+      [{ clock: { intervalSeconds: 600, precision: 'seconds' } }, 'clock rows', 'every 10 minutes, read to the second'],
+      [{ clock: { intervalSeconds: 60, precision: 'minutes' } }, 'clock rows', 'every 1 minute'],
+      [{ clock: { intervalSeconds: 90, precision: 'seconds' } }, 'clock rows', 'every 90 seconds'],
+      [{ clock: { intervalSeconds: 1, precision: 'seconds' } }, 'clock rows', 'every 1 second'],
     ];
     expect(new Set(cases.map(([, name]) => name))).toStrictEqual(new Set(Object.keys(base)));
     for (const [agent, name, value] of cases) {
@@ -1565,7 +1619,7 @@ describe('what a stream first reads is what its launch promises', () => {
         const cm = h.framework.getAgent('parent')!.getContextManager();
         cm.addMessage('user', [{ type: 'text', text: 'begin' }]);
         if (path === 'structural') {
-          // As agent-framework 0.22.2 stores an XML round: each call carries
+          // As agent-framework 0.22.3 stores an XML round: each call carries
           // the round's raw text, a sibling fork's included, and each result
           // is named, in call order.
           const sibling = { name: 'sibling', task: 'SIBLING-TASK' };
