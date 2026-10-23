@@ -8,7 +8,14 @@
  *   3. Validate relevance: filter to actually relevant lessons
  *
  * Steps 1 and 3 use the configured retrieval model and optional reasoning.
- * Results are cached to avoid redundant calls on unchanged context.
+ *
+ * A turn's result is kept per agent, keyed on the turn's opening message
+ * (openingMessageOf). A start that sees the same opening message, such as a
+ * restart after a tool round, gets the same block, with no model calls, and
+ * agent-framework, which stores the block where the compile placed it
+ * (context-manager #155 part 5), stores nothing new. A lesson that stays
+ * relevant is stored again with each turn's block, and the folds take the
+ * older copies.
  */
 
 import type {
@@ -25,6 +32,7 @@ import { unknownToolResult } from './unknown-tool.js';
 import type { Membrane, NormalizedRequest } from '@animalabs/membrane';
 import type { ContextInjection } from '@animalabs/context-manager';
 import type { LessonsModule, Lesson } from './lessons-module.js';
+import { storedInjectionOf } from '../stored-injection.js';
 import {
   RetrievalTraceStore,
   type RetrievalTraceListOptions,
@@ -45,7 +53,40 @@ interface RecentRetrievalContext {
   text: string;
   messageCount: number;
   messageIds: string[];
+  /** The turn's opening message (openingMessageOf); undefined where its id
+   *  couldn't be read, so the result isn't kept. */
+  opening: OpeningMessage | undefined;
 }
+
+/**
+ * The message a turn answers, as the key its retrieval is kept under. `key`
+ * is null where no shown row is anyone's message yet, as in a window of the
+ * agent's own replies, notices and clock rows: a key like any other, so such
+ * starts share one result until someone writes.
+ */
+interface OpeningMessage {
+  key: string | null;
+  /** The start of its text, for the block's heading; undefined when it has
+   *  no text, or there's no message. */
+  excerpt: string | undefined;
+}
+
+/** A turn's retrieval, kept for the starts that see the same opening message. */
+interface TurnBlock {
+  key: string | null;
+  injections: ContextInjection[];
+  lessonIds: string[];
+  lessons: Lesson[];
+  sourceTraceId: number | undefined;
+}
+
+/** How many agents' turn blocks are kept. Subagents and forks come and go
+ *  under names of their own, so the oldest entry goes past this; an agent
+ *  whose entry went only retrieves again. */
+const TURN_BLOCKS_MAX = 64;
+
+/** How much of the opening message the heading quotes. */
+const EXCERPT_CHARS = 60;
 
 export interface RetrievalModuleConfig {
   /** Membrane instance for retrieval calls */
@@ -77,6 +118,92 @@ Return ONLY a JSON array of lesson IDs that are relevant, nothing else. Example:
 If none are relevant, return an empty array: []`;
 
 // ---------------------------------------------------------------------------
+// The turn's opening message
+// ---------------------------------------------------------------------------
+
+/** A stored row, as much of it as the opening message is read from. */
+interface ShownRow {
+  id?: unknown;
+  participant: string;
+  content: ReadonlyArray<{ type: string; text?: unknown }>;
+  metadata?: unknown;
+  bodyGroupId?: unknown;
+}
+
+/** `metadata.source` of a self-wake's line, agent-framework's EventGate
+ *  (`event-gate.ts`, the self-wake timer): "[self-wake] your … timer
+ *  elapsed". */
+const SELF_WAKE_SOURCE = 'gate:self-wake';
+
+/**
+ * The message a turn answers: the newest of the rows retrieval reads
+ * (getRecentContext: those the residents are shown, stored injections left
+ * out) that someone other than the agent wrote to it. Passed over, since
+ * none of them is anyone's message:
+ * - the agent's own replies (participant `agentName`);
+ * - a row with a tool call or its result;
+ * - a row marked `metadata.system`, as agent-framework marks its notices
+ *   (clock rows, autoContinue's `[continue]`, a turn's interruption or
+ *   failure) and this host its `[host-notice]`;
+ * - a self-wake's line, which says only that the agent's own timer elapsed.
+ *
+ * A batched wake's `[Gate: …]` line counts: where it doesn't point at
+ * messages already shown, it carries the events it reports. Another agent's
+ * message counts too, as in a store the residents share, and so do the
+ * notes this host stores unmarked: the session's start time, a self-restart's
+ * note, a `[voice]` interruption.
+ *
+ * Its key is the row's id, so a later start of the same turn sees the same
+ * key whatever the framework stored since. (A message stored in shards is
+ * keyed on its last shard, which stays its last.) The key is null where no
+ * row qualifies. The result is undefined where the row's id can't be read,
+ * so nothing is kept under a key that isn't the row's.
+ */
+function openingMessageOf(shown: readonly ShownRow[], agentName: string): OpeningMessage | undefined {
+  for (let i = shown.length - 1; i >= 0; i--) {
+    const row = shown[i]!;
+    if (!isAMessageTo(row, agentName)) continue;
+    let id: unknown;
+    try {
+      id = row.id;
+    } catch {
+      return undefined;
+    }
+    if (typeof id !== 'string' && typeof id !== 'number') return undefined;
+    return { key: String(id), excerpt: excerptOf(textOfMessage(shown, row)) };
+  }
+  return { key: null, excerpt: undefined };
+}
+
+function isAMessageTo(row: ShownRow, agentName: string): boolean {
+  if (row.participant === agentName) return false;
+  if (row.content.some(b => b.type === 'tool_use' || b.type === 'tool_result')) return false;
+  const metadata = row.metadata as { system?: unknown; source?: unknown } | undefined;
+  return metadata?.system !== true && metadata?.source !== SELF_WAKE_SOURCE;
+}
+
+/** A row's text, or for a message stored in shards, its shards' text in
+ *  store order, which is theirs: context-manager writes a message's shards
+ *  in order (`ContextManager.addMessage`). */
+function textOfMessage(shown: readonly ShownRow[], row: ShownRow): string {
+  const textOf = (r: ShownRow): string => r.content
+    .filter(b => b.type === 'text' && typeof b.text === 'string')
+    .map(b => b.text as string)
+    .join(' ');
+  const group = row.bodyGroupId;
+  if (typeof group !== 'string' || group === '') return textOf(row);
+  return shown.filter(r => r.bodyGroupId === group).map(textOf).join('');
+}
+
+/** The start of a message's text on one line, or undefined when it has none. */
+function excerptOf(text: string): string | undefined {
+  const line = text.replace(/\s+/g, ' ').trim();
+  if (line === '') return undefined;
+  const chars = Array.from(line);
+  return chars.length <= EXCERPT_CHARS ? line : `${chars.slice(0, EXCERPT_CHARS).join('').trimEnd()}…`;
+}
+
+// ---------------------------------------------------------------------------
 // Module
 // ---------------------------------------------------------------------------
 
@@ -85,11 +212,8 @@ export class RetrievalModule implements Module {
 
   private ctx: ModuleContext | null = null;
   private config: RetrievalModuleConfig;
-  private lastContextHash = '';
-  private cachedInjections: ContextInjection[] = [];
-  private cachedLessonIds: string[] = [];
-  private cachedLessons: Lesson[] = [];
-  private cachedSourceTraceId: number | undefined;
+  /** Each agent's latest turn block, by agent name, oldest first. */
+  private readonly turnBlocks = new Map<string, TurnBlock>();
   private readonly traceStore = new RetrievalTraceStore();
 
   constructor(config: RetrievalModuleConfig) {
@@ -153,7 +277,7 @@ export class RetrievalModule implements Module {
 
     let lessons: Lesson[];
     let recentMessages: string;
-    let contextHash: string;
+    let opening: OpeningMessage | undefined;
     try {
       // These lookups, eligibility checks, context rendering, and hashing are
       // pre-existing throwing paths. Record their failure, then preserve the
@@ -174,25 +298,22 @@ export class RetrievalModule implements Module {
         return [];
       }
 
-      const recent = this.getRecentContext();
+      const recent = this.getRecentContext(agentName);
       if (!recent) {
         trace?.finish('no-recent-context');
         return [];
       }
       recentMessages = recent.text;
+      opening = recent.opening;
 
-      // Check cache: if context hasn't changed, reuse cached results.
-      contextHash = this.hashContext(recentMessages);
-      trace?.setContext(contextHash, recentMessages, recent.messageCount, recent.messageIds);
-      if (contextHash === this.lastContextHash && this.cachedInjections.length > 0) {
-        trace?.recordCacheHit(
-          this.cachedSourceTraceId,
-          this.cachedLessonIds,
-          this.cachedLessons,
-          this.cachedInjections,
-        );
+      trace?.setContext(this.hashContext(recentMessages), recentMessages, recent.messageCount, recent.messageIds);
+      // The turn's block, where this start sees the opening message it was
+      // found for: an empty one too, so a restart doesn't retrieve again.
+      const kept = this.turnBlocks.get(agentName);
+      if (opening && kept && kept.key === opening.key) {
+        trace?.recordCacheHit(kept.sourceTraceId, kept.lessonIds, kept.lessons, kept.injections);
         trace?.finish('cache-hit');
-        return this.cachedInjections;
+        return kept.injections;
       }
     } catch (error) {
       trace?.finish('error', error);
@@ -203,11 +324,7 @@ export class RetrievalModule implements Module {
       // Step 1: Flag concepts
       const concepts = await this.flagConcepts(recentMessages, trace);
       if (concepts.length === 0) {
-        this.lastContextHash = contextHash;
-        this.cachedInjections = [];
-        this.cachedLessonIds = [];
-        this.cachedLessons = [];
-        this.cachedSourceTraceId = undefined;
+        this.keepTurnBlock(agentName, opening, [], []);
         trace?.finish('no-concepts');
         return [];
       }
@@ -216,11 +333,7 @@ export class RetrievalModule implements Module {
       const candidates = this.queryCandidates(concepts, lessons);
       trace?.recordCandidates(concepts, candidates);
       if (candidates.length === 0) {
-        this.lastContextHash = contextHash;
-        this.cachedInjections = [];
-        this.cachedLessonIds = [];
-        this.cachedLessons = [];
-        this.cachedSourceTraceId = undefined;
+        this.keepTurnBlock(agentName, opening, [], []);
         trace?.finish('no-candidates');
         return [];
       }
@@ -234,11 +347,7 @@ export class RetrievalModule implements Module {
       const injected = relevant.slice(0, maxLessons);
 
       if (injected.length === 0) {
-        this.lastContextHash = contextHash;
-        this.cachedInjections = [];
-        this.cachedLessonIds = [];
-        this.cachedLessons = [];
-        this.cachedSourceTraceId = undefined;
+        this.keepTurnBlock(agentName, opening, [], []);
         trace?.finish('no-relevant-lessons');
         return [];
       }
@@ -247,26 +356,28 @@ export class RetrievalModule implements Module {
         .map(l => `- [${(l.confidence * 100).toFixed(0)}%] ${l.content} (tags: ${l.tags.join(', ')})`)
         .join('\n');
 
+      // The heading names the message the lessons were found for, so a block
+      // agent-framework stores reads right as history, wherever it lands.
+      const heading = opening?.excerpt !== undefined
+        ? `## Retrieved Knowledge, for the message beginning "${opening.excerpt}"`
+        : '## Retrieved Knowledge';
       const injections: ContextInjection[] = [{
         namespace: 'retrieval',
-        // 'afterUser', NOT 'system': retrieval content changes with recent
-        // context (contextHash above), so injecting it into the system prompt
-        // churns the very front of the KV cache and invalidates the entire
-        // prefix every turn. Tail injection keeps the stable prefix cached.
+        // 'afterUser', NOT 'system': retrieval content changes with each
+        // turn's message, so injecting it into the system prompt churns the
+        // very front of the KV cache and invalidates the entire prefix every
+        // turn. Tail injection keeps the stable prefix cached.
         position: 'afterUser',
-        content: [{ type: 'text', text: `## Retrieved Knowledge\n${text}` }],
+        content: [{ type: 'text', text: `${heading}\n${text}` }],
       }];
 
-      this.lastContextHash = contextHash;
-      this.cachedInjections = injections;
-      this.cachedLessons = this.safeLessonSnapshots(injected);
-      this.cachedLessonIds = this.safeLessonIds(this.cachedLessons);
-      this.cachedSourceTraceId = trace?.id;
+      this.keepTurnBlock(agentName, opening, injections, this.safeLessonSnapshots(injected), trace?.id);
       trace?.recordInjection(injected, injections);
       trace?.finish('injected');
       return injections;
     } catch (err) {
-      // Fail open — don't block inference if retrieval fails
+      // Fail open — don't block inference if retrieval fails. Nothing is
+      // kept, so the turn's next start tries again.
       trace?.finish('error', err);
       console.error('RetrievalModule: retrieval failed:', err);
       return [];
@@ -450,17 +561,45 @@ export class RetrievalModule implements Module {
   // Helpers
   // =========================================================================
 
-  private getRecentContext(): RecentRetrievalContext | null {
+  /** Keep a turn's result for the agent's later starts that see the same
+   *  opening message. A start whose opening message couldn't be read keeps
+   *  nothing, so the agent's next start retrieves again. */
+  private keepTurnBlock(
+    agentName: string,
+    opening: OpeningMessage | undefined,
+    injections: ContextInjection[],
+    lessons: Lesson[],
+    sourceTraceId?: number,
+  ): void {
+    if (!opening) return;
+    this.turnBlocks.delete(agentName);
+    this.turnBlocks.set(agentName, {
+      key: opening.key,
+      injections,
+      lessons,
+      lessonIds: this.safeLessonIds(lessons),
+      sourceTraceId,
+    });
+    while (this.turnBlocks.size > TURN_BLOCKS_MAX) {
+      const oldest = this.turnBlocks.keys().next().value as string;
+      this.turnBlocks.delete(oldest);
+    }
+  }
+
+  private getRecentContext(agentName: string): RecentRetrievalContext | null {
     if (!this.ctx) return null;
 
     // Get the last few messages of the conversation the residents see. A row
     // marked `held: true` is a write the framework still holds: it reaches the
     // agent at a later boundary, not in the request these lessons go into. A
     // row marked `heldFromResidents` arrived in a tuned-out channel, and no
-    // resident is shown it. So the window keeps to the stored rows the
-    // residents are shown.
+    // resident is shown it. A stored injection (stored-injection.ts) is no
+    // one's message, and a past lessons block among them would have the
+    // concept step read its own earlier output. So the window keeps to the
+    // stored rows the residents are shown, injections left out.
     const { messages } = this.ctx.queryMessages({});
-    const shown = messages.filter(m => m.held !== true && m.heldFromResidents !== true);
+    const shown = messages.filter(m =>
+      m.held !== true && m.heldFromResidents !== true && storedInjectionOf(m.metadata) === undefined);
     if (shown.length === 0) return null;
 
     // Take the last 10 of them for context.
@@ -486,7 +625,7 @@ export class RetrievalModule implements Module {
       }
     });
 
-    return { text, messageCount: recent.length, messageIds };
+    return { text, messageCount: recent.length, messageIds, opening: openingMessageOf(shown, agentName) };
   }
 
   private safeLessonIds(lessons: Lesson[]): string[] {

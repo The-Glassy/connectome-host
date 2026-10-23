@@ -60,6 +60,11 @@ import type {
 import type { ContextInjection } from '@animalabs/context-manager';
 import { unknownToolResult } from './unknown-tool.js';
 
+/** agent-framework's `ModuleContextInjection`, which `gatherContext` returns:
+ *  an injection marked `placedEachCompile` is placed at each compile rather
+ *  than stored (context-manager #155 part 5). */
+type ModuleContextInjection = ContextInjection & { placedEachCompile?: true };
+
 /**
  * The slice of WorkspaceModule this module reads through: its disk read,
  * whose refusals are WorkspaceReadErrors (a `code` and a message naming the
@@ -275,13 +280,21 @@ export class InstructionsModule implements Module {
       this.alerted = false;
       this.notifyOps('instructions-unavailable-clear', `"${this.path}" loaded again; agents have their instructions`);
     }
-    return [
-      {
-        namespace: 'instructions',
-        position: this.position,
-        content: [{ type: 'text', text: `${this.header}\n\n${content}` }],
-      },
-    ];
+    const injection: ModuleContextInjection = {
+      namespace: 'instructions',
+      position: this.position,
+      content: [{ type: 'text', text: `${this.header}\n\n${content}` }],
+    };
+    // Off `system`, the instructions are there to be near the end, so they're
+    // marked to be placed at each compile, as before. agent-framework would
+    // otherwise store an `afterUser` one once, where the compile placed it
+    // (context-manager #155 part 5; it places a `beforeUser` one at each
+    // compile in any case): a stored copy drifts back into history, and once
+    // a fold has taken it, unchanged instructions wouldn't be stored again.
+    // The price is today's: each start moves them, and replies after their
+    // old place lose their thinking.
+    if (this.position !== 'system') injection.placedEachCompile = true;
+    return [injection];
   }
 
   /** How long a read may take: three quarters of the registry's budget for

@@ -40,6 +40,7 @@ import type {
 import { WorkspaceReadError } from '@animalabs/agent-framework';
 import { unknownToolResult } from './unknown-tool.js';
 import { workspaceReadFields } from '../workspace-read-result.js';
+import { storedInjectionLabel, storedInjectionOf } from '../stored-injection.js';
 import type { ServerWebSocket } from 'bun';
 import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
@@ -3585,6 +3586,7 @@ interface MessageLike {
   id?: string;
   participant: string;
   content: ReadonlyArray<unknown>;
+  metadata?: unknown;
   timestamp?: number | Date;
   bodyGroupId?: string;
   shardIndex?: number;
@@ -3610,7 +3612,7 @@ function capText(s: string, cap: number): { text: string; truncated?: boolean } 
  *
  * `index` is the message's store slot index — the client's paging cursor.
  */
-function toWireEntry(
+export function toWireEntry(
   msg: MessageLike,
   index: number,
   opts: { mediaRefs?: boolean } = {},
@@ -3723,10 +3725,20 @@ function toWireEntry(
     }
   }
 
+  // A stored injection (stored-injection.ts), such as a lessons block, is a
+  // labelled system row: as any participant but user, system and tool it
+  // would show as the agent's own message.
+  const injection = storedInjectionOf(msg.metadata);
+  if (injection) {
+    const label = storedInjectionLabel(injection);
+    blocks.unshift({ kind: 'text', text: label });
+    textParts.unshift(label);
+  }
+
   // Messages that are purely tool results are turn-plumbing, not prose;
   // surface them as participant 'tool' so the client can pair/hide them.
-  const participant = toolResults > 0 && conversational === 0
-    ? 'tool'
+  const participant = injection ? 'system'
+    : toolResults > 0 && conversational === 0 ? 'tool'
     : normalizeParticipant(msg.participant);
 
   const entry: WelcomeMessageEntry = {

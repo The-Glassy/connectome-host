@@ -49,6 +49,7 @@ import { formatQuotaReadout } from './quota-meter.js';
 import { takeRecipeWarnings } from './recipe.js';
 import { bunFloorNotice } from './bun-floor-check.js';
 import { effectiveContextBudgetTokens } from './framework-agent-config.js';
+import { storedInjectionLabel, storedInjectionOf } from './stored-injection.js';
 
 /** Format a token count compactly: 1.2M / 3.5k / 42. */
 export function fmtTokens(n: number): string {
@@ -116,6 +117,27 @@ export function sliceViewport(len: number, cursor: number, avail: number): { sta
  *  share it. */
 function headerMessage(message: string): string {
   return message.length > 70 ? `${message.slice(0, 67).replace(/[\uD800-\uDBFF]$/, '')}…` : message;
+}
+
+/**
+ * A stored injection's line in the history replay (stored-injection.ts), or
+ * undefined for any other row. It's shown as what it is, such as a lessons
+ * block: one line under its label, cut as replayed thinking is, never as
+ * the user's words or the agent's.
+ */
+export function historyInjectionLine(
+  msg: { content: ReadonlyArray<{ type: string; text?: unknown }>; metadata?: unknown },
+): string | undefined {
+  const mark = storedInjectionOf(msg.metadata);
+  if (!mark) return undefined;
+  const text = msg.content
+    .filter((b) => b.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text as string)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const line = text === '' ? storedInjectionLabel(mark) : `${storedInjectionLabel(mark)} ${text}`;
+  return line.length > 120 ? `${line.slice(0, 117).replace(/[\uD800-\uDBFF]$/, '')}…` : line;
 }
 
 /**
@@ -1004,6 +1026,12 @@ export async function runTui(app: AppContext): Promise<void> {
       : `── session history (${messages.length} messages) ──`, DIM_GRAY);
 
     for (const msg of messages) {
+      const injected = historyInjectionLine(msg);
+      if (injected !== undefined) {
+        addLine(injected, DIM_GRAY);
+        continue;
+      }
+
       const toolNames: string[] = [];
 
       for (const block of msg.content) {

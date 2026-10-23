@@ -80,7 +80,7 @@ import { currentForStart, releaseHere, type ReleaseHere } from './update/host.js
 import { childrenFilePath, trialPlaces } from './update/contract.js';
 import { switchSessionSteps } from './session-switch.js';
 import { resolveAgentName } from './agent-name.js';
-import { generateSessionName } from './synesthete.js';
+import { generateSessionName, namingSummary } from './synesthete.js';
 import {
   type Recipe,
   DEFAULT_RECIPE,
@@ -308,6 +308,7 @@ async function createFramework(
       provider: resolveProvider(recipe),
       defaultModel: subagentConfig.defaultModel || model,
       defaultMaxTokens: subagentConfig.defaultMaxTokens,
+      timeZone,
     });
     moduleInstances.push(subagentModule);
   }
@@ -804,17 +805,7 @@ function setupSynesthete(app: AppContext): void {
     if (!cm) return;
 
     const { messages } = cm.queryMessages({});
-    const summary = messages
-      .filter(m => m.content.some((b: { type: string }) => b.type === 'text'))
-      .slice(0, 6)
-      .map(m => {
-        const text = m.content
-          .filter((b: { type: string }): b is { type: 'text'; text: string } => b.type === 'text')
-          .map((b: { text: string }) => b.text)
-          .join(' ');
-        return `${m.participant}: ${text.slice(0, 200)}`;
-      })
-      .join('\n');
+    const summary = namingSummary(messages);
 
     generateSessionName(app.membrane, summary, namingExamples).then(name => {
       if (name) {

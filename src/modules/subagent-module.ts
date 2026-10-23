@@ -32,12 +32,13 @@ import type {
   ContextManager,
 } from '@animalabs/agent-framework';
 import type { Agent, AgentFramework } from '@animalabs/agent-framework';
-import { KnowledgeStrategy } from '@animalabs/agent-framework';
+import { KnowledgeStrategy, formatZonedDateTime, resolveTimeZone } from '@animalabs/agent-framework';
 import { isToolResultContent, isToolUseContent } from '@animalabs/membrane';
 import type { ContentBlock } from '@animalabs/membrane';
 import { emptyUsage, foldUsageSample, type UsageCounts, type UsageSample } from '../state/stream-usage.js';
 import { traceError } from '../state/turn-trace.js';
 import { shown } from './shown.js';
+import { storedInjectionOf } from '../stored-injection.js';
 import { unknownToolResult } from './unknown-tool.js';
 
 // ---------------------------------------------------------------------------
@@ -69,6 +70,10 @@ export interface SubagentModuleConfig {
   maxExecutionMs?: number;
   /** Max restart attempts on transient errors (default: 2) */
   maxRetries?: number;
+  /** The IANA zone the fleet status's clock times read in: the recipe's
+   *  `agent.timezone`, which the agent's clock rows read in too. Absent, as
+   *  resolveTimeZone resolves it (AGENT_TIMEZONE, then the system's). */
+  timeZone?: string;
 }
 
 export interface SubagentResult {
@@ -1318,6 +1323,8 @@ export class SubagentModule implements Module {
 
   // Retry on transient errors
   private maxRetries: number;
+  /** The zone the fleet status's clock times read in (SubagentModuleConfig). */
+  private readonly timeZone: string;
 
   /** Observable registry of active/recent subagents for TUI display. */
   readonly activeSubagents = new Map<string, ActiveSubagent>();
@@ -1350,6 +1357,7 @@ export class SubagentModule implements Module {
     this.maxPromptTokens = config.maxPromptTokens ?? 190_000;
     this.maxExecutionMs = config.maxExecutionMs ?? 600_000;
     this.maxRetries = config.maxRetries ?? 2;
+    this.timeZone = resolveTimeZone(config.timeZone);
   }
 
   /** Set the framework reference. Must be called after framework creation. */
@@ -1763,16 +1771,27 @@ export class SubagentModule implements Module {
     // the orchestrator's context.
     const allowed = this.getDescendantDisplayNames(agentName);
 
+    // The status is built from state changes alone, a subagent's start and
+    // its end, as clock times, so the same state gives the same text.
+    // agent-framework stores this injection where the compile placed it, and
+    // stores it again only when its text changes (context-manager #155 part
+    // 5): an elapsed count or a running call count would change it at nearly
+    // every start. A running subagent's progress is `peek`'s to show.
     const lines: string[] = [];
+    let latestChange: number | undefined;
     for (const [, sa] of this.activeSubagents) {
       if (!allowed.has(sa.name)) continue;
-      const elapsed = sa.completedAt
-        ? Math.floor((sa.completedAt - sa.startedAt) / 1000)
-        : Math.floor((Date.now() - sa.startedAt) / 1000);
       const parent = this.parentMap.get(sa.name) ?? 'agent';
       const parentShort = parent.replace(/^(spawn|fork)-/, '').replace(/-d\d+-\d+$/, '').replace(/-retry\d+$/, '');
       const task = sa.task.length > 50 ? sa.task.slice(0, 47) + '...' : sa.task;
-      lines.push(`  ${sa.name} [${sa.type}] ${sa.status} ${elapsed}s ${sa.toolCallsCount}calls parent:${parentShort} "${task}"`);
+      const changedAt = sa.completedAt ?? sa.startedAt;
+      if (latestChange === undefined || changedAt > latestChange) latestChange = changedAt;
+      // The call count is set when a run completes, so it's shown there
+      // only; a failed or stopped run's count was never taken.
+      const ended = sa.completedAt !== undefined
+        ? ` ended ${this.clockTime(sa.completedAt)}${sa.status === 'completed' ? ` ${sa.toolCallsCount}calls` : ''}`
+        : '';
+      lines.push(`  ${sa.name} [${sa.type}] ${sa.status} started ${this.clockTime(sa.startedAt)}${ended} parent:${parentShort} "${task}"`);
     }
 
     // Also show async handles still running, but only those owned by the
@@ -1788,11 +1807,18 @@ export class SubagentModule implements Module {
 
     if (lines.length === 0) return [];
 
+    const asOf = latestChange !== undefined ? `, as of ${this.clockTime(latestChange)} ${this.timeZone}` : '';
     return [{
       namespace: 'subagent-fleet',
       position: 'afterUser',
-      content: [{ type: 'text', text: `[Fleet Status]\n${lines.join('\n')}` }],
+      content: [{ type: 'text', text: `[Fleet Status${asOf}]\n${lines.join('\n')}` }],
     }];
+  }
+
+  /** A time of day on the agent's clock, `14:05:09`, in the recipe's zone,
+   *  the one its clock rows read in. */
+  private clockTime(at: number): string {
+    return formatZonedDateTime(at, this.timeZone).slice(11, 19);
   }
 
   // =========================================================================
@@ -3721,6 +3747,8 @@ export class SubagentModule implements Module {
    * Extract the last assistant text from a context manager's messages.
    * Fallback when the streaming speech capture is empty (e.g., agent's
    * last action was a tool call, or speech was reset on stream_resumed).
+   * A stored injection (stored-injection.ts), such as a lessons block, is
+   * no one's answer, so it's passed over too.
    */
   private extractLastAssistantText(contextManager: ContextManager): string {
     try {
@@ -3728,6 +3756,7 @@ export class SubagentModule implements Module {
       for (let i = messages.length - 1; i >= 0; i--) {
         const msg = messages[i];
         if (msg.participant === 'user' || msg.participant === 'User') continue;
+        if (storedInjectionOf(msg.metadata) !== undefined) continue;
         const texts = msg.content
           .filter((b: ContentBlock) => b.type === 'text')
           .map((b: ContentBlock) => (b as { type: 'text'; text: string }).text);
