@@ -11,11 +11,12 @@
  *
  * A turn's result is kept per agent, keyed on the turn's opening message
  * (openingMessageOf). A start that sees the same opening message, such as a
- * restart after a tool round, gets the same block, with no model calls, and
- * agent-framework, which stores the block where the compile placed it
- * (context-manager #155 part 5), stores nothing new. A lesson that stays
- * relevant is stored again with each turn's block, and the folds take the
- * older copies.
+ * restart after a tool round, gets the same block, with no model calls.
+ * agent-framework stores the block where the compile placed it
+ * (context-manager #155 part 5), and stores it again only when the agent's
+ * last request no longer held it, as after a fold took it. A lesson that
+ * stays relevant is stored again with each new turn's block, whose heading
+ * names that turn's opening message, and the folds take the older copies.
  */
 
 import type {
@@ -322,7 +323,12 @@ export class RetrievalModule implements Module {
    * agent's has begun (keepTurnBlock). A later one can begin while this one
    * still runs, as when the framework's gather timeout leaves it behind and
    * the agent starts again, or when a newer turn starts; then it's the later
-   * start whose result the framework has, and keeps.
+   * start whose result the framework has, and what it keeps is the turn's,
+   * nothing when it keeps nothing. A Web UI preview with injections
+   * (previewActivation) gathers too and counts as a start: overlapping a
+   * start's model calls, it keeps its own result for the same opening
+   * message in that start's place, so the turn's next start may get a
+   * block the framework then stores again (Agnes-1009, room-203 #197691).
    */
   async gatherContext(agentName: string): Promise<ContextInjection[]> {
     const start = ++this.starts;

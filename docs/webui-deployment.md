@@ -261,11 +261,12 @@ MCPL context), because gathering those is not transparent.
 Query params:
 
 - `agent=<name>` — defaults to the recipe's root agent
-- `injections=1` (any value but `0`/`false`) — opt into full fidelity: gather
-  the dynamic injections too.
+- `injections=1` (any value but `0`/`false`) — gather the dynamic injections
+  too. One a start would store as a message isn't capped, sharded or weighed
+  against the budget in the preview as the stored message would be.
   **Not transparent** — this can run inference (e.g. the retrieval module's
-  configured model calls cost tokens) and fires MCPL `beforeInference` hooks
-  (whose paired
+  configured model calls cost tokens), counts as a start for retrieval's
+  per-turn result, and fires MCPL `beforeInference` hooks (whose paired
   `afterInference` is never sent, so a stateful server may be left half-open).
 - `pretty=1` — pretty-print the JSON
 

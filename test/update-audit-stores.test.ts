@@ -23,7 +23,7 @@ import { loadExtensions } from '../src/extensions.js';
 import { DEFAULT_RECIPE, loadSavedRecipe, saveRecipe, validateRecipe } from '../src/recipe.js';
 import { SessionManager } from '../src/session-manager.js';
 import { startFramework } from '../src/start-framework.js';
-import { auditStores, fleetChildRepair, type AuditOptions } from '../src/update/audit-stores.js';
+import { auditStores, fleetChildRepair, subconsciousView, type AuditOptions } from '../src/update/audit-stores.js';
 import { AUDIT_POINTER, loadRepairAlert, loadRepairLines, type LoadRepairReport } from '../src/web/load-repair-alert.js';
 import * as contract from '../src/update/contract.js';
 import {
@@ -526,6 +526,19 @@ describe('the store audit', () => {
     }
     expect(said["a subconscious whose context a start can't read"]!.audit).toContain(' (subconscious/agent): refused: ');
   }, 90_000);
+
+  test("the subconscious's view leaves out other agents' stored injections, as agent-framework's does", () => {
+    // createSubconsciousAgent's filter, which the audit's copy follows: the
+    // residents' slot merged, tuned-out rows included, every other agent's
+    // stored injection left out, the subconscious's own kept.
+    const view = subconsciousView('Subconscious');
+    const row = (metadata?: Record<string, unknown>) => ({ id: 'm', participant: 'x', content: [], timestamp: 0, ...(metadata ? { metadata } : {}) }) as never;
+    const injection = (agent: string) => ({ system: true, kind: 'context-injection', contextInjection: { agent, namespace: 'retrieval', contentHash: 'h', part: 0, parts: 1 } });
+    expect(view(row(injection('agent')))).toBe(false);
+    expect(view(row(injection('Subconscious')))).toBe(true);
+    expect(view(row({ tuneOut: { channel: 'c' } }))).toBe(true);
+    expect(view(row())).toBe(true);
+  });
 
   test("a crossed store opens under a resident's kv-unified block that keeps gap-bearing summaries, as at its start", async () => {
     const { dir, stores } = await makeDataDir('data', [{ namespace: 'agents/agent', crossed: true }]);

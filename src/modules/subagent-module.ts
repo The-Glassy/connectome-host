@@ -442,6 +442,11 @@ const SUBAGENT_STREAM_TOKENS = 500_000;
  *  call nor the module's config names one, as before. */
 const UNNAMED_LAUNCHER = 'agent';
 
+/** The fleet status's injection namespace, and the participant
+ *  agent-framework stores it under (`system_context:<namespace>`). */
+const FLEET_NAMESPACE = 'subagent-fleet';
+const FLEET_PARTICIPANT = `system_context:${FLEET_NAMESPACE}`;
+
 /** The per-message cap of every subagent's and fork's window
  *  (SUBAGENT_STRATEGY), which retrieval fits its block under too
  *  (retrievalMessageCap). */
@@ -1337,9 +1342,6 @@ export class SubagentModule implements Module {
 
   /** Observable registry of active/recent subagents for TUI display. */
   readonly activeSubagents = new Map<string, ActiveSubagent>();
-  /** The agents whose last fleet status listed a run, by framework name, so
-   *  each is told once nothing is running or waiting (gatherContext). */
-  private readonly fleetStatusListedFor = new Set<string>();
 
   /** Parent agent name for each subagent (for fleet tree reconstruction). */
   readonly parentMap = new Map<string, string>();
@@ -1795,9 +1797,10 @@ export class SubagentModule implements Module {
     // its tool result or `[Subagent '…' returned]` (addForLauncher), so it
     // leaves the list, which keeps each stored copy to the runs under way:
     // as many running as the concurrency limit, and the async runs waiting
-    // for a slot. When the last one ends, the status says none is running,
-    // so the newest copy in the context isn't one that lists runs since
-    // ended. A running subagent's progress is `peek`'s to show.
+    // for a slot. Once none is, an agent whose newest stored status lists a
+    // run is told, once, that none is running, so the newest copy in its
+    // context isn't one that lists runs since ended. A running subagent's
+    // progress is `peek`'s to show.
     const lines: string[] = [];
     let latestChange: number | undefined;
     for (const [, sa] of this.activeSubagents) {
@@ -1817,30 +1820,49 @@ export class SubagentModule implements Module {
     // and the caller has no descendants to begin with).
     for (const [name] of this.asyncHandles) {
       if (!allowed.has(name)) continue;
-      if (!this.activeSubagents.has(name) && !this.activeSubagents.has(`spawn-${name}`)) {
-        lines.push(`  ${name} [async] pending`);
-      }
+      // A run under way is listed above; an entry of a finished run under
+      // the same name, kept as history, doesn't hide a new one waiting.
+      const entry = this.activeSubagents.get(name) ?? this.activeSubagents.get(`spawn-${name}`);
+      if (entry?.status !== 'running') lines.push(`  ${name} [async] pending`);
     }
 
     if (lines.length === 0) {
-      // Nothing running or waiting: an agent whose last status listed
-      // something gets one saying so, so the newest copy in its context
-      // isn't one that lists work since ended. That includes work that ended
-      // before it started, as a queued async run cancelled while waiting for
-      // a slot, which leaves no start or end to be "as of".
-      const listed = this.fleetStatusListedFor.delete(agentName);
-      if (latestChange === undefined && !listed) return [];
+      // Nothing running or waiting: an agent whose newest stored status
+      // lists a run gets one saying none is, so the newest copy in its
+      // context isn't one that lists work since ended, and otherwise there's
+      // nothing to tell. That's read from the status agent-framework stored
+      // in the agent's own window, not kept here, so a preview, which
+      // stores nothing, and a restart, which forgets this process's state,
+      // leave it as it is.
+      if (!this.newestStatusListsRun(agentName)) return [];
       lines.push('  (none running)');
-    } else {
-      this.fleetStatusListedFor.add(agentName);
     }
 
     const asOf = latestChange !== undefined ? `, as of ${this.clockTime(latestChange)} ${this.timeZone}` : '';
     return [{
-      namespace: 'subagent-fleet',
+      namespace: FLEET_NAMESPACE,
       position: 'afterUser',
       content: [{ type: 'text', text: `[Fleet Status${asOf}]\n${lines.join('\n')}` }],
     }];
+  }
+
+  /** Whether the newest fleet status agent-framework stored in the agent's
+   *  own window lists a run: a line under its heading other than
+   *  "(none running)". A window that can't be read lists none. */
+  private newestStatusListsRun(agentName: string): boolean {
+    let rows: Array<{ content: ContentBlock[]; metadata?: unknown }>;
+    try {
+      rows = this.ctx!.queryMessages({ participant: FLEET_PARTICIPANT }, { forAgent: agentName }).messages;
+    } catch {
+      return false;
+    }
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const mark = storedInjectionMarkOf(rows[i]!.metadata);
+      if (mark?.namespace !== FLEET_NAMESPACE || mark.agent !== agentName) continue;
+      const text = rows[i]!.content.map((block) => (block.type === 'text' ? block.text : '')).join('');
+      return text.split('\n').slice(1).some((line) => line.trim() !== '' && line.trim() !== '(none running)');
+    }
+    return false;
   }
 
   /** A time of day on the agent's clock, `14:05:09`, in the recipe's zone,
@@ -3064,15 +3086,19 @@ export class SubagentModule implements Module {
 
   /** An async run's result, in the window of the agent that launched it,
    *  whose wake reads it there: a resident's is the residents' slot, a
-   *  fork's or a subagent's its own. Its line names a launcher that isn't
-   *  the primary (config.parentAgentName), so it reads right in whatever
-   *  window it ends up in, the residents' slot included. A result is work
-   *  done, so one whose launcher agent-framework no longer lists lands
-   *  in the residents' slot, as every async result did before, its line
-   *  adding that the launcher has ended, so no resident takes it for its own
-   *  (Agnes-1009, room-203 #197191, #197307). With no launcher named, it
-   *  lands there as before. A write that fails otherwise throws, as
-   *  before. */
+   *  fork's, a subagent's or a conversation agent's its own. Its line names
+   *  a launcher that isn't the primary (config.parentAgentName), so it reads
+   *  right in whatever window it ends up in: agent-framework passes to the
+   *  primary a write its launcher's window is released without reading. A
+   *  result is work done, so one whose launcher agent-framework no longer
+   *  lists lands in the primary's window, the residents' slot, as every
+   *  async result did before, its line adding that the launcher has ended,
+   *  so no resident takes it for its own (Agnes-1009, room-203 #197191,
+   *  #197307). With no launcher named, it lands there as before. A write
+   *  that fails otherwise throws, as before. The wake names the launcher, so
+   *  a result that reaches the primary's window for a launcher that's gone
+   *  doesn't wake the primary: it's read at its next start, as on main
+   *  (Agnes-1009, #197466). */
   private addForLauncher(launcher: string | undefined, name: string, outcome: 'returned' | 'failed', body: string): void {
     const ctx = this.ctx!;
     const listed = launcher === undefined || ctx.getAgents().some((agent) => agent.name === launcher);

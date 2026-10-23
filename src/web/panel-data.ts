@@ -1708,8 +1708,11 @@ export function runContextPreview(
  *
  * Transparent by default: no inference of its own, no Chronicle writes, no
  * external MCPL calls. Pass `injections: true` to gather dynamic injections
- * (lessons/retrieval/MCPL context) for full fidelity, which is NOT
- * transparent: it can run inference and fire MCPL `beforeInference` hooks.
+ * (lessons/retrieval/MCPL context) as a start does, which is NOT
+ * transparent: it can run inference, counts as a start for retrieval's
+ * per-turn result, and fires MCPL `beforeInference` hooks. An injection a
+ * start would store as a message isn't capped or budgeted in the preview as
+ * the stored message would be.
  */
 export async function buildDebugContext(
   app: PanelAppRef,

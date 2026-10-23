@@ -1232,6 +1232,39 @@ describe('a name means one subagent until its result has come back', () => {
     } finally { await h.cleanup(); }
   }, 20_000);
 
+  test('an async result goes to the window of the subagent that launched it, its line naming it, and its wake to it', async () => {
+    const h = await harness({ maxRetries: 0 }, async (agent) => agent.name.includes('lead') ? new Promise(() => { /* runs on */ }) : ran('done'));
+    const ctx = (h.subagent as unknown as { ctx: {
+      addMessage(participant: string, content: Array<{ type: string; text?: string }>, metadata?: unknown, opts?: { forAgent?: string }): unknown;
+      pushEvent(event: { type: string; agentName?: string }): unknown;
+    } }).ctx;
+    const add = ctx.addMessage.bind(ctx);
+    const push = ctx.pushEvent.bind(ctx);
+    const written: Array<{ text: string; forAgent?: string }> = [];
+    const woken: string[] = [];
+    ctx.addMessage = (participant, content, metadata, opts) => {
+      const text = content[0]?.text ?? '';
+      if (text.startsWith('[Subagent ')) written.push({ text, ...(opts?.forAgent !== undefined ? { forAgent: opts.forAgent } : {}) });
+      return add(participant, content, metadata, opts);
+    };
+    ctx.pushEvent = (event) => {
+      if (event.type === 'inference-request' && event.agentName) woken.push(event.agentName);
+      return push(event);
+    };
+    try {
+      await h.subagent.handleToolCall(spawn('lead'));
+      await until(() => h.running('lead'));
+      const lead = internal(h.subagent).liveSubagents.get('lead')!.frameworkAgentName;
+      expect((await h.subagent.handleToolCall({ ...spawn('child'), callerAgentName: lead })).success).toBe(true);
+      await until(() => written.length > 0);
+      expect(written).toEqual([{ text: `[Subagent 'child' returned, for '${lead}']\n\ndone`, forAgent: lead }]);
+      expect(woken).toEqual([lead]);
+    } finally {
+      h.subagent.cancelSubagent('lead');
+      await h.cleanup();
+    }
+  }, 20_000);
+
   test('an async result with no launcher named, by the call or the config, lands as before', async () => {
     const h = await harness({ parentAgentName: undefined, maxRetries: 0 }, async () => ran('done'));
     const delivered = deliveries(h);

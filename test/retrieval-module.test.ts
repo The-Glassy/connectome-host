@@ -1316,9 +1316,25 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     expect(await behind).toEqual([]);
     expect(await h.mod.gatherContext(AGENT)).toEqual(later); // the later start's block stays the turn's
     expect(h.calls).toHaveLength(2);
-    // A start that has returned holds no place: the record is only of
-    // starts under way.
-    expect((h.mod as unknown as { latestStarts: Map<string, number> }).latestStarts.size).toBe(0);
+  });
+
+  test('an older start that finishes while a later one still runs keeps nothing, and leaves the later one its keep', async () => {
+    let releaseOlder!: (text: string) => void;
+    let releaseLater!: (text: string) => void;
+    const older = new Promise<string>((resolve) => { releaseOlder = resolve; });
+    const later = new Promise<string>((resolve) => { releaseLater = resolve; });
+    const h = turnHarness([older, later]);
+    h.say('user', 'Tell me the memory detail.');
+    const first = h.mod.gatherContext(AGENT);
+    const second = h.mod.gatherContext(AGENT);
+    releaseOlder('["zebra"]'); // the older start finds nothing, first
+    expect(await first).toEqual([]);
+    releaseLater('["memory"]');
+    const kept = await second;
+    expect(h.block(kept)).toContain('memory detail');
+    // The later start's block is the turn's: the next start reuses it.
+    expect(await h.mod.gatherContext(AGENT)).toEqual(kept);
+    expect(h.calls).toHaveLength(2);
   });
 
   test('when no lesson fits the cap, nothing is injected, and that is kept for the turn', async () => {

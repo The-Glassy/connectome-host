@@ -44,10 +44,11 @@ export function buildRetrievalModuleConfig(
  * The per-message cap retrieval fits its block under. Retrieval gathers for
  * every agent with one cap, so it's the smallest a window it gathers for
  * applies: the recipe's strategy's (strategyMessageCap), and with the
- * subagent module on, a subagent's or a fork's, SUBAGENT_MESSAGE_CAP. A
- * resident whose own cap is larger then leaves out lessons only once its
- * block passes the subagents' cap, about 40,000 characters, and says how
- * many (Agnes-1009, room-203 #197184). Undefined when no window applies one.
+ * subagent module on, a subagent's or a fork's, SUBAGENT_MESSAGE_CAP. With
+ * the subagent module on, a resident whose own cap is larger leaves out
+ * lessons once its block passes the subagents' cap, about 40,000
+ * characters, and says how many (Agnes-1009, room-203 #197184); with it
+ * off, the strategy's cap is the one. Undefined when no window applies one.
  */
 export function retrievalMessageCap(recipe: Recipe): number | undefined {
   const caps = [strategyMessageCap(recipe), recipe.modules?.subagents ? SUBAGENT_MESSAGE_CAP : undefined]

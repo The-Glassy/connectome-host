@@ -13,9 +13,23 @@ import { SubagentModule, type ActiveSubagent } from '../src/modules/subagent-mod
 
 const T0 = Date.UTC(2026, 9, 23, 14, 5, 9);
 
-function fleet(timeZone = 'UTC') {
+type StoredRow = { participant: string; content: Array<{ type: 'text'; text: string }>; metadata: Record<string, unknown> };
+
+/** A module whose context stores each status as agent-framework does: in
+ *  the residents' shared slot, marked with the agent it's for, again only
+ *  when its text differs from that agent's newest stored one. `preview`
+ *  gathers and stores nothing, as previewActivation's gather does. A second
+ *  module on the same `stored` rows stands for the host after a restart. */
+function fleet(timeZone = 'UTC', stored: StoredRow[] = []) {
   const mod = new SubagentModule({ provider: 'mock', timeZone });
-  (mod as unknown as { ctx: unknown }).ctx = { getState: () => ({ hudEnabled: true }), setState: () => {} };
+  (mod as unknown as { ctx: unknown }).ctx = {
+    getState: () => ({ hudEnabled: true }),
+    setState: () => {},
+    queryMessages: (filter: { participant?: string }) => {
+      const messages = stored.filter((row) => row.participant === filter.participant);
+      return { messages, totalCount: messages.length };
+    },
+  };
   const add = (name: string, fields: Partial<ActiveSubagent> = {}): ActiveSubagent => {
     const entry: ActiveSubagent = {
       name, type: 'spawn', task: `task for ${name}`, status: 'running',
@@ -25,9 +39,22 @@ function fleet(timeZone = 'UTC') {
     mod.parentMap.set(name, 'resident');
     return entry;
   };
-  const status = async (): Promise<string | undefined> =>
-    ((await mod.gatherContext('resident'))[0]?.content[0] as { text: string } | undefined)?.text;
-  return { mod, add, status };
+  const textOf = async (agent: string): Promise<string | undefined> =>
+    ((await mod.gatherContext(agent))[0]?.content[0] as { text: string } | undefined)?.text;
+  const status = async (agent = 'resident'): Promise<string | undefined> => {
+    const text = await textOf(agent);
+    const newest = stored.filter((row) => (row.metadata.contextInjection as { agent: string }).agent === agent).at(-1);
+    if (text !== undefined && newest?.content[0]?.text !== text) {
+      stored.push({
+        participant: 'system_context:subagent-fleet',
+        content: [{ type: 'text', text }],
+        metadata: { system: true, kind: 'context-injection', contextInjection: { agent, namespace: 'subagent-fleet', contentHash: `h${stored.length}`, part: 0, parts: 1 } },
+      });
+    }
+    return text;
+  };
+  const handles = (mod as unknown as { asyncHandles: Map<string, unknown> }).asyncHandles;
+  return { mod, add, status, preview: textOf, stored, handles };
 }
 
 afterEach(() => { setSystemTime(); });
@@ -64,12 +91,21 @@ describe('the fleet status', () => {
     expect(await f.status()).toBe('[Fleet Status, as of 14:05:13 UTC]\n  clerk [spawn] running since 14:05:09 parent:resident "task for clerk"');
   });
 
-  test('when the last run ends, the status says none is running, so no copy listing it is the newest', async () => {
+  test('when the last run ends, the status says none is running once, so no copy listing it is the newest', async () => {
     const f = fleet();
     const scout = f.add('scout');
+    expect(await f.status()).toContain('scout [spawn] running since');
     scout.status = 'completed';
     scout.completedAt = T0 + 30_000;
     expect(await f.status()).toBe('[Fleet Status, as of 14:05:39 UTC]\n  (none running)');
+    expect(await f.status()).toBeUndefined();
+    expect(f.stored).toHaveLength(2);
+  });
+
+  test('a run that ended with no status ever listing it has nothing to tell', async () => {
+    const f = fleet();
+    f.add('scout', { status: 'completed', completedAt: T0 + 30_000 });
+    expect(await f.status()).toBeUndefined();
   });
 
   test('a fleet that never started a subagent has no status at all', async () => {
@@ -93,25 +129,67 @@ describe('the fleet status', () => {
 
   test('with only async handles pending, it has no time to be "as of"', async () => {
     const f = fleet();
-    (f.mod as unknown as { asyncHandles: Map<string, unknown> }).asyncHandles.set('later', {});
+    f.handles.set('later', {});
     f.mod.parentMap.set('later', 'resident');
     expect(await f.status()).toBe('[Fleet Status]\n  later [async] pending');
   });
 
-  test('an agent shown a status hears when what it listed ends before it started', async () => {
+  test('a run waiting under the name of one that has finished is listed', async () => {
+    const f = fleet();
+    f.mod.activeSubagents.set('spawn-later', {
+      name: 'later', type: 'spawn', task: 'task for later', status: 'completed',
+      startedAt: T0, completedAt: T0 + 1_000, lastActivityAt: T0, toolCallsCount: 0, findingsCount: 0,
+    });
+    f.handles.set('later', {});
+    f.mod.parentMap.set('later', 'resident');
+    expect(await f.status()).toBe('[Fleet Status, as of 14:05:10 UTC]\n  later [async] pending');
+  });
+
+  test('an agent whose status listed a run that ended before it started is told once that none is running', async () => {
     const f = fleet();
     // A queued async run, waiting for a slot: no start yet, so no "as of".
-    (f.mod as unknown as { asyncHandles: Map<string, unknown> }).asyncHandles.set('later', {});
+    f.handles.set('later', {});
     f.mod.parentMap.set('later', 'resident');
     expect(await f.status()).toBe('[Fleet Status]\n  later [async] pending');
     // Cancelled while it waited: its handle and its parent link go.
-    (f.mod as unknown as { asyncHandles: Map<string, unknown> }).asyncHandles.delete('later');
+    f.handles.delete('later');
     f.mod.parentMap.delete('later');
     expect(await f.status()).toBe('[Fleet Status]\n  (none running)');
-    // Told once: its context's newest status says so, and nothing is kept
-    // for it any more.
     expect(await f.status()).toBeUndefined();
-    expect((f.mod as unknown as { fleetStatusListedFor: Set<string> }).fleetStatusListedFor.size).toBe(0);
+  });
+
+  test('a preview, which stores nothing, leaves the next start to say none is running', async () => {
+    const f = fleet();
+    const scout = f.add('scout');
+    await f.status();
+    scout.status = 'completed';
+    scout.completedAt = T0 + 30_000;
+    expect(await f.preview('resident')).toBe('[Fleet Status, as of 14:05:39 UTC]\n  (none running)');
+    expect(await f.status()).toBe('[Fleet Status, as of 14:05:39 UTC]\n  (none running)');
+  });
+
+  test('after a restart, a stored status listing a run that waited says none is running, once', async () => {
+    const stored: StoredRow[] = [];
+    const before = fleet('UTC', stored);
+    before.handles.set('later', {});
+    before.mod.parentMap.set('later', 'resident');
+    expect(await before.status()).toBe('[Fleet Status]\n  later [async] pending');
+    // The host restarts: a new module, the process's handles gone, the
+    // window as agent-framework stored it.
+    const after = fleet('UTC', stored);
+    expect(await after.status()).toBe('[Fleet Status]\n  (none running)');
+    expect(await after.status()).toBeUndefined();
+  });
+
+  test('each agent is told by its own stored status, not another\'s', async () => {
+    const f = fleet();
+    const scout = f.add('scout');
+    await f.status('resident');
+    scout.status = 'completed';
+    scout.completedAt = T0 + 30_000;
+    // Another resident in the same slot, whose own status listed nothing.
+    expect(await f.status('other')).toBeUndefined();
+    expect(await f.status('resident')).toBe('[Fleet Status, as of 14:05:39 UTC]\n  (none running)');
   });
 });
 

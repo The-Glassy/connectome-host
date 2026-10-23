@@ -96,6 +96,14 @@ const USAGE = `Usage: ${AUDIT_STORES_FLAG} [${RECIPE_OPTION} <recipe>] <data dir
 const residentView = (name: string) => (message: StoredMessage): boolean =>
   !message.metadata?.tuneOut && !isAnotherAgentsInjection(message.metadata, name);
 
+/** agent-framework's view of the subconscious's messages
+ *  (createSubconsciousAgent): its own namespace and the residents' slot
+ *  merged, tuned-out rows included, less every other agent's stored context
+ *  injection, the residents' among them. A copy, kept in step as
+ *  residentView is; exported for its test. */
+export const subconsciousView = (name: string) => (message: StoredMessage): boolean =>
+  !isAnotherAgentsInjection(message.metadata, name);
+
 /** Whether a row is another agent's stored context injection, as
  *  agent-framework's views tell it (`stored-injections.ts`). */
 function isAnotherAgentsInjection(metadata: unknown, name: string): boolean {
@@ -337,7 +345,9 @@ interface Resident {
   name: string;
   namespace: string;
   strategy: () => ContextStrategy;
-  subconscious?: { namespace: string; reAnchorFraction?: number };
+  /** `name` is the subconscious's agent name, by which its view keeps its own
+   *  stored injections and leaves out every other agent's. */
+  subconscious?: { name: string; namespace: string; reAnchorFraction?: number };
 }
 
 /** What the audit opens in one data directory: each session's store, as a
@@ -771,6 +781,7 @@ async function auditNamespace(store: JsStore, resident: Resident, repairs: LoadR
         namespace: subconscious.namespace,
         isolate: true,
         auxiliaryMessageViews: [{}],
+        viewFilter: subconsciousView(subconscious.name),
         strategy: new WindowedPassthroughStrategy({
           reAnchorFraction: subconscious.reAnchorFraction,
           maxMessageTokens: (strategy as { maxMessageTokens?: number }).maxMessageTokens,
@@ -1244,7 +1255,14 @@ async function residentOf(dataDir: string, read: RecipeRead, loaded?: ExtensionR
       namespace: `agents/${name}`,
       strategy,
       ...(subconscious?.enabled
-        ? { subconscious: { namespace: `subconscious/${name}`, reAnchorFraction: subconscious.reAnchorFraction } }
+        ? {
+          subconscious: {
+            // agent-framework's default name, as the recipe's doc says.
+            name: subconscious.name ?? 'Subconscious',
+            namespace: `subconscious/${name}`,
+            reAnchorFraction: subconscious.reAnchorFraction,
+          },
+        }
         : {}),
     }),
   };

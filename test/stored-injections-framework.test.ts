@@ -4,7 +4,7 @@
  * and stores it again when its text differs from what the agent's last
  * request held. Retrieval keys a turn's block on the turn's opening message,
  * so a start with no new message gets the same block, with no model calls,
- * and nothing new is stored; a new
+ * and while the agent's last request held it, nothing new is stored; a new
  * message gets its own block, stored after it. The rows the framework stores
  * carry the mark the host's readers read.
  */

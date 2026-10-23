@@ -96,5 +96,8 @@ describe('the cap retrieval fits its block under', () => {
   test('takes a cap that isn\'t a positive number as none, as the strategy does', () => {
     expect(capOf({ strategy: { type: 'autobiographical', maxMessageTokens: 0 } })).toBeUndefined();
     expect(capOf({ strategy: { type: 'autobiographical', maxMessageTokens: 0 } }, { subagents: true })).toBe(10_000);
+    expect(capOf({ strategy: { type: 'autobiographical', maxMessageTokens: -5 } })).toBeUndefined();
+    expect(capOf({ strategy: { type: 'my-strategy', maxMessageTokens: 3_000 } }, { subagents: true })).toBe(3_000);
+    expect(capOf({ strategy: { type: 'my-strategy' } })).toBeUndefined();
   });
 });
