@@ -1520,14 +1520,16 @@ export class SubagentModule implements Module {
       clearInterval(this.reaperTimer);
       this.reaperTimer = null;
     }
-    // End every run, including one waiting for a slot, a retry back-off or a
-    // rate-limit cooldown, so none tries again after its session stopped. A
-    // run whose attempt was live has had it rejected already, since
-    // framework.stop() rejects every ephemeral run before it stops modules.
-    // Each run settles in a later microtask, once ctx is null, so a
-    // background run's result isn't delivered (deliverAsyncResult) and its
-    // end isn't persisted (persistState): restoreFromStore reads it as
-    // interrupted, as it did before stop() ended it.
+    // End every run left, such as one waiting for a slot, a retry back-off or
+    // a rate-limit cooldown, so none tries again once its wait ends. A live
+    // attempt was rejected before this, by framework.stop(), which rejects
+    // every ephemeral run before it stops modules, and its run ended on that
+    // while ctx was still set. The runs this ends settle in a later
+    // microtask, once ctx is null, so a background run's result isn't
+    // delivered (deliverAsyncResult) and its end isn't persisted
+    // (persistState): restoreFromStore reads one that had started as
+    // interrupted, as before stop() ended it, and one still queued for a
+    // slot left no record.
     for (const name of [...this.cancellationHandles.keys()]) this.stopTree(name, 'killed');
     this.ctx = null;
   }
@@ -2281,10 +2283,9 @@ export class SubagentModule implements Module {
     return count;
   }
 
-  /** Stop the run named, its children first (bottom-up, so their results
-   *  propagate before the parent's), each for `reason`: 'cancelled' for a
-   *  cancel, 'killed' for the module's stop. Returns how many runs this
-   *  stopped. */
+  /** Stop the run named and its children, each child rejected before its
+   *  parent (bottom-up), each for `reason`: 'cancelled' for a cancel,
+   *  'killed' for the module's stop. Returns how many runs this stopped. */
   private stopTree(displayName: string, reason: 'cancelled' | 'killed' = 'cancelled'): number {
     let stopped = 0;
     for (const child of this.childrenOf(displayName)) stopped += this.stopTree(child, reason);
