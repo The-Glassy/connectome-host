@@ -234,6 +234,16 @@ describe('the fleet status', () => {
     expect(await f.status()).toBe('[Fleet Status, as of 14:05:39 UTC]\n  (none running)');
   });
 
+  test('a run\'s parent label names a running launcher by its display name, as the result\'s line does', async () => {
+    const f = fleet();
+    f.add('lead');
+    f.live('lead', 'spawn-lead-1761271234567');
+    (f.mod as unknown as { runOfAttempt: Map<string, string> }).runOfAttempt.set('spawn-lead-1761271234567', 'lead');
+    f.add('kid');
+    f.mod.parentMap.set('kid', 'spawn-lead-1761271234567');
+    expect(await f.status()).toContain('  kid [spawn] running since 14:05:09 parent:lead "task for kid"');
+  });
+
   test('the primary\'s status takes no run whose launcher is listed, or still running here', async () => {
     const f = fleet('UTC', [], { primary: true });
     // A run another resident launched, which agent-framework lists.
