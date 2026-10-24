@@ -231,7 +231,7 @@ export function handleCommand(command: string, app: AppContext): CommandResult {
           { text: '  /fleet                 Show / peek / stop / restart cross-process children', style: 'system' },
           { text: '                         (subcommands: list | status [name] | view | peek <name> | stop <name> | restart <name>)', style: 'system' },
           { text: '  /update                Whether a newer release is out, and this install\'s update state', style: 'system' },
-          { text: '                         (subcommands: install | restart [wait | now | resume | <version>] | back [keep | restore [<version>]])', style: 'system' },
+          { text: '                         (subcommands: install | restart [wait | now | resume | <version>] | back [(keep | restore) [<version>]])', style: 'system' },
         ],
       };
 
@@ -342,7 +342,7 @@ function handleUpdate(args: string[]): CommandResult {
   const after = (first: string, work: Promise<{ lines: string[] }>): CommandResult =>
     ({ ...say([first]), asyncWork: work.then((answer) => say(answer.lines)) });
   const [sub, choice, release, extra] = args;
-  const usage = say(['Usage: /update [install | restart [wait | now | resume | <version>] | back [keep | restore [<version>]]]']);
+  const usage = say(['Usage: /update [install | restart [wait | now | resume | <version>] | back [(keep | restore) [<version>]]]']);
   if (extra !== undefined) return usage;
   const version = (word: string | undefined): word is string => word !== undefined && EXACT_VERSION.test(word);
   if (sub === undefined) {

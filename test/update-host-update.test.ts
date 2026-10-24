@@ -989,7 +989,7 @@ describe('/update', () => {
         expect((await run(line)).at(-1)).toBe('answered');
       }
       expect(calls.slice(-4)).toEqual(['restart undefined', 'back true undefined', 'restart 0.13.1-rc.1', 'back false 0.12.0-rc.2']);
-      const usage = 'Usage: /update [install | restart [wait | now | resume | <version>] | back [keep | restore [<version>]]]';
+      const usage = 'Usage: /update [install | restart [wait | now | resume | <version>] | back [(keep | restore) [<version>]]]';
       for (const line of ['/update bogus', '/update install now', '/update restart soon', '/update back later',
         '/update restart now please', '/update restart 0.13.1 now', '/update back keep soon', '/update back 0.12.0',
         '/update back keep 0.12.0 now']) {
