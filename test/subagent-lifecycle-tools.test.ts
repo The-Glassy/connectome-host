@@ -326,3 +326,26 @@ describe('the lifecycle tools keep the module\'s rules', () => {
     } finally { await h.cleanup(); }
   }, 30_000);
 });
+
+describe("the host's stop and a live run's record", () => {
+  test("a run the host's stop cuts off keeps its record live for the next boot: the module's stop, which #454's loop runs for it, writes nothing", async () => {
+    const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, defaultResponse: 'x'.repeat(1_200) });
+    try {
+      const running = await h.call('spawn', { name: 'slow-k', systemPrompt: 'p', task: 'take your time' });
+      expect(running.success).toBe(true);
+      await h.until(() => h.recordOf('slow-k') !== undefined && !h.recordOf('slow-k')!.ended, 'the run is registered');
+      const before = h.recordOf('slow-k')!;
+
+      // The framework's stop rejects the run (host-stop) and then stops the
+      // modules; the module's stop reaches the run's entry and kills it.
+      await h.framework.stop();
+      const after = h.recordOf('slow-k')!;
+      expect(after.incarnation).toBe(before.incarnation);
+      // Not ended as stopped by an operator who cancelled nothing: left live,
+      // for the next boot to end as interrupted and tell its result recipient.
+      expect(after.ended).toBeUndefined();
+      const internals = h.subagent as unknown as { cancellationHandles: Map<string, unknown> };
+      expect(internals.cancellationHandles.has('slow-k')).toBe(false);
+    } finally { await h.cleanup(); }
+  }, 30_000);
+});

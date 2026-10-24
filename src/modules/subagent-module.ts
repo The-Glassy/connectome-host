@@ -2406,10 +2406,14 @@ export class SubagentModule implements Module {
       : `${stop.by ? `stopped by ${stop.by}` : 'cancelled by user'}${stop.reason ? `: ${stop.reason}` : ''}`;
     handle.reject(new SubagentTerminated(kind, partial, `Subagent "${displayName}" ${cause}`));
     this.cancellationHandles.delete(displayName);
-    // The registry record ends as stopped, by whom and why, before the run's
-    // own rejection could end it as failed (Dendrite): task work it spawned
-    // is orphaned and offered for adoption there.
-    if (live) {
+    // A cancel ends the registry record as stopped, by whom and why, before
+    // the run's own rejection could end it as failed (Dendrite): task work it
+    // spawned is orphaned and offered for adoption there. The module's own
+    // stop writes nothing: a run the host's stop cuts off is the framework's
+    // to end, and it leaves the record live on purpose, for the next boot to
+    // end as interrupted and tell its result recipient — not stopped by an
+    // operator who cancelled nothing, with its work orphaned.
+    if (live && kind === 'cancelled') {
       try {
         const fw = this.framework;
         const record = fw?.getAgentRecord(live.frameworkAgentName);
