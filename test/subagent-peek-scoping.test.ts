@@ -17,7 +17,7 @@
  * The fix uses `parentMap` (already maintained for cancelChildren) to walk
  * descendants. A caller sees only its own subtree — peers and ancestors are
  * filtered out — except that the primary also sees a run under way whose
- * launcher has ended, since that run's result comes to the primary
+ * launcher's run has ended, since that run's result comes to the primary
  * (context-manager #155 part 5; Agnes-1009, room-203 #198350).
  */
 import { describe, test, expect } from 'bun:test';

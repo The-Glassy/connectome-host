@@ -166,15 +166,23 @@ const SELF_WAKE_SOURCE = 'gate:self-wake';
  * result.
  *
  * Its key is the row's id, so a later start of the same turn sees the same
- * key whatever the framework stored since. (A message stored in shards is
- * keyed on its last shard, which stays its last.) The key is null where no
- * row qualifies. The result is undefined where the row's id can't be read,
- * so nothing is kept under a key that isn't the row's.
+ * key until another such message lands, as one held for the agent and
+ * drained at a tool round can, which is a turn's newer opening message.
+ * (A message stored in shards is keyed on its last shard, which stays its
+ * last, and is read whole: a tool call's or result's text shards count as
+ * the tool row they belong to.) The key is null where no row qualifies,
+ * and then the result is shared until someone else's message lands. The
+ * result is undefined where the row's id can't be read, so nothing is kept
+ * under a key that isn't the row's.
  */
 function openingMessageOf(shown: readonly ShownRow[], agentName: string): OpeningMessage | undefined {
+  const toolGroups = new Set(shown
+    .filter(r => typeof r.bodyGroupId === 'string' && r.bodyGroupId !== '' && r.content.some(b => b.type === 'tool_use' || b.type === 'tool_result'))
+    .map(r => r.bodyGroupId));
   for (let i = shown.length - 1; i >= 0; i--) {
     const row = shown[i]!;
     if (!isAMessageTo(row, agentName)) continue;
+    if (typeof row.bodyGroupId === 'string' && toolGroups.has(row.bodyGroupId)) continue;
     let id: unknown;
     try {
       id = row.id;
@@ -426,8 +434,10 @@ export class RetrievalModule implements Module {
         return [];
       }
 
-      // Step 3: Validate relevance
-      const relevant = await this.validateRelevance(recentMessages, candidates, trace);
+      // Step 3: Validate relevance. A reply that doesn't parse gives the
+      // top candidates unvalidated, as before; like a concept reply that
+      // doesn't parse, it keeps nothing, so the turn's next start asks again.
+      const { lessons: relevant, validated } = await this.validateRelevance(recentMessages, candidates, trace);
       trace?.recordRelevant(relevant);
 
       // Build injection
@@ -447,7 +457,7 @@ export class RetrievalModule implements Module {
         : '## Retrieved Knowledge';
       const fitted = fitUnderCap(heading, injected, this.config.maxMessageTokens);
       if (fitted.lessons.length === 0) {
-        this.keepTurnBlock(agentName, start, opening, [], []);
+        if (validated) this.keepTurnBlock(agentName, start, opening, [], []);
         trace?.finish('too-large');
         return [];
       }
@@ -461,7 +471,7 @@ export class RetrievalModule implements Module {
         content: [{ type: 'text', text: fitted.text }],
       }];
 
-      this.keepTurnBlock(agentName, start, opening, injections, this.safeLessonSnapshots(fitted.lessons), trace?.id);
+      if (validated) this.keepTurnBlock(agentName, start, opening, injections, this.safeLessonSnapshots(fitted.lessons), trace?.id);
       trace?.recordInjection(fitted.lessons, injections);
       trace?.finish('injected');
       return injections;
@@ -592,11 +602,11 @@ export class RetrievalModule implements Module {
     recentContext: string,
     candidates: Lesson[],
     trace?: RetrievalTraceRun,
-  ): Promise<Lesson[]> {
+  ): Promise<{ lessons: Lesson[]; validated: boolean }> {
     if (candidates.length <= 3) {
       // If only a few candidates, skip validation — they're probably all relevant.
       trace?.recordRelevanceSkipped('three-or-fewer-candidates');
-      return candidates;
+      return { lessons: candidates, validated: true };
     }
 
     const model = this.config.retrievalModel ?? 'claude-haiku-4-5-20251001';
@@ -638,7 +648,7 @@ export class RetrievalModule implements Module {
         const parsedIds = parsed.filter((value): value is string => typeof value === 'string');
         trace?.finishRelevance(text, parsedIds, 'json', response.content);
         const relevantIds = new Set(parsedIds);
-        return candidates.filter(l => relevantIds.has(l.id));
+        return { lessons: candidates.filter(l => relevantIds.has(l.id)), validated: true };
       }
     } catch {
       // Fall through to confidence-ordered fallback.
@@ -646,7 +656,7 @@ export class RetrievalModule implements Module {
 
     const fallback = candidates.slice(0, 5);
     trace?.finishRelevance(text, [], 'fallback', response.content);
-    return fallback;
+    return { lessons: fallback, validated: false };
   }
 
   // =========================================================================

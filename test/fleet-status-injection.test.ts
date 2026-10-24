@@ -5,8 +5,9 @@
  * alone: the subagents running or waiting, each started one with its start
  * as a clock time in the recipe's zone, under "as of" the latest start or
  * end, so the same state gives the same text at every start. A finished run
- * leaves the list, having reported in its launcher's conversation (Agnes-1009,
- * room-203 #196238, #197184).
+ * leaves the list, having reported in its launcher's conversation, or the
+ * primary's once its launcher's run had ended (Agnes-1009, room-203 #196238,
+ * #197184, #198350).
  */
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { SubagentModule, type ActiveSubagent } from '../src/modules/subagent-module.js';
@@ -260,6 +261,50 @@ describe('the fleet status', () => {
     expect(await f.status('other')).toContain('kid [spawn] running since');
   });
 
+  test('a child an earlier attempt of a retried run launched stays in that run\'s tree, between attempts too', async () => {
+    const f = fleet('UTC', [], { primary: true });
+    const attempts = (f.mod as unknown as { runOfAttempt: Map<string, string> }).runOfAttempt;
+    f.add('lead');
+    f.mod.parentMap.set('lead', 'other');
+    attempts.set('lead-d1-1', 'lead');
+    attempts.set('lead-d1-retry1-2', 'lead');
+    f.live('lead', 'lead-d1-retry1-2');
+    f.registered.add('lead-d1-retry1-2');
+    f.add('kid');
+    f.mod.parentMap.set('kid', 'lead-d1-1'); // launched by the first attempt
+    expect(await f.status('other')).toContain('  kid [spawn] running since 14:05:09 parent:lead "task for kid"');
+    expect(await f.status()).toBeUndefined();
+    // Between attempts: nothing registered or live for the run, which goes on.
+    f.unlive('lead');
+    f.registered.delete('lead-d1-retry1-2');
+    expect(await f.status('other')).toContain('kid [spawn] running since');
+    expect(await f.status()).toBeUndefined();
+  });
+
+  test('the runs under an orphaned run still under way are the primary\'s too', async () => {
+    const f = fleet('UTC', [], { primary: true });
+    f.add('kid');
+    f.mod.parentMap.set('kid', 'gone-d1-1'); // its launcher's run has ended
+    f.live('kid', 'kid-d2-5');
+    (f.mod as unknown as { runOfAttempt: Map<string, string> }).runOfAttempt.set('kid-d2-5', 'kid');
+    f.add('grandkid');
+    f.mod.parentMap.set('grandkid', 'kid-d2-5');
+    const text = (await f.status())!;
+    expect(text).toContain('  kid [spawn] running since 14:05:09 parent:gone "task for kid"');
+    expect(text).toContain('  grandkid [spawn] running since 14:05:09 parent:kid "task for grandkid"');
+  });
+
+  test('an ended launcher is labelled by its run\'s name, whatever its attempt\'s stamp', async () => {
+    const f = fleet('UTC', [], { primary: true });
+    f.add('kid');
+    f.mod.parentMap.set('kid', 'spawn-lead-1761271234567');
+    f.add('kin');
+    f.mod.parentMap.set('kin', 'scout-d1-retry1-1761271234568');
+    const text = (await f.status())!;
+    expect(text).toContain('  kid [spawn] running since 14:05:09 parent:lead "task for kid"');
+    expect(text).toContain('  kin [spawn] running since 14:05:09 parent:scout "task for kin"');
+  });
+
   test('with the hud off, nothing is added, a stored status listing a run included', async () => {
     const f = fleet();
     const scout = f.add('scout');
@@ -413,10 +458,10 @@ describe('an async run\'s result', () => {
       pushEvent: (event: { type: string; agentName?: string }) => { if (event.type === 'inference-request' && event.agentName) woken.push(event.agentName); },
     };
     const deliver = mod as unknown as {
-      deliverAsyncResult: (name: string, result: { summary: string }, launcher: string | undefined) => void;
-      deliverAsyncError: (name: string, err: unknown, launcher: string | undefined) => void;
+      deliverAsyncResult: (name: string, result: { summary: string }, launcher: string | undefined, launcherShown?: string) => void;
+      deliverAsyncError: (name: string, err: unknown, launcher: string | undefined, launcherShown?: string) => void;
     };
-    return { written, woken, deliver };
+    return { written, woken, deliver, mod, registered };
   }
 
   test('lands in the window of the agent that launched it, naming a launcher that isn\'t the primary', () => {
@@ -430,6 +475,24 @@ describe('an async run\'s result', () => {
       { text: "[Subagent 'lead' returned]\n\nmine", forAgent: 'resident' },
     ]);
     expect(d.woken).toEqual(['fork-y', 'fork-y', 'resident']);
+  });
+
+  test('whose launching attempt has ended while its run goes on goes to the run\'s current attempt, or between attempts to the primary', () => {
+    const d = delivering(['resident', 'lead-d1-retry1-2']);
+    const mod = d.mod as unknown as { runOfAttempt: Map<string, string>; liveSubagents: Map<string, unknown> };
+    mod.runOfAttempt.set('lead-d1-1', 'lead');
+    mod.runOfAttempt.set('lead-d1-retry1-2', 'lead');
+    mod.liveSubagents.set('lead', { frameworkAgentName: 'lead-d1-retry1-2', activeCallIds: new Set() });
+    d.deliver.deliverAsyncResult('kid', { summary: 'done' }, 'lead-d1-1', 'lead');
+    // Between attempts: nothing of the run's is registered.
+    mod.liveSubagents.delete('lead');
+    d.registered.splice(d.registered.indexOf('lead-d1-retry1-2'), 1);
+    d.deliver.deliverAsyncError('kin', new Error('broke'), 'lead-d1-1', 'lead');
+    expect(d.written).toEqual([
+      { text: "[Subagent 'kid' returned, for 'lead': launched by an earlier attempt]\n\ndone", forAgent: 'lead-d1-retry1-2' },
+      { text: "[Subagent 'kin' failed, for an earlier attempt of 'lead', which has ended]\n\nError: broke" },
+    ]);
+    expect(d.woken).toEqual(['lead-d1-retry1-2']);
   });
 
   test('whose launcher has ended lands in the residents\' slot, naming whom it was for', () => {

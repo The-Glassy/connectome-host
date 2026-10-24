@@ -1384,7 +1384,7 @@ describe('a name means one subagent until its result has come back', () => {
       await h.subagent.handleToolCall(spawn('lead'));
       await until(() => h.running('child') && !sub.asyncHandles.has('lead')); // lead has ended, its child runs on
       expect(await status()).toContain("child [spawn] running since");
-      // peek sees what the status lists (scopeOf).
+      // peek sees the running runs the status lists (scopeOf).
       expect((await h.subagent.peek(undefined, 'parent')).map((snapshot) => snapshot.name)).toContain('child');
       expect((await h.subagent.peek('child', 'parent')).map((snapshot) => snapshot.name)).toEqual(['child']);
       releaseChild();

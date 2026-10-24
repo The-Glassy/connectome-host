@@ -1319,6 +1319,28 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     expect(h.block(await h.mod.gatherContext(AGENT))).toBe(expected);
   });
 
+  test('a tool call stored in shards is passed over whole, its text-only shards included', async () => {
+    const h = turnHarness(['["memory"]']);
+    h.say('user', 'Tell me the memory detail.');
+    // Another agent's long reply with a tool call: context-manager puts the
+    // call on the first shard, and the later shards hold text alone.
+    h.add('bob', [{ type: 'text', text: 'looking it up, part one' }, { type: 'tool_use', id: 't9', name: 'look', input: {} }], undefined, { bodyGroupId: 'g1' });
+    h.add('bob', [{ type: 'text', text: 'part two of the same reply' }], undefined, { bodyGroupId: 'g1' });
+    expect(h.block(await h.mod.gatherContext(AGENT)))
+      .toStartWith('## Retrieved Knowledge, for the message beginning "Tell me the memory detail."\n');
+  });
+
+  test('a relevance reply that doesn\'t parse injects the top candidates, and keeps nothing, so the next start asks again', async () => {
+    const lessons = ['one', 'two', 'three', 'four'].map((n, i) => lesson(`l${i + 1}`, `memory ${n}`));
+    const h = turnHarness(['["memory"]', 'not a list', '["memory"]', '["l2"]'], { lessons });
+    h.say('user', 'Tell me the memory detail.');
+    expect(h.block(await h.mod.gatherContext(AGENT))).toContain('memory four');
+    const again = h.block(await h.mod.gatherContext(AGENT))!;
+    expect(h.calls).toHaveLength(4);
+    expect(again).toContain('memory two');
+    expect(again).not.toContain('memory four');
+  });
+
   test('a message a tune-out diverted is neither the opening message nor in what the concept step reads', async () => {
     const h = turnHarness(['["memory"]']);
     h.say('user', 'Tell me the memory detail.');

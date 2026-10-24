@@ -446,6 +446,18 @@ const UNNAMED_LAUNCHER = 'agent';
  *  agent-framework stores it under (`system_context:<namespace>`). */
 const FLEET_NAMESPACE = 'subagent-fleet';
 const FLEET_PARTICIPANT = `system_context:${FLEET_NAMESPACE}`;
+/** A run's display name from one of its attempts' names, for an attempt
+ *  whose run has ended (runOfAttempt keeps them only until then): a spawn's
+ *  `spawn-<name>-<stamp>` and a fork's `<name>-d<depth>[-retry<n>]-<stamp>`
+ *  give `<name>`; another name, such as a resident's, is cut as before. */
+function runNameOf(attempt: string): string {
+  const spawned = /^spawn-(.+)-\d+$/.exec(attempt);
+  if (spawned) return spawned[1]!;
+  const forked = /^(.+)-d\d+(?:-retry\d+)?-\d+$/.exec(attempt);
+  if (forked) return forked[1]!;
+  return attempt.replace(/^(spawn|fork)-/, '').replace(/-retry\d+$/, '');
+}
+
 /** A fleet status's heading line, which gatherContext writes first. */
 const FLEET_HEADING = /^\[Fleet Status(, as of [^\]]*)?\]$/;
 
@@ -1784,7 +1796,7 @@ export class SubagentModule implements Module {
 
     // Postmortem 2026-05-28 P3 #8: scope the Fleet Status HUD to the
     // calling agent's descendants, and for the primary the runs whose
-    // launcher has ended (scopeOf). Pre-fix the HUD injected the whole
+    // launcher's run has ended (scopeOf). Pre-fix the HUD injected the whole
     // fleet roster every turn, which (a) encouraged peer-coordination
     // anti-patterns and (b) amplified false zombie/failed flags across
     // the orchestrator's context.
@@ -1817,10 +1829,9 @@ export class SubagentModule implements Module {
       if (latestChange === undefined || changedAt > latestChange) latestChange = changedAt;
       if (sa.status !== 'running') continue;
       const parent = this.parentMap.get(sa.name) ?? 'agent';
-      // The launcher as agents know it while it runs (shownName), as the
-      // result's line names it; an ended one's name is cut down as before.
-      const parentShort = this.runOfAttempt.get(parent)
-        ?? parent.replace(/^(spawn|fork)-/, '').replace(/-d\d+-\d+$/, '').replace(/-retry\d+$/, '');
+      // The launcher as agents know it (shownName while its run goes on, as
+      // the result's line names it; an ended one's attempt name cut down).
+      const parentShort = this.runOfAttempt.get(parent) ?? runNameOf(parent);
       const task = sa.task.length > 50 ? sa.task.slice(0, 47) + '...' : sa.task;
       lines.push(`  ${sa.name} [${sa.type}] running since ${this.clockTime(sa.startedAt)} parent:${parentShort} "${task}"`);
     }
@@ -2399,15 +2410,20 @@ export class SubagentModule implements Module {
    */
   private getDescendantDisplayNames(rootFrameworkAgentName: string): Set<string> {
     const result = new Set<string>();
-    const queue: string[] = [rootFrameworkAgentName];
+    // A child is its launcher's run's, whichever of the run's attempts
+    // launched it (runOfAttempt, as childrenOf reads it), while the run goes
+    // on (Agnes-1009, room-203 #199188); a resident's is its own name's.
+    const queue: Array<{ attempt: string; run: string | undefined }> = [
+      { attempt: rootFrameworkAgentName, run: this.runOfAttempt.get(rootFrameworkAgentName) },
+    ];
     while (queue.length > 0) {
-      const parentFw = queue.shift()!;
+      const { attempt, run } = queue.shift()!;
       for (const [childDisplayName, parentName] of this.parentMap) {
-        if (parentName === parentFw && !result.has(childDisplayName)) {
-          result.add(childDisplayName);
-          const childLive = this.liveSubagents.get(childDisplayName);
-          if (childLive) queue.push(childLive.frameworkAgentName);
-        }
+        if (result.has(childDisplayName)) continue;
+        if (parentName !== attempt && (run === undefined || this.runOfAttempt.get(parentName) !== run)) continue;
+        result.add(childDisplayName);
+        const childLive = this.liveSubagents.get(childDisplayName);
+        queue.push({ attempt: childLive?.frameworkAgentName ?? childDisplayName, run: childDisplayName });
       }
     }
     return result;
@@ -2415,10 +2431,11 @@ export class SubagentModule implements Module {
 
   /** The runs an agent sees in its fleet status and through `peek`: its
    *  descendants (getDescendantDisplayNames), and for the primary, each run
-   *  whose launcher has ended (orphanedRuns), with the runs under one still
-   *  under way. Such a run delivers its result to the primary's window
-   *  (addForLauncher), and with its launcher's run gone it's in no other
-   *  agent's tree (Agnes-1009, room-203 #198350). Its finished ones only
+   *  whose launcher's run has ended (orphanedRuns), with the runs under one
+   *  still under way. Such a run delivers its result to the primary's
+   *  window (addForLauncher), and with its launcher's run gone it's in no
+   *  other agent's tree (Agnes-1009, room-203 #198350). The status lists
+   *  the ones running or waiting, and `peek` shows the ones running. Its finished ones only
    *  date the status: a later "as of", with nothing changed since, says no
    *  less, where leaving one out would date a "(none running)" before that
    *  run's end. */
@@ -2433,17 +2450,18 @@ export class SubagentModule implements Module {
     return scope;
   }
 
-  /** The runs, finished or not, whose launcher has ended: agent-framework no
-   *  longer lists it and its run is no longer live here, so a run whose
-   *  launcher is between the two is still its launcher's tree's alone. One
-   *  pass over the parent links. */
+  /** The runs, finished or not, whose launcher's run has ended:
+   *  agent-framework no longer lists the launching attempt, and the run it
+   *  was an attempt of is no longer going on here (runOfAttempt keeps every
+   *  attempt of a run until it ends). A run still going on keeps the
+   *  children its earlier attempts launched, between attempts too. One pass
+   *  over the parent links. */
   private orphanedRuns(): string[] {
     if (!this.ctx) return [];
     const listed = new Set(this.ctx.getAgents().map((agent) => agent.name));
-    const live = new Set([...this.liveSubagents.values()].map((run) => run.frameworkAgentName));
     const orphans: string[] = [];
     for (const [child, parent] of this.parentMap) {
-      if (!listed.has(parent) && !live.has(parent)) orphans.push(child);
+      if (!listed.has(parent) && !this.runOfAttempt.has(parent)) orphans.push(child);
     }
     return orphans;
   }
@@ -2545,8 +2563,9 @@ export class SubagentModule implements Module {
    * Postmortem 2026-05-28 P3 #8: when a `callerFrameworkAgentName` is
    * supplied (the normal tool-call path threads it through `handlePeek`),
    * the result is scoped to the caller's descendants — peers/cousins are
-   * filtered out — and for the primary to the runs under way whose
-   * launcher has ended too, as its fleet status lists them (scopeOf). Internal callers without a known identity (omit the arg)
+   * filtered out — and for the primary to the runs whose launcher's run has
+   * ended too (scopeOf), of which it shows those running, as the primary's
+   * fleet status lists them. Internal callers without a known identity (omit the arg)
    * keep the global view for backward compatibility.
    */
   async peek(name?: string, callerFrameworkAgentName?: string): Promise<SubagentPeekSnapshot[]> {
@@ -3124,10 +3143,11 @@ export class SubagentModule implements Module {
     this.asyncHandles.delete(name);
     if (!this.ctx) return;
 
-    if (!this.addForLauncher(launcher, launcherShown, name, 'returned', result.summary)) return;
+    const wake = this.addForLauncher(launcher, launcherShown, name, 'returned', result.summary);
+    if (wake === null) return;
     this.ctx.pushEvent({
       type: 'inference-request',
-      agentName: launcher ?? UNNAMED_LAUNCHER,
+      agentName: wake,
       reason: `subagent-completed:${name}`,
       source: 'subagent',
     });
@@ -3138,10 +3158,11 @@ export class SubagentModule implements Module {
     if (!this.ctx) return;
 
     const message = err instanceof Error ? err.message : String(err);
-    if (!this.addForLauncher(launcher, launcherShown, name, 'failed', `Error: ${message}`)) return;
+    const wake = this.addForLauncher(launcher, launcherShown, name, 'failed', `Error: ${message}`);
+    if (wake === null) return;
     this.ctx.pushEvent({
       type: 'inference-request',
-      agentName: launcher ?? UNNAMED_LAUNCHER,
+      agentName: wake,
       reason: `subagent-failed:${name}`,
       source: 'subagent',
     });
@@ -3154,29 +3175,55 @@ export class SubagentModule implements Module {
    *  right in whatever window it ends up in: agent-framework passes to the
    *  primary a write its launcher's window is released without reading. A
    *  result is work done, so one whose launcher agent-framework no longer
-   *  lists when the result is written lands in the primary's window, the
-   *  residents' slot, as every async result did before, its line adding that
-   *  the launcher has ended, so no resident takes it for its own (Agnes-1009,
-   *  room-203 #197191, #197307); one agent-framework passes on later names
-   *  its launcher alone. A launcher is the launching agent's own name: a
-   *  fork's or a subagent's is unique to its attempt (nameStamp), so a later
-   *  run under the same display name is another agent. The line names it as
-   *  agents know it (`launcherShown`, shownName): a fork's or a subagent's display
-   *  name, read while it ran (Agnes-1009, #198350). With no launcher
-   *  named, it lands there as before. A write that fails otherwise throws,
-   *  as before. Returns whether the launcher's wake should follow: not for a
-   *  launcher that has ended, whose result is read at the primary's next
-   *  start, as on main (Agnes-1009, #197466). */
-  private addForLauncher(launcher: string | undefined, launcherShown: string | undefined, name: string, outcome: 'returned' | 'failed', body: string): boolean {
+   *  lists when the result is written is its run's (Agnes-1009, room-203
+   *  #199188): while the run goes on, its current attempt's, told an earlier
+   *  attempt launched it, or between attempts the primary's; once the run
+   *  has ended, the primary's window, the residents' slot, as every async
+   *  result did before, its line adding that the launcher has ended, so no
+   *  resident takes it for its own (#197191, #197307). One agent-framework
+   *  passes on later names its launcher alone. A launcher is the launching
+   *  attempt's own name, unique to it (nameStamp), so a later run under the
+   *  same display name is another agent; runOfAttempt gives the run of each
+   *  attempt until the run ends. The line names it as agents know it
+   *  (`launcherShown`, shownName): a fork's or a subagent's display name,
+   *  read while it ran (#198350). With no launcher named, it lands there as
+   *  before. A write that fails otherwise throws, as before. Returns the
+   *  agent to wake, or null: none for a result the primary takes because
+   *  its launcher's attempt has ended, read at its next start, as on main
+   *  (#197466). */
+  private addForLauncher(launcher: string | undefined, launcherShown: string | undefined, name: string, outcome: 'returned' | 'failed', body: string): string | null {
     const ctx = this.ctx!;
-    const listed = launcher === undefined || ctx.getAgents().some((agent) => agent.name === launcher);
-    const forWhom = launcher === undefined || launcher === this.config.parentAgentName
-      ? ''
-      : `, for '${launcherShown ?? launcher}'${listed ? '' : ', which has ended'}`;
-    const content = [{ type: 'text' as const, text: `[Subagent '${name}' ${outcome}${forWhom}]\n\n${body}` }];
-    if (launcher !== undefined && listed) ctx.addMessage('user', content, undefined, { forAgent: launcher });
-    else ctx.addMessage('user', content);
-    return listed;
+    const say = (forWhom: string, forAgent?: string): void => {
+      const content = [{ type: 'text' as const, text: `[Subagent '${name}' ${outcome}${forWhom}]\n\n${body}` }];
+      if (forAgent !== undefined) ctx.addMessage('user', content, undefined, { forAgent });
+      else ctx.addMessage('user', content);
+    };
+    if (launcher === undefined) {
+      say('');
+      return UNNAMED_LAUNCHER;
+    }
+    const listed = new Set(ctx.getAgents().map((agent) => agent.name));
+    const shown = launcherShown ?? launcher;
+    if (listed.has(launcher)) {
+      say(launcher === this.config.parentAgentName ? '' : `, for '${shown}'`, launcher);
+      return launcher;
+    }
+    // The attempt that launched it has ended. While its run goes on, the
+    // result is the run's (Agnes-1009, room-203 #199188): its current attempt
+    // takes it, told an earlier attempt launched it, or, between attempts,
+    // the primary does, told the launching attempt has ended.
+    const run = this.runOfAttempt.get(launcher);
+    if (run !== undefined) {
+      const current = this.liveSubagents.get(run)?.frameworkAgentName;
+      if (current !== undefined && listed.has(current)) {
+        say(`, for '${shown}': launched by an earlier attempt`, current);
+        return current;
+      }
+      say(`, for an earlier attempt of '${shown}', which has ended`);
+      return null;
+    }
+    say(`, for '${shown}', which has ended`);
+    return null;
   }
 
   /** A spawn's or fork's failure as the agent reads it, in the call's answer
