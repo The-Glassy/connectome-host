@@ -446,10 +446,11 @@ const UNNAMED_LAUNCHER = 'agent';
  *  agent-framework stores it under (`system_context:<namespace>`). */
 const FLEET_NAMESPACE = 'subagent-fleet';
 const FLEET_PARTICIPANT = `system_context:${FLEET_NAMESPACE}`;
-/** A run's display name from one of its attempts' names, for an attempt
- *  whose run has ended (runOfAttempt keeps them only until then): a spawn's
- *  `spawn-<name>-<stamp>` and a fork's `<name>-d<depth>[-retry<n>]-<stamp>`
- *  give `<name>`; another name, such as a resident's, is cut as before. */
+/** A run's display name from one of its attempts' names, which it carries
+ *  whether the run goes on or has ended (runOfAttempt keeps an attempt only
+ *  until then): a spawn's `spawn-<name>-<stamp>` and a fork's
+ *  `<name>-d<depth>[-retry<n>]-<stamp>` give `<name>`; another name, such
+ *  as a resident's, is cut as before. */
 function runNameOf(attempt: string): string {
   const spawned = /^spawn-(.+)-\d+$/.exec(attempt);
   if (spawned) return spawned[1]!;
@@ -1829,9 +1830,9 @@ export class SubagentModule implements Module {
       if (latestChange === undefined || changedAt > latestChange) latestChange = changedAt;
       if (sa.status !== 'running') continue;
       const parent = this.parentMap.get(sa.name) ?? 'agent';
-      // The launcher as agents know it (shownName while its run goes on, as
-      // the result's line names it; an ended one's attempt name cut down).
-      const parentShort = this.runOfAttempt.get(parent) ?? runNameOf(parent);
+      // The launcher as agents know it, its run's display name, as the
+      // result's line names it, whether its run goes on or has ended.
+      const parentShort = runNameOf(parent);
       const task = sa.task.length > 50 ? sa.task.slice(0, 47) + '...' : sa.task;
       lines.push(`  ${sa.name} [${sa.type}] running since ${this.clockTime(sa.startedAt)} parent:${parentShort} "${task}"`);
     }
