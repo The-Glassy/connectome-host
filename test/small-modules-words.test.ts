@@ -339,7 +339,11 @@ describe('settings', () => {
 
   test('a budget that isn\'t a number, or an effort not on the list, is named and not applied', async () => {
     const m = new SettingsModule();
-    await m.start({ getState: () => null, setState: () => {} } as unknown as ModuleContext);
+    let saved: unknown = null;
+    await m.start({
+      getState: () => saved,
+      setState: (state: unknown) => { saved = structuredClone(state); },
+    } as unknown as ModuleContext);
     const ext = m.getAgentSettingsExtension();
     for (const [budget, shown] of [[null, 'null'], ['60000', '"60000"'], [true, 'true'], [Infinity, 'Infinity']] as const) {
       let message = '';

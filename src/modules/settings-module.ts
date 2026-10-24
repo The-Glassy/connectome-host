@@ -83,7 +83,13 @@ export class SettingsModule implements Module {
 
   async start(ctx: ModuleContext): Promise<void> {
     this.ctx = ctx;
-    const saved = ctx.getState<{ reasoning?: unknown }>();
+    this.refreshState();
+  }
+
+  /** Branch selection changes the context's store without restarting modules. */
+  private refreshState(): void {
+    if (!this.ctx) return;
+    const saved = this.ctx.getState<{ reasoning?: unknown }>();
     const baseline = { ...DEFAULTS.reasoning, effort: this.initialEffort };
     this.state = { reasoning: restoreReasoning(saved?.reasoning, baseline) };
     this.effortOverride = savedEffortOverride(saved?.reasoning);
@@ -95,6 +101,7 @@ export class SettingsModule implements Module {
 
   /** Read accessor for external consumers (e.g., the LLM adapter wrapper). */
   getReasoning(): ReasoningSettings {
+    this.refreshState();
     return { ...this.state.reasoning };
   }
 
@@ -165,6 +172,7 @@ export class SettingsModule implements Module {
       keys: ['reasoning_enabled', 'reasoning_budget_tokens', 'reasoning_display', 'reasoning_effort'],
       get: () => this.reasoningSettingsView(),
       update: (_agentName, patch) => {
+        this.refreshState();
         // Every field is checked before any applies, and every problem is
         // named, so one refusal shows all there is to fix.
         const next = { ...this.state.reasoning };
@@ -213,6 +221,7 @@ export class SettingsModule implements Module {
         return this.reasoningSettingsView();
       },
       reset: (_agentName, keys) => {
+        this.refreshState();
         const all = !keys || keys.length === 0;
         if (all || keys?.includes('reasoning_enabled')) {
           this.state.reasoning.enabled = DEFAULTS.reasoning.enabled;
@@ -246,6 +255,7 @@ export class SettingsModule implements Module {
 
   /** The extension's wire view of reasoning state (flat agent_settings keys). */
   private reasoningSettingsView(): Record<string, unknown> {
+    this.refreshState();
     return {
       reasoning_enabled: this.state.reasoning.enabled,
       reasoning_budget_tokens: this.state.reasoning.budgetTokens,

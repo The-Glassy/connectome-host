@@ -1,6 +1,10 @@
 import { describe, test, expect } from 'bun:test';
 import { SettingsModule, type ReasoningEffort } from '../src/modules/settings-module.js';
 import type { ModuleContext } from '@animalabs/agent-framework';
+import { JsStore } from '@animalabs/chronicle';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 function started(saved?: unknown, initialEffort?: ReasoningEffort) {
   let persisted: unknown = saved;
@@ -101,6 +105,133 @@ describe('SettingsModule reasoning_effort', () => {
     expect(ext.reset('a', ['reasoning_effort']).reasoning_effort).toBe('medium');
     ext.update('a', { reasoning_effort: 'max' });
     expect(ext.reset('a').reasoning_effort).toBe('medium');
+  });
+});
+
+describe('reasoning follows branch state without restarting the module', () => {
+  const source = { reasoning: { enabled: true, budgetTokens: 4096, display: 'omitted', effort: 'high', effortExplicit: true } };
+  const baseline = { enabled: false, budgetTokens: 8192, display: 'summarized', effort: 'medium' };
+
+  async function branches(destination: unknown) {
+    const states = new Map<string, unknown>([['A', structuredClone(source)], ['B', structuredClone(destination)]]);
+    let branch = 'A';
+    const mod = new SettingsModule('medium');
+    await mod.start({
+      getState: () => structuredClone(states.get(branch)),
+      setState: (state: unknown) => { states.set(branch, structuredClone(state)); },
+    } as unknown as ModuleContext);
+    return { mod, ext: mod.getAgentSettingsExtension(), states, switchTo: (name: string) => { branch = name; } };
+  }
+
+  for (const reader of ['adapter', 'agent_settings'] as const) {
+    test(`${reader} reads destination and source again without writing either branch`, async () => {
+      const destination = { reasoning: { enabled: false, budgetTokens: 2048, display: 'summarized', effort: 'low' } };
+      const { mod, ext, states, switchTo } = await branches(destination);
+      const read = () => reader === 'adapter' ? mod.getReasoning().effort : ext.get('a').reasoning_effort;
+      switchTo('B');
+      expect(read()).toBe('low');
+      switchTo('A');
+      expect(read()).toBe('high');
+      expect(states.get('A')).toEqual(source);
+      expect(states.get('B')).toEqual(destination);
+    });
+  }
+
+  const destinations = [
+    { name: 'empty state', saved: undefined, expected: baseline, override: undefined },
+    { name: 'saved unrelated fields', saved: { reasoning: { enabled: false, budgetTokens: 2048 } },
+      expected: { ...baseline, budgetTokens: 2048 }, override: undefined },
+    { name: 'legacy default', saved: { reasoning: { effort: 'default' } }, expected: baseline, override: undefined },
+    { name: 'explicit default', saved: { reasoning: { effort: 'default', effortExplicit: true } },
+      expected: { ...baseline, effort: 'default' }, override: 'default' },
+    { name: 'legacy nondefault', saved: { reasoning: { effort: 'max', budgetTokens: 2048 } },
+      expected: { ...baseline, effort: 'max', budgetTokens: 2048 }, override: 'max' },
+    { name: 'invalid fields', saved: { reasoning: { enabled: 'yes', budgetTokens: 'lots', display: 'full', effort: 'invalid', effortExplicit: true } },
+      expected: baseline, override: undefined },
+  ];
+  for (const destination of destinations) {
+    for (const operation of ['update', 'reset'] as const) {
+      test(`${operation} before any read uses ${destination.name} and preserves destination fields`, async () => {
+        const { mod, ext, states, switchTo } = await branches(destination.saved);
+        switchTo('B');
+        const display = operation === 'update' ? 'omitted' : 'summarized';
+        const result = operation === 'update'
+          ? ext.update('a', { reasoning_display: display })
+          : ext.reset('a', ['reasoning_display']);
+        const expected = { ...destination.expected, display };
+        expect(result).toEqual({
+          reasoning_enabled: expected.enabled, reasoning_budget_tokens: expected.budgetTokens,
+          reasoning_display: expected.display, reasoning_effort: expected.effort,
+        });
+        expect(mod.getReasoning()).toEqual(expected);
+        const { effort: _effort, ...unrelated } = expected;
+        expect(states.get('B')).toEqual({ reasoning: {
+          ...unrelated,
+          ...(destination.override === undefined ? {} : { effort: destination.override, effortExplicit: true }),
+        } });
+        switchTo('A');
+        expect(mod.getReasoning()).toEqual({ enabled: true, budgetTokens: 4096, display: 'omitted', effort: 'high' });
+        expect(states.get('A')).toEqual(source);
+      });
+    }
+  }
+
+  test('effort reset before any read preserves other destination values and drops its override', async () => {
+    const { mod, ext, states, switchTo } = await branches({ reasoning: {
+      enabled: false, budgetTokens: 2048, display: 'summarized', effort: 'default', effortExplicit: true,
+    } });
+    switchTo('B');
+    expect(ext.reset('a', ['reasoning_effort'])).toEqual({
+      reasoning_enabled: false, reasoning_budget_tokens: 2048, reasoning_display: 'summarized', reasoning_effort: 'medium',
+    });
+    expect(states.get('B')).toEqual({ reasoning: { enabled: false, budgetTokens: 2048, display: 'summarized' } });
+    switchTo('A');
+    expect(mod.getReasoning().effort).toBe('high');
+    expect(states.get('A')).toEqual(source);
+  });
+
+  test('invalid update after switching refuses the write and exposes validated destination values', async () => {
+    const destination = { reasoning: { enabled: false, budgetTokens: 2048, display: 'summarized', effort: 'low' } };
+    const { mod, ext, states, switchTo } = await branches(destination);
+    switchTo('B');
+    expect(() => ext.update('a', { reasoning_display: 'omitted', reasoning_effort: 'invalid' })).toThrow(/reasoning_effort must be one of/);
+    expect(mod.getReasoning()).toEqual(destination.reasoning);
+    expect(states.get('B')).toEqual(destination);
+    expect(states.get('A')).toEqual(source);
+  });
+
+  test('real Chronicle branch switch to earlier empty state uses recipe effort and isolates writes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'settings-branch-'));
+    const store = JsStore.openOrCreate({ path: join(dir, 'store') });
+    try {
+      const stateId = 'modules/settings/state';
+      store.registerState({ id: stateId, strategy: 'snapshot' });
+      const originalBranch = store.currentBranch().name;
+      store.createBranch('earlier');
+      const mod = new SettingsModule('medium');
+      // Same synchronous store binding used by AF ModuleContext; CM branch
+      // selection calls switchBranch on this same store.
+      await mod.start({
+        getState: () => store.getStateJson(stateId),
+        setState: (state: unknown) => { store.setStateJson(stateId, state); },
+      } as unknown as ModuleContext);
+      const ext = mod.getAgentSettingsExtension();
+      ext.update('a', { reasoning_effort: 'high' });
+      const sourceState = store.getStateJson(stateId);
+      store.switchBranch('earlier');
+      expect(store.getStateJson(stateId)).toBeNull();
+      // Write first, with no accessor or extension read to refresh the module.
+      expect(ext.update('a', { reasoning_display: 'omitted' }).reasoning_effort).toBe('medium');
+      expect(store.getStateJson(stateId)).toEqual({ reasoning: { enabled: false, budgetTokens: 8192, display: 'omitted' } });
+      store.switchBranch(originalBranch);
+      expect(mod.getReasoning().effort).toBe('high');
+      expect(store.getStateJson(stateId)).toEqual(sourceState);
+      store.switchBranch('earlier');
+      expect(ext.get('a').reasoning_effort).toBe('medium');
+    } finally {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
