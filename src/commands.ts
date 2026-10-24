@@ -231,7 +231,7 @@ export function handleCommand(command: string, app: AppContext): CommandResult {
           { text: '  /fleet                 Show / peek / stop / restart cross-process children', style: 'system' },
           { text: '                         (subcommands: list | status [name] | view | peek <name> | stop <name> | restart <name>)', style: 'system' },
           { text: '  /update                Whether a newer release is out, and this install\'s update state', style: 'system' },
-          { text: '                         (subcommands: install | restart [wait | now | resume] | back [keep | restore])', style: 'system' },
+          { text: '                         (subcommands: install | restart [wait | now | resume | <version>] | back [keep | restore [<version>]])', style: 'system' },
         ],
       };
 
@@ -351,7 +351,8 @@ function handleUpdate(args: string[]): CommandResult {
   }
   if (sub === 'install' && choice === undefined) return after('Reading the registry, then installing…', hostUpdate.install());
   if (sub === 'restart' && release === undefined) {
-    const quiescing = 'Quiescing for the restart: turns in progress get up to 2 min to end…';
+    // Sent before the host's own checks, which can still refuse it.
+    const quiescing = 'Restarting unless refused: turns in progress get up to 2 min to end…';
     if (choice === undefined) return after(quiescing, hostUpdate.restartToInstalled());
     if (choice === 'wait') return after('Waiting up to 10 min more for turns to end…', hostUpdate.waitLonger());
     if (choice === 'now') return after('Stopping now…', hostUpdate.stopNow());
@@ -361,7 +362,7 @@ function handleUpdate(args: string[]): CommandResult {
   if (sub === 'back') {
     if (choice === undefined) return say(goBackLines(hostUpdate.status()));
     if ((choice === 'keep' || choice === 'restore') && (release === undefined || version(release))) {
-      return after('Quiescing to go back: turns in progress get up to 2 min to end…', hostUpdate.goBack(choice === 'keep', release));
+      return after('Going back unless refused: turns in progress get up to 2 min to end…', hostUpdate.goBack(choice === 'keep', release));
     }
   }
   return usage;

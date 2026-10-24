@@ -478,9 +478,9 @@ describe("a host's update, on a real start", () => {
     await until(() => closed, 5_000, 'the page sees its connection close');
     const answers = frames.filter((frame) => frame.type === 'command-result').flatMap((frame) => frame.lines!.map((l) => l.text));
     expect(answers).toEqual([
-      'Quiescing for the restart: turns in progress get up to 2 min to end…',
+      'Restarting unless refused: turns in progress get up to 2 min to end…',
       refusal,
-      'Quiescing for the restart: turns in progress get up to 2 min to end…',
+      'Restarting unless refused: turns in progress get up to 2 min to end…',
       "Stopping to switch to 9.9.10: the host's next start does it, which a service set up for updates makes by itself.",
     ]);
   }, 60_000);
