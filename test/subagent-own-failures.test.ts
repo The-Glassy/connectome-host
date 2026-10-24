@@ -1347,7 +1347,10 @@ describe('a name means one subagent until its result has come back', () => {
       expect(await status()).toContain("child [spawn] running since");
       releaseChild();
       await until(() => !sub.asyncHandles.has('child'));
-      expect(await status()).toBeUndefined(); // nothing stored here listed a run
+      // Once it has ended it isn't listed. Whether "(none running)" follows
+      // depends on whether a start of the primary's, woken by the results,
+      // has stored a status listing it by then.
+      expect((await status()) ?? '').not.toContain('child [spawn] running');
     } finally { await h.cleanup(); }
   }, 20_000);
 
