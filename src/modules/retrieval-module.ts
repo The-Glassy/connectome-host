@@ -332,9 +332,11 @@ export class RetrievalModule implements Module {
    * nothing when it keeps nothing. A Web UI preview with injections
    * (previewActivation) gathers too and counts as a start: overlapping a
    * start's model calls, it keeps its own result for the same opening
-   * message in that start's place, or nothing when its own keeps nothing, so
-   * the turn's next start may get a block the framework then stores again,
-   * or run the calls again (Agnes-1009, room-203 #197691).
+   * message in that start's place, or none when its own keeps no result
+   * (its model call fails, or its concept reply isn't a list; an empty
+   * result is kept), so the turn's next start may get a block the framework
+   * then stores again, or run the calls again (Agnes-1009, room-203
+   * #197691).
    */
   async gatherContext(agentName: string): Promise<ContextInjection[]> {
     const start = ++this.starts;

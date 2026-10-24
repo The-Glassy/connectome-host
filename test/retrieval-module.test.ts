@@ -1303,6 +1303,21 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     expect(h.block(await h.mod.gatherContext(AGENT))).toBe(expected);
   });
 
+  test('a later lesson\'s room for the note counts only the lessons not kept, so it\'s kept where the note for more wouldn\'t fit', async () => {
+    const heading = '## Retrieved Knowledge, for the message beginning "Tell me the memory detail."';
+    const note = '(1 more relevant lesson left out, to keep this message under its size limit)';
+    // l1 kept, l2 too large, then l3, padded so the block with the one-lesson
+    // note ends on a token's last character: counting l1 as not kept would
+    // reserve the note for two, a character longer, and leave l3 out.
+    const base = [heading, '- [90%] memory one (tags: memory)', '- [90%] memory three (tags: memory)', note].join('\n').length;
+    const three = `memory three${'!'.repeat((4 - (base % 4)) % 4)}`;
+    const lessons = [lesson('l1', 'memory one'), lesson('l2', `memory ${'large '.repeat(200)}`), lesson('l3', three)];
+    const expected = [heading, '- [90%] memory one (tags: memory)', `- [90%] ${three} (tags: memory)`, note].join('\n');
+    const h = turnHarness(['["memory"]'], { lessons, maxMessageTokens: expected.length / 4 });
+    h.say('user', 'Tell me the memory detail.');
+    expect(h.block(await h.mod.gatherContext(AGENT))).toBe(expected);
+  });
+
   test('a message a tune-out diverted is neither the opening message nor in what the concept step reads', async () => {
     const h = turnHarness(['["memory"]']);
     h.say('user', 'Tell me the memory detail.');

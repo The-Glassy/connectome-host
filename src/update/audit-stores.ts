@@ -99,9 +99,10 @@ const residentView = (name: string) => (message: StoredMessage): boolean =>
 /** agent-framework's view of the subconscious's messages
  *  (createSubconsciousAgent): its own namespace and the residents' slot
  *  merged, tuned-out rows included, less every other agent's stored context
- *  injection, the residents' among them. A copy: one test pins its rule as
- *  createSubconsciousAgent's filter reads, and another that the audit opens
- *  a named subconscious with its own name's view; exported for the first. */
+ *  injection, the residents' among them. A copy: one test asks it and the
+ *  filter agent-framework opens a named subconscious with about the same
+ *  rows, one pins its rule, and another that the audit opens a named
+ *  subconscious with its own name's view; exported for the first two. */
 export const subconsciousView = (name: string) => (message: StoredMessage): boolean =>
   !isAnotherAgentsInjection(message.metadata, name);
 

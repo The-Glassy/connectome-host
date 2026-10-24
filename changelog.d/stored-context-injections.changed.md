@@ -11,7 +11,10 @@
     newest row someone other than the agent wrote to it. A later start of
     the same turn, such as a restart after a tool round, gets the same
     block with no model calls, an empty result of those calls included,
-    within one process; a start that a later start of the agent's overtook
+    within one process and while its entry is among the 64 most recently
+    used; a Web UI preview with injections counts as a start too, so one
+    that overlaps a start can leave its own result as the turn's, or none;
+    a start that a later start of the agent's overtook
     keeps nothing; a retrieval that failed, or whose concept step answered
     with something that isn't a list, is tried again. Rows marked `system`
     (clock rows, autoContinue's `[continue]`, the framework's notices and

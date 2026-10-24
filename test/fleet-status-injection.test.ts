@@ -16,25 +16,33 @@ const T0 = Date.UTC(2026, 9, 23, 14, 5, 9);
 type StoredRow = { window: string; participant: string; content: Array<{ type: 'text'; text: string }>; metadata: Record<string, unknown> };
 
 const FLEET = 'system_context:subagent-fleet';
-const markFor = (agent: string, contentHash: string) => ({
-  system: true, kind: 'context-injection', contextInjection: { agent, namespace: 'subagent-fleet', contentHash, part: 0, parts: 1 },
+const markFor = (agent: string, contentHash: string, namespace = 'subagent-fleet') => ({
+  system: true, kind: 'context-injection', contextInjection: { agent, namespace, contentHash, part: 0, parts: 1 },
 });
 
-/** A module whose context stores each status as agent-framework does: in
- *  the agent's own window (the residents' shared slot for a resident, its
- *  own for a fork), marked with the agent it's for, again only when its text
- *  differs from that agent's newest stored one, in `shards` rows when asked,
- *  each carrying the status's mark, the heading in the first. Its
+/** A module whose context stores each status as agent-framework stores an
+ *  `afterUser` injection: in the agent's own window (the residents' shared
+ *  slot for a resident, its own for a fork), under `system_context:` and the
+ *  injection's namespace, marked with the agent it's for and that namespace,
+ *  in `shards` rows when asked, each carrying the status's mark, the heading
+ *  in the first. It stores again only when the text differs from the
+ *  agent's newest stored status, which is agent-framework's rule while its
+ *  last request held that newest one, as no fold has taken it here. Its
  *  queryMessages reads the window `forAgent` names, the primary's when it's
  *  left out, as agent-framework's does. `preview` gathers and stores
  *  nothing, as previewActivation's gather does. A second module on the same
- *  `stored` rows stands for the host after a restart. */
-function fleet(timeZone = 'UTC', stored: StoredRow[] = []) {
+ *  `stored` rows stands for the host after a restart. `hud` sets the
+ *  module's hud setting. With `primary`, 'resident' is the module's primary
+ *  (parentAgentName), and getAgents lists `registered`. */
+function fleet(timeZone = 'UTC', stored: StoredRow[] = [], opts: { primary?: true } = {}) {
   const residents = new Set(['resident', 'other']);
+  const registered = new Set(residents);
   const windowOf = (agent: string) => (residents.has(agent) ? 'residents' : agent);
-  const mod = new SubagentModule({ provider: 'mock', timeZone });
+  const mod = new SubagentModule({ provider: 'mock', timeZone, ...(opts.primary ? { parentAgentName: 'resident' } : {}) });
+  let hudEnabled = true;
   (mod as unknown as { ctx: unknown }).ctx = {
-    getState: () => ({ hudEnabled: true }),
+    getAgents: () => [...registered].map((name) => ({ name, model: 'mock', status: 'idle' })),
+    getState: () => ({ hudEnabled }),
     setState: () => {},
     queryMessages: (filter: { participant?: string }, opts?: { forAgent?: string }) => {
       const window = windowOf(opts?.forAgent ?? 'resident');
@@ -54,7 +62,11 @@ function fleet(timeZone = 'UTC', stored: StoredRow[] = []) {
   const textOf = async (agent: string): Promise<string | undefined> =>
     ((await mod.gatherContext(agent))[0]?.content[0] as { text: string } | undefined)?.text;
   const status = async (agent = 'resident', shards = 1): Promise<string | undefined> => {
-    const text = await textOf(agent);
+    const injections = await mod.gatherContext(agent);
+    expect(injections.length).toBeLessThanOrEqual(1);
+    const injection = injections[0];
+    if (injection) expect(injection.position).toBe('afterUser');
+    const text = (injection?.content[0] as { text: string } | undefined)?.text;
     const mine = stored.filter((row) => row.window === windowOf(agent) && (row.metadata.contextInjection as { agent: string } | undefined)?.agent === agent);
     const newestHash = (mine.at(-1)?.metadata.contextInjection as { contentHash: string } | undefined)?.contentHash;
     const newest = mine.filter((row) => (row.metadata.contextInjection as { contentHash: string }).contentHash === newestHash)
@@ -64,13 +76,22 @@ function fleet(timeZone = 'UTC', stored: StoredRow[] = []) {
       const size = Math.ceil(lines.length / shards);
       const hash = `h${stored.length}`;
       for (let i = 0; i < lines.length; i += size) {
-        stored.push({ window: windowOf(agent), participant: FLEET, content: [{ type: 'text', text: lines.slice(i, i + size).join('\n') }], metadata: markFor(agent, hash) });
+        stored.push({
+          window: windowOf(agent), participant: `system_context:${injection!.namespace}`,
+          content: [{ type: 'text', text: lines.slice(i, i + size).join('\n') }], metadata: markFor(agent, hash, injection!.namespace),
+        });
       }
     }
     return text;
   };
   const handles = (mod as unknown as { asyncHandles: Map<string, unknown> }).asyncHandles;
-  return { mod, add, status, preview: textOf, stored, handles };
+  const hud = (on: boolean) => { hudEnabled = on; };
+  /** A run under way, as the module's own record of it: its framework name. */
+  const live = (name: string, frameworkAgentName: string) => {
+    (mod as unknown as { liveSubagents: Map<string, unknown> }).liveSubagents.set(name, { frameworkAgentName, activeCallIds: new Set() });
+  };
+  const unlive = (name: string) => { (mod as unknown as { liveSubagents: Map<string, unknown> }).liveSubagents.delete(name); };
+  return { mod, add, status, preview: textOf, stored, handles, hud, registered, live, unlive };
 }
 
 afterEach(() => { setSystemTime(); });
@@ -165,6 +186,64 @@ describe('the fleet status', () => {
     f.handles.set('later', {});
     f.mod.parentMap.set('later', 'resident');
     expect(await f.status()).toBe('[Fleet Status, as of 14:05:11 UTC]\n  later [spawn] running since 14:05:11 parent:resident "task for later"');
+  });
+
+  test('a running fork isn\'t listed again as waiting beside its own async handle, and a finished one doesn\'t hide a run waiting under its name', async () => {
+    const f = fleet();
+    const fork = f.add('later', { type: 'fork' });
+    f.mod.activeSubagents.delete('entry-later');
+    f.mod.activeSubagents.set('later', fork); // a fork's entry is under its name
+    f.handles.set('later', {});
+    expect(await f.status()).toBe('[Fleet Status, as of 14:05:09 UTC]\n  later [fork] running since 14:05:09 parent:resident "task for later"');
+    fork.status = 'completed';
+    fork.completedAt = T0 + 1_000;
+    expect(await f.status()).toBe('[Fleet Status, as of 14:05:10 UTC]\n  later [async] pending');
+  });
+
+  test('a run whose name begins as the heading does still counts as a run', async () => {
+    const f = fleet();
+    const odd = f.add('[Fleet Status audit]');
+    expect(await f.status()).toContain('[Fleet Status audit] [spawn] running since');
+    odd.status = 'completed';
+    odd.completedAt = T0 + 30_000;
+    expect(await f.status()).toBe('[Fleet Status, as of 14:05:39 UTC]\n  (none running)');
+  });
+
+  test('a run whose launcher has ended stays in the primary\'s status until it ends', async () => {
+    const f = fleet('UTC', [], { primary: true });
+    const lead = f.add('lead');
+    f.live('lead', 'lead-d1-1');
+    f.registered.add('lead-d1-1');
+    const kid = f.add('kid');
+    f.mod.parentMap.set('kid', 'lead-d1-1');
+    expect(await f.status()).toBe([
+      '[Fleet Status, as of 14:05:09 UTC]',
+      '  lead [spawn] running since 14:05:09 parent:resident "task for lead"',
+      '  kid [spawn] running since 14:05:09 parent:lead "task for kid"',
+    ].join('\n'));
+    // lead ends before kid: its record and its registration go.
+    lead.status = 'completed';
+    lead.completedAt = T0 + 10_000;
+    f.unlive('lead');
+    f.registered.delete('lead-d1-1');
+    expect(await f.status()).toBe('[Fleet Status, as of 14:05:19 UTC]\n  kid [spawn] running since 14:05:09 parent:lead "task for kid"');
+    // Another resident's status doesn't take it: its result goes to the primary.
+    expect(await f.status('other')).toBeUndefined();
+    kid.status = 'completed';
+    kid.completedAt = T0 + 30_000;
+    expect(await f.status()).toBe('[Fleet Status, as of 14:05:39 UTC]\n  (none running)');
+  });
+
+  test('with the hud off, nothing is added, a stored status listing a run included', async () => {
+    const f = fleet();
+    const scout = f.add('scout');
+    expect(await f.status()).toContain('scout [spawn] running since');
+    f.hud(false);
+    expect(await f.status()).toBeUndefined();
+    scout.status = 'completed';
+    scout.completedAt = T0 + 30_000;
+    expect(await f.status()).toBeUndefined();
+    expect(f.stored).toHaveLength(1);
   });
 
   test('a run waiting under the name of one that has finished is listed', async () => {
