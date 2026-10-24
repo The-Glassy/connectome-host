@@ -23,6 +23,7 @@
  *   /export        — Export lessons to ./output/ (JSON + markdown)
  *   /usage         — Show session token usage and costs
  *   /bug <text>    — Assemble a bug report to file on GitHub (nothing is sent)
+ *   /update        — Update, Restart and Go back (src/update/update.ts)
  *   /help          — List commands
  */
 
@@ -39,6 +40,9 @@ import type { Line } from './output-line.js';
 import { fmtTokens } from './tui.js';
 import { formatToolClassRows, readToolClasses } from './tool-lifecycle-config.js';
 import { type FleetModule, formatChildRow } from './modules/fleet-module.js';
+import { EXACT_VERSION } from './update/install.js';
+import { hostUpdate } from './update/update.js';
+import { goBackLines, statusLines } from './web/update-text.js';
 
 /** Imported lazily to avoid circular deps — index.ts re-exports the type. */
 interface AppContext {
@@ -226,6 +230,8 @@ export function handleCommand(command: string, app: AppContext): CommandResult {
           { text: '  /bug <text>            Assemble a bug report to file on GitHub: shown first, nothing sent', style: 'system' },
           { text: '  /fleet                 Show / peek / stop / restart cross-process children', style: 'system' },
           { text: '                         (subcommands: list | status [name] | view | peek <name> | stop <name> | restart <name>)', style: 'system' },
+          { text: '  /update                Whether a newer release is out, and this install\'s update state', style: 'system' },
+          { text: '                         (subcommands: install | restart [wait | now | resume | <version>] | back [(keep | restore) [<version>]])', style: 'system' },
         ],
       };
 
@@ -316,11 +322,50 @@ export function handleCommand(command: string, app: AppContext): CommandResult {
     case 'fleet':
       return handleFleet(app, args);
 
+    case 'update':
+      return handleUpdate(args);
+
     default:
       return {
         lines: [{ text: `Unknown command: /${cmd}. Type /help.`, style: 'system' }],
       };
   }
+}
+
+/** /update: the state, and Update, Restart and Go back
+ *  (src/update/update.ts). Each answer's lines come back as the command's
+ *  follow-up. Restart and Go back's two ways take the release they're for,
+ *  as the Web UI sends them, so the host refuses rather than act on another
+ *  one. */
+function handleUpdate(args: string[]): CommandResult {
+  const say = (lines: string[]): CommandResult => ({ lines: lines.map((text) => ({ text, style: 'system' as const })) });
+  const after = (first: string, work: Promise<{ lines: string[] }>): CommandResult =>
+    ({ ...say([first]), asyncWork: work.then((answer) => say(answer.lines)) });
+  const [sub, choice, release, extra] = args;
+  const usage = say(['Usage: /update [install | restart [wait | now | resume | <version>] | back [(keep | restore) [<version>]]]']);
+  if (extra !== undefined) return usage;
+  const version = (word: string | undefined): word is string => word !== undefined && EXACT_VERSION.test(word);
+  if (sub === undefined) {
+    return after('Reading the registry…',
+      hostUpdate.readRegistry().then(() => ({ lines: statusLines(hostUpdate.status()) })));
+  }
+  if (sub === 'install' && choice === undefined) return after('Reading the registry, then installing…', hostUpdate.install());
+  if (sub === 'restart' && release === undefined) {
+    // Sent before the host's own checks, which can still refuse it.
+    const quiescing = 'Restarting unless refused: turns in progress get up to 2 min to end…';
+    if (choice === undefined) return after(quiescing, hostUpdate.restartToInstalled());
+    if (choice === 'wait') return after('Waiting up to 10 min more for turns to end…', hostUpdate.waitLonger());
+    if (choice === 'now') return after('Stopping now…', hostUpdate.stopNow());
+    if (choice === 'resume') return after('Calling the restart off…', hostUpdate.resume());
+    if (version(choice)) return after(quiescing, hostUpdate.restartToInstalled(choice));
+  }
+  if (sub === 'back') {
+    if (choice === undefined) return say(goBackLines(hostUpdate.status()));
+    if ((choice === 'keep' || choice === 'restore') && (release === undefined || version(release))) {
+      return after('Going back unless refused: turns in progress get up to 2 min to end…', hostUpdate.goBack(choice === 'keep', release));
+    }
+  }
+  return usage;
 }
 
 /** Render the credential state the way the TUI wants it: one line per fact. */

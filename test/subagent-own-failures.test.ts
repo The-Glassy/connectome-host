@@ -61,6 +61,8 @@ interface Harness {
   /** Whether a run of this subagent is in the framework now, past its
    *  setup: the point at which a stop or a reclaim can end it. */
   running(name: string): boolean;
+  /** The framework's store, for a framework opened on it again. */
+  storePath: string;
   cleanup(): Promise<void>;
 }
 
@@ -110,6 +112,7 @@ async function harness(
   return {
     framework,
     subagent,
+    storePath: join(tmpDir, 'store'),
     runs: () => runs,
     running: (name: string) => [...fw.agents.keys()].some((k) => k.startsWith(`spawn-${name}-`) || k.startsWith(`${name}-d`)),
     cleanup: async () => {
@@ -738,6 +741,151 @@ describe('concurrency slots', () => {
       expect(h.subagent.getConcurrencyStatus()).toMatchObject({ active: 0 });
     } finally { await h.cleanup(); }
   });
+});
+
+describe('module stop reaches the whole run', () => {
+  /** What a run the module's stop ended opens with (stopLabel's 'killed'). */
+  const SESSION_STOPPED = "[Stopped: its session stopped, as at a session switch or the host's exit]";
+
+  test('module stop ends a queued spawn and the active one, and the queued one never starts', async () => {
+    const h = await harness({ maxConcurrent: 1, maxRetries: 0 }, () => new Promise(() => { /* stopped by the module */ }));
+    try {
+      const sub = internal(h.subagent);
+      await h.subagent.handleToolCall(spawn('long'));
+      await until(() => h.running('long'));
+      const active = outcome(h, 'long');
+      await h.subagent.handleToolCall(spawn('waiting'));
+      const waiting = outcome(h, 'waiting');
+      await until(() => h.subagent.getConcurrencyStatus().queued === 1);
+      await h.subagent.stop();
+      expect(sub.cancellationHandles.size).toBe(0);
+      expect((await waiting).text).toBe(`${SESSION_STOPPED} (no output: it was still waiting for a concurrency slot, and never started)`);
+      expect((await active).text).toBe(`${SESSION_STOPPED} (no output yet)`);
+      expect(h.subagent.getConcurrencyStatus()).toMatchObject({ active: 0, queued: 0 });
+      expect(h.runs()).toBe(1);
+    } finally { h.subagent.cancelAll(); await h.cleanup(); }
+  }, 20_000);
+
+  for (const [what, failure] of [['retry back-off', '503 overloaded'], ['rate-limit cooldown', '429 Too Many Requests']] as const) {
+    for (const call of [spawn, fork]) {
+      test(`module stop during ${what} ends the ${call.name}'s wait without another attempt`, async () => {
+        let attempts = 0;
+        const h = await harness({ maxRetries: 1 }, async () => { attempts++; throw new Error(failure); });
+        const sub = internal(h.subagent);
+        sub.rateLimitCooldownMs = 5000;
+        const waits = watchWaits(h.subagent);
+        try {
+          await h.subagent.handleToolCall(call('scout'));
+          const done = outcome(h, 'scout');
+          await until(() => waits.length === 1);
+          expect(waits).toEqual([{ ms: 5000 }]);
+          await h.subagent.stop();
+          await h.subagent.stop(); // stopping an already stopped module is harmless
+          expect(sub.cancellationHandles.size).toBe(0);
+          await until(() => waits[0].endedBy !== undefined);
+          expect(await done).toEqual({ ok: true, text: `${SESSION_STOPPED} (no output yet)` });
+          expect(waits).toEqual([{ ms: 5000, endedBy: 'cancel' }]);
+          expect(attempts).toBe(1);
+          expect(h.runs()).toBe(1);
+          expect(h.subagent.getConcurrencyStatus()).toMatchObject({ active: 0, queued: 0 });
+          expect(sub.liveSubagents.size).toBe(0);
+        } finally {
+          h.subagent.cancelAll(); // also release a wait when testing the unfixed module
+          await h.cleanup();
+        }
+      }, 20_000);
+    }
+  }
+
+  for (const call of [spawn, fork]) {
+    test(`module stop preserves a live ${call.name}'s partial output`, async () => {
+      const h = await harness({ maxRetries: 1 }, () => new Promise(() => { /* stopped by the module */ }));
+      try {
+        const sub = internal(h.subagent);
+        await h.subagent.handleToolCall(call('scout'));
+        const done = outcome(h, 'scout');
+        await until(() => h.running('scout'));
+        const live = sub.liveSubagents.get('scout')! as { frameworkAgentName: string; currentStream: string };
+        live.currentStream = 'work so far';
+        const stop = spyOn(sub, 'stopRun');
+        try {
+          await h.subagent.stop();
+          await h.subagent.stop();
+          expect(sub.cancellationHandles.size).toBe(0);
+          expect(await done).toEqual({ ok: true, text: `${SESSION_STOPPED} work so far` });
+          expect(stop).toHaveBeenCalledTimes(1);
+          expect(h.subagent.getConcurrencyStatus()).toMatchObject({ active: 0, queued: 0 });
+          expect(sub.liveSubagents.size).toBe(0);
+        } finally { stop.mockRestore(); }
+      } finally { h.subagent.cancelAll(); await h.cleanup(); }
+    }, 20_000);
+  }
+
+  for (const call of [spawn, fork]) {
+    test(`the framework's stop ends a ${call.name} in its retry back-off, as a session switch does`, async () => {
+      let attempts = 0;
+      const h = await harness({ maxRetries: 1 }, async () => { attempts++; throw new Error('503 overloaded'); });
+      const waits = watchWaits(h.subagent);
+      try {
+        await h.subagent.handleToolCall(call('scout'));
+        const done = outcome(h, 'scout');
+        await until(() => waits.length === 1);
+        // As stopForSessionSwitch and the host's exit stop it: the framework
+        // ends its agents and ephemeral runs, then stops its modules.
+        await h.framework.stop();
+        expect(await done).toEqual({ ok: true, text: `${SESSION_STOPPED} (no output yet)` });
+        expect(waits).toEqual([{ ms: 5000, endedBy: 'cancel' }]);
+        expect(attempts).toBe(1);
+        expect(internal(h.subagent).cancellationHandles.size).toBe(0);
+      } finally { await h.cleanup(); }
+    }, 20_000);
+  }
+
+  test("a run the framework's stop ended reads as interrupted when its session is opened again", async () => {
+    const h = await harness({ maxRetries: 1 }, async () => { throw new Error('503 overloaded'); });
+    const waits = watchWaits(h.subagent);
+    let again: AgentFramework | undefined;
+    try {
+      await h.subagent.handleToolCall(spawn('scout'));
+      await until(() => waits.length === 1);
+      await h.framework.stop();
+      // The session opened again, as a switch back to it opens it.
+      const next = new SubagentModule({ parentAgentName: 'parent', defaultModel: 'mock', defaultMaxTokens: 256 });
+      again = await AgentFramework.create({
+        storePath: h.storePath,
+        membrane: new Membrane(new MockAdapter({ defaultResponse: 'ok' }), { formatter: new NativeFormatter() }),
+        agents: [{ name: 'parent', model: 'mock', systemPrompt: 'parent', maxTokens: 256 }],
+        modules: [next as unknown as Module],
+      });
+      next.setFramework(again);
+      again.start();
+      await until(() => internal(next).activeSubagents.has('spawn-scout'));
+      const restored = internal(next).activeSubagents.get('spawn-scout') as { status: string; statusMessage?: string };
+      expect(restored.status).toBe('cancelled');
+      expect(restored.statusMessage).toBe('interrupted (branch/session switch)');
+    } finally {
+      await again?.stop().catch(() => { /* noop */ });
+      await h.cleanup();
+    }
+  }, 20_000);
+
+  test("module stop ends a run's queued child for the module's stop too, not as a user's cancel", async () => {
+    const h = await harness({ maxConcurrent: 1, maxRetries: 0 }, () => new Promise(() => { /* stopped by the module */ }));
+    try {
+      await h.subagent.handleToolCall(spawn('lead'));
+      await until(() => h.running('lead'));
+      const lead = internal(h.subagent).liveSubagents.get('lead')!.frameworkAgentName;
+      await h.subagent.handleToolCall({ ...spawn('child'), callerAgentName: lead });
+      await until(() => h.subagent.getConcurrencyStatus().queued === 1);
+      const child = outcome(h, 'child');
+      const leadDone = outcome(h, 'lead');
+      await h.subagent.stop();
+      expect((await child).text).toBe(`${SESSION_STOPPED} (no output: it was still waiting for a concurrency slot, and never started)`);
+      expect((await leadDone).text).toBe(`${SESSION_STOPPED} (no output yet)`);
+      expect(h.runs()).toBe(1); // the child never started
+      expect(h.subagent.getConcurrencyStatus()).toMatchObject({ active: 0, queued: 0 });
+    } finally { h.subagent.cancelAll(); await h.cleanup(); }
+  }, 20_000);
 });
 
 describe('a cancel reaches the whole run', () => {

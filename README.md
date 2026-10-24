@@ -95,8 +95,9 @@ refuses one without naming it.
 Chronicle and MCPL protocol timestamps remain epoch/UTC. If the recipe omits
 it, `AGENT_TIMEZONE` is used, then the process timezone.
 
-`agent.clock` (off when omitted) gives the agent clock rows in that zone:
-with `{ "intervalMinutes": 10 }`, once a ten-minute boundary of its local
+`agent.clock` gives the agent clock rows in that zone, every ten minutes
+when the recipe omits it; `false` turns them off. With
+`{ "intervalMinutes": 10 }`, the default, once a ten-minute boundary of its local
 wall clock (counted from local midnight) has passed, the window takes one
 `Clock: 10:50 Europe/Berlin (UTC+02:00)` row at the next of these: before
 an incoming event such as a message, at the start of a turn (a silent
@@ -176,6 +177,26 @@ process lifetime.
 See Agent Framework's `docs/disabled-prose-routing.md`,
 `docs/explicit-prose-routing.md`, and `docs/hybrid-prose-routing.md` for the
 full semantics of each mode.
+
+`agent.autoContinue` (off when omitted) keeps an agent going until it says
+it's done: a turn the model ends itself, with prose or with nothing, is
+followed by another turn straight away instead of a pause until the next
+event. The run stops when the agent calls `skip_reply` (or another tool that
+ends the turn), ends on a `>>skip_reply` / `>>>skip_reply` envelope, or has
+continued `maxConsecutive` times in a row (default 3, 1 to 20). Each next turn
+reads a short `[continue]` row naming `skip_reply` as the way to stop, with
+the count once the cap is near, and speaks in the same locus. Every
+continuation is a full inference, and in `locus` mode its prose is published,
+so keep the cap low. Ephemeral subagents don't inherit it: their streams run
+with it off, and a fork's or spawn's orientation lists `auto-continue` beside
+the parent's. It takes effect only with the agent-framework release that adds
+`AgentConfig.autoContinue` (agent-framework#744); with an earlier one, as this
+host's dependency is until it moves, the key validates but turns don't
+continue. See Agent Framework's `docs/auto-continue.md`.
+
+```json
+{ "agent": { "autoContinue": { "maxConsecutive": 3 } } }
+```
 
 ### Recipe loading
 
@@ -728,6 +749,7 @@ endpoints are covered in [`docs/webui-deployment.md`](docs/webui-deployment.md).
 - Live surgery: roll back to a message, suppress messages, quiesce/resume the host; every action is recorded in an operator log ([`docs/webui-live-surgery.md`](docs/webui-live-surgery.md))
 - Header branch chip opens the Chronicle branch lineage tree (checkout from the UI)
 - Ops alerts (compression quarantine, refusal streaks, inference-exhausted) render as persistent banner rows
+- The host update: a banner says when a newer release is out and what it costs, Update and Restart are buttons in the banner and in Health, and Go back is one in Health ("Updating an install" in [`docs/DEPLOYMENTS.md`](docs/DEPLOYMENTS.md))
 - Usage panel: per-agent costs and a billing-grade call ledger with cache verdicts; quota windows on subscriptions
 - `/healthz` (health JSON for doctor/fleet tooling), `/quota`, `/curve` (compression-curve visualization), `/debug/context/*` ([`docs/debug-context-api.md`](docs/debug-context-api.md)), `/debug/tool-classes` — authenticated like the rest of the surface, and answerable by a fleet child with `?scope=<child>`
 - `/debug/retrieval/view` — operator-only per-run lesson selection viewer (see `docs/retrieval-traces.md`)
@@ -773,6 +795,7 @@ headless socket.
 | `/auth [status\|refresh\|login\|recheck\|token <tok>]` | Subscription credential state and operator actions (see docs/subscription-transport.md) |
 | `/session [list\|new\|switch\|rename\|delete]` | Session management; `delete` requires `--confirm` |
 | `/fleet [list\|status\|view\|peek\|stop\|restart]` | Fleet children (see [`docs/fleet-protocol.md`](docs/fleet-protocol.md)) |
+| `/update [install\|restart [wait\|now\|resume\|<version>]\|back [(keep\|restore) [<version>]]]` | Whether a newer release is out and what it costs; on an install set up to update itself, install it, restart onto it, or go back. A version, as the Web UI sends it, makes Restart or Go back refuse unless that's still the release it would act on ("Updating an install" in [`docs/DEPLOYMENTS.md`](docs/DEPLOYMENTS.md)) |
 
 Commands that move the head (`/undo`, `/redo`, `/checkout`, `/restore`,
 `/branchto`, `/newtopic`) are refused while a turn is in flight.
