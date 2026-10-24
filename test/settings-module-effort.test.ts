@@ -106,6 +106,18 @@ describe('SettingsModule reasoning_effort', () => {
     ext.update('a', { reasoning_effort: 'max' });
     expect(ext.reset('a').reasoning_effort).toBe('medium');
   });
+
+  test('a reset by key restores only that field, and reset-all restores each one', async () => {
+    const saved = { reasoning: { enabled: true, budgetTokens: 2048, display: 'omitted', effort: 'high', effortExplicit: true } };
+    const { ext, persisted } = await started(saved, 'medium');
+    const set = { reasoning_enabled: true, reasoning_budget_tokens: 2048, reasoning_display: 'omitted', reasoning_effort: 'high' };
+    expect(ext.reset('a', ['reasoning_budget_tokens'])).toEqual({ ...set, reasoning_budget_tokens: 8192 });
+    expect(ext.reset('a', ['reasoning_display'])).toEqual({ ...set, reasoning_budget_tokens: 8192, reasoning_display: 'summarized' });
+    expect(ext.reset('a', ['reasoning_enabled'])).toEqual({ ...set, reasoning_enabled: false, reasoning_budget_tokens: 8192, reasoning_display: 'summarized' });
+    ext.update('a', { reasoning_enabled: true, reasoning_budget_tokens: 2048, reasoning_display: 'omitted' });
+    expect(ext.reset('a')).toEqual({ reasoning_enabled: false, reasoning_budget_tokens: 8192, reasoning_display: 'summarized', reasoning_effort: 'medium' });
+    expect(persisted()).toEqual({ reasoning: { enabled: false, budgetTokens: 8192, display: 'summarized' } });
+  });
 });
 
 describe('reasoning follows branch state without restarting the module', () => {
@@ -220,7 +232,7 @@ describe('reasoning follows branch state without restarting the module', () => {
       const sourceState = store.getStateJson(stateId);
       store.switchBranch('earlier');
       expect(store.getStateJson(stateId)).toBeNull();
-      // Write first, with no accessor or extension read to refresh the module.
+      // Write first, with no read of the settings before it.
       expect(ext.update('a', { reasoning_display: 'omitted' }).reasoning_effort).toBe('medium');
       expect(store.getStateJson(stateId)).toEqual({ reasoning: { enabled: false, budgetTokens: 8192, display: 'omitted' } });
       store.switchBranch(originalBranch);

@@ -1,7 +1,8 @@
 /**
  * SettingsModule — runtime-tunable host settings the agent can toggle for
  * itself. State persists to chronicle via ModuleContext (`setState`/`getState`)
- * so changes survive restarts.
+ * so changes survive restarts, and it's read there at each use, so it follows
+ * the store's branches through undo, redo and checkout.
  *
  * First domain: **reasoning** (Anthropic extended thinking), surfaced to the
  * agent as `agent_settings` fields (reasoning_enabled /
@@ -74,25 +75,22 @@ export class SettingsModule implements Module {
   readonly name = 'settings';
 
   private ctx: ModuleContext | null = null;
-  private state: SettingsState = clone(DEFAULTS);
-  private effortOverride: ReasoningEffort | undefined;
 
-  constructor(private readonly initialEffort: ReasoningEffort = 'default') {
-    this.state.reasoning.effort = initialEffort;
-  }
+  constructor(private readonly initialEffort: ReasoningEffort = 'default') {}
 
   async start(ctx: ModuleContext): Promise<void> {
     this.ctx = ctx;
-    this.refreshState();
   }
 
-  /** Branch selection changes the context's store without restarting modules. */
-  private refreshState(): void {
-    if (!this.ctx) return;
-    const saved = this.ctx.getState<{ reasoning?: unknown }>();
+  /**
+   * The current branch's reasoning settings, and the effort the agent chose
+   * there, read from module state at each call: undo, redo and checkout move
+   * to another branch without restarting modules.
+   */
+  private current(): { reasoning: ReasoningSettings; effortOverride: ReasoningEffort | undefined } {
+    const saved = this.ctx?.getState<{ reasoning?: unknown }>()?.reasoning;
     const baseline = { ...DEFAULTS.reasoning, effort: this.initialEffort };
-    this.state = { reasoning: restoreReasoning(saved?.reasoning, baseline) };
-    this.effortOverride = savedEffortOverride(saved?.reasoning);
+    return { reasoning: restoreReasoning(saved, baseline), effortOverride: savedEffortOverride(saved) };
   }
 
   async stop(): Promise<void> {
@@ -101,8 +99,7 @@ export class SettingsModule implements Module {
 
   /** Read accessor for external consumers (e.g., the LLM adapter wrapper). */
   getReasoning(): ReasoningSettings {
-    this.refreshState();
-    return { ...this.state.reasoning };
+    return this.current().reasoning;
   }
 
   /** No standalone tools — reasoning controls live inside the framework's
@@ -170,12 +167,12 @@ export class SettingsModule implements Module {
         },
       },
       keys: ['reasoning_enabled', 'reasoning_budget_tokens', 'reasoning_display', 'reasoning_effort'],
-      get: () => this.reasoningSettingsView(),
+      get: () => reasoningSettingsView(this.current().reasoning),
       update: (_agentName, patch) => {
-        this.refreshState();
+        const { reasoning, effortOverride } = this.current();
         // Every field is checked before any applies, and every problem is
         // named, so one refusal shows all there is to fix.
-        const next = { ...this.state.reasoning };
+        const next = { ...reasoning };
         const problems: string[] = [];
         if (patch.reasoning_enabled !== undefined) {
           if (typeof patch.reasoning_enabled !== 'boolean') {
@@ -215,59 +212,52 @@ export class SettingsModule implements Module {
         if (problems.length > 0) {
           throw new Error(`The reasoning settings weren't changed: ${problems.join('; ')}.`);
         }
-        this.state.reasoning = next;
-        if (patch.reasoning_effort !== undefined) this.effortOverride = next.effort;
-        this.persist();
-        return this.reasoningSettingsView();
+        this.persist(next, patch.reasoning_effort !== undefined ? next.effort : effortOverride);
+        return reasoningSettingsView(next);
       },
       reset: (_agentName, keys) => {
-        this.refreshState();
+        const { reasoning, effortOverride } = this.current();
+        const next = { ...reasoning };
+        let override = effortOverride;
         const all = !keys || keys.length === 0;
-        if (all || keys?.includes('reasoning_enabled')) {
-          this.state.reasoning.enabled = DEFAULTS.reasoning.enabled;
-        }
-        if (all || keys?.includes('reasoning_budget_tokens')) {
-          this.state.reasoning.budgetTokens = DEFAULTS.reasoning.budgetTokens;
-        }
-        if (all || keys?.includes('reasoning_display')) {
-          this.state.reasoning.display = DEFAULTS.reasoning.display;
-        }
+        if (all || keys?.includes('reasoning_enabled')) next.enabled = DEFAULTS.reasoning.enabled;
+        if (all || keys?.includes('reasoning_budget_tokens')) next.budgetTokens = DEFAULTS.reasoning.budgetTokens;
+        if (all || keys?.includes('reasoning_display')) next.display = DEFAULTS.reasoning.display;
         if (all || keys?.includes('reasoning_effort')) {
-          this.state.reasoning.effort = this.initialEffort;
-          this.effortOverride = undefined;
+          next.effort = this.initialEffort;
+          override = undefined;
         }
-        this.persist();
-        return this.reasoningSettingsView();
+        this.persist(next, override);
+        return reasoningSettingsView(next);
       },
     };
   }
 
   /** Persist agent choices, leaving recipe-derived effort out of saved state. */
-  private persist(): void {
-    const { effort: _effort, ...reasoning } = this.state.reasoning;
+  private persist(settings: ReasoningSettings, effortOverride: ReasoningEffort | undefined): void {
+    const { effort: _effort, ...reasoning } = settings;
     this.ctx?.setState({
       reasoning: {
         ...reasoning,
-        ...(this.effortOverride === undefined ? {} : { effort: this.effortOverride, effortExplicit: true }),
+        ...(effortOverride === undefined ? {} : { effort: effortOverride, effortExplicit: true }),
       },
     });
-  }
-
-  /** The extension's wire view of reasoning state (flat agent_settings keys). */
-  private reasoningSettingsView(): Record<string, unknown> {
-    this.refreshState();
-    return {
-      reasoning_enabled: this.state.reasoning.enabled,
-      reasoning_budget_tokens: this.state.reasoning.budgetTokens,
-      reasoning_display: this.state.reasoning.display,
-      reasoning_effort: this.state.reasoning.effort,
-    };
   }
 
   async onProcess(_event: ProcessEvent, _state: ProcessState): Promise<EventResponse> {
     return {};
   }
 
+}
+
+/** The extension's wire view of reasoning settings (flat agent_settings keys). */
+function reasoningSettingsView(r: ReasoningSettings): Record<string, unknown> {
+  return {
+    reasoning_enabled: r.enabled,
+    reasoning_budget_tokens: r.budgetTokens,
+    reasoning_display: r.display,
+    reasoning_effort: r.effort,
+  };
 }
 
 /**
