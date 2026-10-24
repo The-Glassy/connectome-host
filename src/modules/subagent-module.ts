@@ -1524,8 +1524,10 @@ export class SubagentModule implements Module {
     // a rate-limit cooldown, so none tries again once its wait ends. A live
     // attempt was rejected before this, by framework.stop(), which rejects
     // every ephemeral run before it stops modules, and its run ended on that
-    // while ctx was still set. The runs this ends settle in a later
-    // microtask, once ctx is null, so a background run's result isn't
+    // while ctx was still set. A run queued behind it is admitted as that
+    // run fails, and its own attempt meets the framework's refusal before
+    // this runs, so it ends as a failure too. The runs this ends settle in a
+    // later microtask, once ctx is null, so a background run's result isn't
     // delivered (deliverAsyncResult) and its end isn't persisted
     // (persistState): restoreFromStore reads one that had started as
     // interrupted, as before stop() ended it, and one still queued for a
