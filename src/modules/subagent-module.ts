@@ -1519,6 +1519,9 @@ export class SubagentModule implements Module {
       clearInterval(this.reaperTimer);
       this.reaperTimer = null;
     }
+    // End every run before dropping its context, including runs waiting
+    // for a slot, retry back-off or rate-limit cooldown.
+    for (const name of [...this.cancellationHandles.keys()]) this.stopTree(name, 'killed');
     this.ctx = null;
   }
 
@@ -2271,9 +2274,9 @@ export class SubagentModule implements Module {
 
   /** Stop the run named, its children first (bottom-up, so their results
    *  propagate before the parent's), and return how many runs this stopped. */
-  private stopTree(displayName: string): number {
+  private stopTree(displayName: string, reason: 'cancelled' | 'killed' = 'cancelled'): number {
     let stopped = 0;
-    for (const child of this.childrenOf(displayName)) stopped += this.stopTree(child);
+    for (const child of this.childrenOf(displayName)) stopped += this.stopTree(child, reason);
 
     const handle = this.cancellationHandles.get(displayName);
     if (!handle) return stopped;
@@ -2289,7 +2292,8 @@ export class SubagentModule implements Module {
     }
 
     // End the run wherever it waits: the slot queue, an attempt or a back-off
-    handle.reject(new SubagentTerminated('cancelled', partial, `Subagent "${displayName}" cancelled by user`));
+    const cause = reason === 'cancelled' ? 'cancelled by user' : 'stopped by host shutdown';
+    handle.reject(new SubagentTerminated(reason, partial, `Subagent "${displayName}" ${cause}`));
     this.cancellationHandles.delete(displayName);
     return stopped + 1;
   }

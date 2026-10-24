@@ -1,0 +1,1 @@
+- Stopping the subagent module cancels active runs and queued spawns, including retry back-off and rate-limit cooldown waits, so they cannot start another attempt after shutdown.

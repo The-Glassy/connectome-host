@@ -740,6 +740,82 @@ describe('concurrency slots', () => {
   });
 });
 
+describe('module stop reaches the whole run', () => {
+  test('module stop removes a queued spawn before releasing the active slot', async () => {
+    const h = await harness({ maxConcurrent: 1, maxRetries: 0 }, () => new Promise(() => { /* stopped by the module */ }));
+    try {
+      const sub = internal(h.subagent);
+      await h.subagent.handleToolCall(spawn('long'));
+      await until(() => h.running('long'));
+      const active = outcome(h, 'long');
+      await h.subagent.handleToolCall(spawn('waiting'));
+      const waiting = outcome(h, 'waiting');
+      await until(() => h.subagent.getConcurrencyStatus().queued === 1);
+      await h.subagent.stop();
+      expect(sub.cancellationHandles.size).toBe(0);
+      expect((await waiting).text).toBe('[Stopped] (no output: it was still waiting for a concurrency slot, and never started)');
+      expect((await active).text).toBe('[Stopped] (no output yet)');
+      expect(h.subagent.getConcurrencyStatus()).toMatchObject({ active: 0, queued: 0 });
+      expect(h.runs()).toBe(1);
+    } finally { h.subagent.cancelAll(); await h.cleanup(); }
+  }, 20_000);
+
+  for (const [what, failure] of [['retry back-off', '503 overloaded'], ['rate-limit cooldown', '429 Too Many Requests']] as const) {
+    for (const call of [spawn, fork]) {
+      test(`module stop during ${what} ends the ${call.name}'s wait without another attempt`, async () => {
+        let attempts = 0;
+        const h = await harness({ maxRetries: 1 }, async () => { attempts++; throw new Error(failure); });
+        const sub = internal(h.subagent);
+        sub.rateLimitCooldownMs = 5000;
+        const waits = watchWaits(h.subagent);
+        try {
+          await h.subagent.handleToolCall(call('scout'));
+          const done = outcome(h, 'scout');
+          await until(() => waits.length === 1);
+          expect(waits).toEqual([{ ms: 5000 }]);
+          await h.subagent.stop();
+          await h.subagent.stop(); // stopping an already stopped module is harmless
+          expect(sub.cancellationHandles.size).toBe(0);
+          await until(() => waits[0].endedBy !== undefined);
+          expect(await done).toEqual({ ok: true, text: '[Stopped] (no output yet)' });
+          expect(waits).toEqual([{ ms: 5000, endedBy: 'cancel' }]);
+          expect(attempts).toBe(1);
+          expect(h.runs()).toBe(1);
+          expect(h.subagent.getConcurrencyStatus()).toMatchObject({ active: 0, queued: 0 });
+          expect(sub.liveSubagents.size).toBe(0);
+        } finally {
+          h.subagent.cancelAll(); // also release a wait when testing the unfixed module
+          await h.cleanup();
+        }
+      }, 20_000);
+    }
+  }
+
+  for (const call of [spawn, fork]) {
+    test(`module stop preserves a live ${call.name}'s partial output`, async () => {
+      const h = await harness({ maxRetries: 1 }, () => new Promise(() => { /* stopped by the module */ }));
+      try {
+        const sub = internal(h.subagent);
+        await h.subagent.handleToolCall(call('scout'));
+        const done = outcome(h, 'scout');
+        await until(() => h.running('scout'));
+        const live = sub.liveSubagents.get('scout')! as { frameworkAgentName: string; currentStream: string };
+        live.currentStream = 'work so far';
+        const stop = spyOn(sub, 'stopRun');
+        try {
+          await h.subagent.stop();
+          await h.subagent.stop();
+          expect(sub.cancellationHandles.size).toBe(0);
+          expect(await done).toEqual({ ok: true, text: '[Stopped] work so far' });
+          expect(stop).toHaveBeenCalledTimes(1);
+          expect(h.subagent.getConcurrencyStatus()).toMatchObject({ active: 0, queued: 0 });
+          expect(sub.liveSubagents.size).toBe(0);
+        } finally { stop.mockRestore(); }
+      } finally { h.subagent.cancelAll(); await h.cleanup(); }
+    }, 20_000);
+  }
+});
+
 describe('a cancel reaches the whole run', () => {
   test('a spawn waiting for a slot leaves the queue when it\'s cancelled, and never starts', async () => {
     const h = await harness({ maxConcurrent: 1, maxRetries: 0 }, (agent) => (agent.name.startsWith('spawn-long-')
