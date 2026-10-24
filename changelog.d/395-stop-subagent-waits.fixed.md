@@ -1,1 +1,1 @@
-- Stopping the subagent module cancels active runs and queued spawns, including retry back-off and rate-limit cooldown waits, so they cannot start another attempt after shutdown.
+- A session switch or the host's exit now ends subagent spawns and forks still waiting for a concurrency slot, a retry back-off or a rate-limit cooldown, so none starts another attempt after its session has stopped. Such a run's result opens "Stopped: its session stopped".
