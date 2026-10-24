@@ -87,12 +87,21 @@ function fleet(timeZone = 'UTC', stored: StoredRow[] = [], opts: { primary?: tru
   };
   const handles = (mod as unknown as { asyncHandles: Map<string, unknown> }).asyncHandles;
   const hud = (on: boolean) => { hudEnabled = on; };
-  /** A run under way, as the module's own record of it: its framework name. */
+  const internals = mod as unknown as { liveSubagents: Map<string, unknown>; runOfAttempt: Map<string, string> };
+  /** An attempt of a run under way, as the module records it: indexed to
+   *  its run (runOfAttempt) as it starts, then live under the run's name. */
   const live = (name: string, frameworkAgentName: string) => {
-    (mod as unknown as { liveSubagents: Map<string, unknown> }).liveSubagents.set(name, { frameworkAgentName, activeCallIds: new Set() });
+    internals.runOfAttempt.set(frameworkAgentName, name);
+    internals.liveSubagents.set(name, { frameworkAgentName, activeCallIds: new Set() });
   };
-  const unlive = (name: string) => { (mod as unknown as { liveSubagents: Map<string, unknown> }).liveSubagents.delete(name); };
-  return { mod, add, status, preview: textOf, stored, handles, hud, registered, live, unlive };
+  /** An attempt that has ended while its run goes on, as between retries. */
+  const unlive = (name: string) => { internals.liveSubagents.delete(name); };
+  /** A run that has ended: its attempts leave the index (forgetAttempts). */
+  const ended = (name: string) => {
+    unlive(name);
+    for (const [attempt, run] of internals.runOfAttempt) if (run === name) internals.runOfAttempt.delete(attempt);
+  };
+  return { mod, add, status, preview: textOf, stored, handles, hud, registered, live, unlive, ended };
 }
 
 afterEach(() => { setSystemTime(); });
@@ -225,7 +234,7 @@ describe('the fleet status', () => {
     // lead ends before kid: its record and its registration go.
     lead.status = 'completed';
     lead.completedAt = T0 + 10_000;
-    f.unlive('lead');
+    f.ended('lead');
     f.registered.delete('lead-d1-1');
     expect(await f.status()).toBe('[Fleet Status, as of 14:05:19 UTC]\n  kid [spawn] running since 14:05:09 parent:lead "task for kid"');
     // Another resident's status doesn't take it: its result goes to the primary.
@@ -239,19 +248,18 @@ describe('the fleet status', () => {
     const f = fleet();
     f.add('lead');
     f.live('lead', 'spawn-lead-1761271234567');
-    (f.mod as unknown as { runOfAttempt: Map<string, string> }).runOfAttempt.set('spawn-lead-1761271234567', 'lead');
     f.add('kid');
     f.mod.parentMap.set('kid', 'spawn-lead-1761271234567');
     expect(await f.status()).toContain('  kid [spawn] running since 14:05:09 parent:lead "task for kid"');
   });
 
-  test('the primary\'s status takes no run whose launcher is listed, or still running here', async () => {
+  test('the primary\'s status takes no run whose launcher is listed, or whose launcher\'s run goes on', async () => {
     const f = fleet('UTC', [], { primary: true });
     // A run another resident launched, which agent-framework lists.
     f.add('theirs');
     f.mod.parentMap.set('theirs', 'other');
-    // A run whose launcher agent-framework no longer lists but which hasn't
-    // ended here yet: its tree is still its ancestor's.
+    // A run whose launcher agent-framework no longer lists but whose run
+    // hasn't ended here yet: its tree is still its ancestor's.
     f.add('lead');
     f.mod.parentMap.set('lead', 'other');
     f.live('lead', 'lead-d1-1');
@@ -266,8 +274,7 @@ describe('the fleet status', () => {
     const attempts = (f.mod as unknown as { runOfAttempt: Map<string, string> }).runOfAttempt;
     f.add('lead');
     f.mod.parentMap.set('lead', 'other');
-    attempts.set('lead-d1-1', 'lead');
-    attempts.set('lead-d1-retry1-2', 'lead');
+    attempts.set('lead-d1-1', 'lead'); // the first attempt, ended
     f.live('lead', 'lead-d1-retry1-2');
     f.registered.add('lead-d1-retry1-2');
     f.add('kid');
@@ -286,7 +293,6 @@ describe('the fleet status', () => {
     f.add('kid');
     f.mod.parentMap.set('kid', 'gone-d1-1'); // its launcher's run has ended
     f.live('kid', 'kid-d2-5');
-    (f.mod as unknown as { runOfAttempt: Map<string, string> }).runOfAttempt.set('kid-d2-5', 'kid');
     f.add('grandkid');
     f.mod.parentMap.set('grandkid', 'kid-d2-5');
     const text = (await f.status())!;
