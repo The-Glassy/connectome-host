@@ -286,6 +286,11 @@ its fallback need: systemd's `Restart=on-failure` does.
 
 **Updating.** Update, Restart with its three ways on when turns don't end,
 and Go back are each an `/update` command and, in the Web UI, a button.
+Restart's and Go back's buttons send the release their dialog showed
+(`/update restart 0.14.0`, `/update back keep 0.13.1`), and the host
+refuses, asking nothing, when the release it would act on has become
+another since: read what the dialog shows for it, then ask again. Typed
+without a release, each acts on the one the host holds.
 A banner under the header shows the update's most pressing state, such as
 a restart waiting on turns, a release installed or one that's out, with
 its buttons. Health's update block shows what `/update` shows, with a

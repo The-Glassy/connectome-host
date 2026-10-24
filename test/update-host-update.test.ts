@@ -408,8 +408,8 @@ describe('Restart', () => {
     expect(update.status().restart).toMatchObject({ phase: 'busy', hosts: [{ host: 'this host', drained: false, activeTurnAgents: ['alice'] }] });
     // Its own quiesce, which it carries out, isn't one left standing.
     expect(update.status().switchQuiesceLeft).toBe(false);
-    expect((await update.restartToInstalled()).lines).toEqual(['The restart to 0.13.0 is waiting on turns to end: wait longer, ' +
-      'stop now, or resume.']);
+    expect((await update.restartToInstalled()).lines).toEqual(['The restart to 0.13.0 is waiting on turns to end: /update ' +
+      'restart wait, /update restart now or /update restart resume.']);
     const waiting = update.waitLonger();
     // Quiescing again, it shows no busy list from before, and its wait hasn't run out.
     expect(update.status().restart).toMatchObject({ phase: 'quiescing', hosts: [] });
@@ -474,8 +474,8 @@ describe('Restart', () => {
     const { update } = hostUpdate({ root, dataDir, framework, running: '0.13.0' }, { supervised: true });
     expect((await update.goBack(true)).done).toBe(false);
     expect(update.status().restart).toMatchObject({ phase: 'busy', to: '0.12.1', why: 'go-back' });
-    expect((await update.restartToInstalled()).lines).toEqual(['The Go back to 0.12.1 is waiting on turns to end: wait ' +
-      'longer, stop now, or resume.']);
+    expect((await update.restartToInstalled()).lines).toEqual(['The Go back to 0.12.1 is waiting on turns to end: /update ' +
+      'restart wait, /update restart now or /update restart resume.']);
     expect(await update.resume()).toEqual({ done: true, lines: ['The Go back to 0.12.1 is called off, and nothing switches.'] });
     expect(readMark(root)).toBeNull();
   });

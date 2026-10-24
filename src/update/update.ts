@@ -40,7 +40,8 @@ import {
 import { candidateOf, rangeOf, readReleases, registryOf, type Release } from './releases.js';
 import { readTrialLog } from './trial-log.js';
 import {
-  GO_BACK_UNREAD, NOT_AN_INSTALL, PHASE, busyLines, deprecatedLine, noticeLines, restartName, type Check, type ReadCheck,
+  COMMAND_WAYS, GO_BACK_UNREAD, NOT_AN_INSTALL, PHASE, busyLines, deprecatedLine, noticeLines, restartName, type Check,
+  type ReadCheck,
   type RestartState,
   type SwitchOutcome, type UpdateStatus,
 } from '../web/update-text.js';
@@ -373,7 +374,8 @@ export class HostUpdate {
     if (this.installing !== null) return `An install of ${this.installing} is under way. Restart once it has ended.`;
     if (this.restart !== null) {
       return this.restart.phase === 'busy'
-        ? `${restartName(this.restart, true)} is waiting on turns to end: wait longer, stop now, or resume.`
+        ? `${restartName(this.restart, true)} is waiting on turns to end: ${COMMAND_WAYS.wait}, ${COMMAND_WAYS.now} or ` +
+          `${COMMAND_WAYS.resume}.`
         : `${restartName(this.restart, true)} is ${PHASE[this.restart.phase]}.`;
     }
     if (this.endingLeft) return ENDING_LEFT;

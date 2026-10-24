@@ -445,7 +445,7 @@ describe("a host's update, on a real start", () => {
     expect(readCurrent(root)).toBe('9.9.9');
   }, 60_000);
 
-  test("a Restart the Web UI sends brings the page the farewell, which the host sent before it exited 75", async () => {
+  test("a Restart the Web UI sends, naming its release, brings the page the farewell, which the host sent before it exited 75", async () => {
     const { dir, root, index } = install();
     moveCurrent(root, '9.9.9');
     const placed = join(root, 'releases', '9.9.10', 'node_modules', '@animalabs', 'connectome-host');
@@ -463,7 +463,14 @@ describe("a host's update, on a real start", () => {
     page.onmessage = (event) => { frames.push(JSON.parse(String(event.data))); };
     page.onclose = () => { closed = true; };
     await until(() => frames.some((frame) => frame.type === 'welcome'), 15_000, 'the Web UI welcomes the page');
-    page.send(JSON.stringify({ type: 'command', command: '/update restart' }));
+    // What the page's Restart sends: the release its dialog showed. One the
+    // host doesn't hold is refused, with the host still up.
+    page.send(JSON.stringify({ type: 'command', command: '/update restart 9.9.11' }));
+    const refusal = 'The release installed to restart onto is now 9.9.10, not 9.9.11, so nothing is restarting. Look at what ' +
+      '9.9.10 costs, then ask again.';
+    await until(() => frames.some((frame) => frame.lines?.some((line) => line.text === refusal)), 15_000, 'the refusal');
+    expect(closed).toBe(false);
+    page.send(JSON.stringify({ type: 'command', command: '/update restart 9.9.10' }));
     expect(await exit).toBe(75);
     // The page's socket closes with the host's process, which sends nothing
     // once it has exited, so every frame the page has once it sees the close
@@ -471,6 +478,8 @@ describe("a host's update, on a real start", () => {
     await until(() => closed, 5_000, 'the page sees its connection close');
     const answers = frames.filter((frame) => frame.type === 'command-result').flatMap((frame) => frame.lines!.map((l) => l.text));
     expect(answers).toEqual([
+      'Quiescing for the restart: turns in progress get up to 2 min to end…',
+      refusal,
       'Quiescing for the restart: turns in progress get up to 2 min to end…',
       "Stopping to switch to 9.9.10: the host's next start does it, which a service set up for updates makes by itself.",
     ]);
