@@ -40,7 +40,9 @@ import type { Line } from './output-line.js';
 import { fmtTokens } from './tui.js';
 import { formatToolClassRows, readToolClasses } from './tool-lifecycle-config.js';
 import { type FleetModule, formatChildRow } from './modules/fleet-module.js';
-import { goBackLines, hostUpdate, statusLines } from './update/update.js';
+import { EXACT_VERSION } from './update/install.js';
+import { hostUpdate } from './update/update.js';
+import { goBackLines, statusLines } from './web/update-text.js';
 
 /** Imported lazily to avoid circular deps — index.ts re-exports the type. */
 interface AppContext {
@@ -332,29 +334,34 @@ export function handleCommand(command: string, app: AppContext): CommandResult {
 
 /** /update: the state, and Update, Restart and Go back
  *  (src/update/update.ts). Each answer's lines come back as the command's
- *  follow-up. */
+ *  follow-up. Restart and Go back's two ways take the release they're for,
+ *  as the Web UI sends them, so the host refuses rather than act on another
+ *  one. */
 function handleUpdate(args: string[]): CommandResult {
   const say = (lines: string[]): CommandResult => ({ lines: lines.map((text) => ({ text, style: 'system' as const })) });
   const after = (first: string, work: Promise<{ lines: string[] }>): CommandResult =>
     ({ ...say([first]), asyncWork: work.then((answer) => say(answer.lines)) });
-  const [sub, choice, extra] = args;
-  const usage = say(['Usage: /update [install | restart [wait | now | resume] | back [keep | restore]]']);
+  const [sub, choice, release, extra] = args;
+  const usage = say(['Usage: /update [install | restart [wait | now | resume | <version>] | back [keep | restore [<version>]]]']);
   if (extra !== undefined) return usage;
+  const version = (word: string | undefined): word is string => word !== undefined && EXACT_VERSION.test(word);
   if (sub === undefined) {
     return after('Reading the registry…',
       hostUpdate.readRegistry().then(() => ({ lines: statusLines(hostUpdate.status()) })));
   }
   if (sub === 'install' && choice === undefined) return after('Reading the registry, then installing…', hostUpdate.install());
-  if (sub === 'restart') {
-    if (choice === undefined) return after('Quiescing for the restart: turns in progress get up to 2 min to end…', hostUpdate.restartToInstalled());
+  if (sub === 'restart' && release === undefined) {
+    const quiescing = 'Quiescing for the restart: turns in progress get up to 2 min to end…';
+    if (choice === undefined) return after(quiescing, hostUpdate.restartToInstalled());
     if (choice === 'wait') return after('Waiting up to 10 min more for turns to end…', hostUpdate.waitLonger());
     if (choice === 'now') return after('Stopping now…', hostUpdate.stopNow());
     if (choice === 'resume') return after('Calling the restart off…', hostUpdate.resume());
+    if (version(choice)) return after(quiescing, hostUpdate.restartToInstalled(choice));
   }
   if (sub === 'back') {
     if (choice === undefined) return say(goBackLines(hostUpdate.status()));
-    if (choice === 'keep' || choice === 'restore') {
-      return after('Quiescing to go back: turns in progress get up to 2 min to end…', hostUpdate.goBack(choice === 'keep'));
+    if ((choice === 'keep' || choice === 'restore') && (release === undefined || version(release))) {
+      return after('Quiescing to go back: turns in progress get up to 2 min to end…', hostUpdate.goBack(choice === 'keep', release));
     }
   }
   return usage;
