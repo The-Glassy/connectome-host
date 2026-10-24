@@ -53,6 +53,7 @@ function makeTree(): SubagentModule {
   const privateView = mod as unknown as {
     liveSubagents: Map<string, FakeLiveState>;
     frameworkNameIndex: Map<string, string>;
+    runOfAttempt: Map<string, string>;
   };
 
   const installOne = (displayName: string, frameworkAgentName: string, parent?: string): void => {
@@ -65,6 +66,9 @@ function makeTree(): SubagentModule {
       pendingToolCalls: [],
       activeCallIds: new Set(),
     };
+    // As the module records a run's attempt: indexed to its run as it
+    // starts (runOfAttempt), then live under the run's name.
+    privateView.runOfAttempt.set(frameworkAgentName, displayName);
     privateView.liveSubagents.set(displayName, live);
     privateView.frameworkNameIndex.set(frameworkAgentName, displayName);
     const entry: ActiveSubagent = {

@@ -342,14 +342,18 @@ describe('the fleet status', () => {
     expect(text).toContain('  grandkid [spawn] running since');
   });
 
-  test('a finished run named like a resident doesn\'t bring that resident\'s runs into its launcher\'s view', async () => {
-    const f = fleet();
-    f.add('resident', { status: 'completed', completedAt: T0 + 1_000 }); // a run, named as a resident is
-    f.mod.parentMap.set('resident', 'other');
-    f.add('secret'); // the resident 'resident' launched it
-    expect((await f.status('other')) ?? '').not.toContain('secret');
-    expect(await f.status()).toContain('  secret [spawn] running since');
-  });
+  for (const going of [false, true]) {
+    test(`a ${going ? 'running' : 'finished'} run named like a resident doesn't bring that resident's runs into its launcher's view`, async () => {
+      const f = fleet();
+      // A run named as a resident is, which the resident 'other' launched.
+      f.add('resident', going ? {} : { status: 'completed', completedAt: T0 + 1_000 });
+      f.mod.parentMap.set('resident', 'other');
+      if (going) f.live('resident', 'spawn-resident-1761271234567');
+      f.add('secret'); // the resident 'resident' launched it
+      expect((await f.status('other')) ?? '').not.toContain('secret');
+      expect(await f.status()).toContain('  secret [spawn] running since');
+    });
+  }
 
   test('with the hud off, nothing is added, a stored status listing a run included', async () => {
     const f = fleet();
