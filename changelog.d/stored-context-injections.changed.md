@@ -37,7 +37,8 @@
     listed every subagent the session had started, with elapsed seconds
     and call counts. A finished one, which has reported in its launcher's
     conversation, leaves the list, and once none is running or waiting, an
-    agent whose newest stored status lists a run is told so, once. The
+    agent whose newest stored status lists a run is told so, until a status
+    saying so is stored. The
     `hud` tool's text says when the status is added again, and that
     turning it off stops new statuses and leaves one already in the
     context there. The `hud` setting now stays on across a subagent's
@@ -47,8 +48,9 @@
     subagent's own, through agent-framework's `addMessage` with
     `forAgent`, where it landed in the residents' slot for every launcher.
     Its line names a launcher that isn't the primary, as `[Subagent
-    'scout' returned, for 'fork-y']`. One whose launcher has ended lands
-    in the residents' slot, its line adding `, which has ended`. One whose
+    'scout' returned, for 'fork-y']`. One whose launcher has ended by the
+    time the result comes lands in the residents' slot, its line adding
+    `, which has ended`. One whose
     launcher's window is let go without reading it, a fork's or a
     subagent's run, or a conversation agent closed, agent-framework passes
     to the residents' slot, where its line names whom it was for. None of

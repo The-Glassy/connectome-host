@@ -1265,6 +1265,64 @@ describe('a name means one subagent until its result has come back', () => {
     }
   }, 20_000);
 
+  for (const call of [spawn, fork]) {
+    test(`an async result for a ${call.name} that has ended reaches the primary, not a later run under its name, which isn't woken`, async () => {
+      // A launcher is its run's own agent name, unique to the attempt
+      // (nameStamp), so a later run under the display name is another agent.
+      const isLead = (agentName: string) => agentName.startsWith(call === spawn ? 'spawn-lead-' : 'lead-d');
+      let leadRuns = 0;
+      let firstLead = '';
+      let releaseChild!: () => void;
+      const childMayEnd = new Promise<void>((resolve) => { releaseChild = resolve; });
+      let h!: Harness;
+      h = await harness({ maxConcurrent: 3, maxRetries: 0 }, async (agent) => {
+        if (isLead(agent.name)) {
+          if (++leadRuns === 1) {
+            firstLead = agent.name;
+            await h.subagent.handleToolCall({ ...spawn('child'), callerAgentName: agent.name });
+            return ran('done');
+          }
+          return new Promise(() => { /* the second run under the name runs until cancelled */ });
+        }
+        await childMayEnd;
+        return ran('child done');
+      });
+      const sub = internal(h.subagent);
+      const ctx = (h.subagent as unknown as { ctx: {
+        addMessage(participant: string, content: Array<{ type: string; text?: string }>, metadata?: unknown, opts?: { forAgent?: string }): unknown;
+        pushEvent(event: { type: string; agentName?: string; reason?: string }): unknown;
+      } }).ctx;
+      const add = ctx.addMessage.bind(ctx);
+      const push = ctx.pushEvent.bind(ctx);
+      const written: Array<{ text: string; forAgent?: string }> = [];
+      const woken: string[] = [];
+      ctx.addMessage = (participant, content, metadata, opts) => {
+        const text = content[0]?.text ?? '';
+        if (text.startsWith("[Subagent 'child'")) written.push({ text, ...(opts?.forAgent !== undefined ? { forAgent: opts.forAgent } : {}) });
+        return add(participant, content, metadata, opts);
+      };
+      ctx.pushEvent = (event) => {
+        if (event.type === 'inference-request' && event.agentName && event.reason?.endsWith(':child')) woken.push(event.agentName);
+        return push(event);
+      };
+      try {
+        await h.subagent.handleToolCall(call('lead'));
+        await until(() => h.running('child') && !sub.asyncHandles.has('lead')); // the first run's result has come back
+        expect((await h.subagent.handleToolCall(call('lead'))).success).toBe(true);
+        await until(() => leadRuns === 2 && h.running('lead'));
+        const secondLead = sub.liveSubagents.get('lead')!.frameworkAgentName;
+        expect(secondLead).not.toBe(firstLead);
+        releaseChild();
+        await until(() => written.length > 0);
+        expect(written).toEqual([{ text: `[Subagent 'child' returned, for '${firstLead}', which has ended]\n\nchild done` }]);
+        expect(woken).toEqual([]);
+      } finally {
+        h.subagent.cancelSubagent('lead');
+        await h.cleanup();
+      }
+    }, 20_000);
+  }
+
   test('an async result with no launcher named, by the call or the config, lands as before', async () => {
     const h = await harness({ parentAgentName: undefined, maxRetries: 0 }, async () => ran('done'));
     const delivered = deliveries(h);

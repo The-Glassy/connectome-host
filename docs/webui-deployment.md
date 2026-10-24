@@ -279,7 +279,7 @@ mode ran.
 curl -fsSL -u "$WEBUI_USER:$WEBUI_PASS" \
   'https://admin.example.internal/debug/context?pretty=1'
 
-# Full-fidelity preview (spends tokens, fires MCPL hooks):
+# Preview with the gathered injections (spends tokens, fires MCPL hooks):
 curl -fsSL -u "$WEBUI_USER:$WEBUI_PASS" \
   'https://admin.example.internal/debug/context?injections=1&pretty=1'
 ```

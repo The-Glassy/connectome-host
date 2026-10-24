@@ -97,8 +97,13 @@ context), because gathering those is *not* free or transparent:
   side effects, and a preview never sends the paired `afterInference`, which
   can leave a stateful server half-open;
 - the retrieval module keeps one result per turn for the agent's later
-  starts, and a preview's gather counts as a start, so a preview that
-  overlaps a live start's retrieval can leave its own result as the turn's.
+  starts, in this process, and a preview's gather counts as a start: a
+  preview that overlaps a live start's retrieval leaves its own result as the
+  turn's, or none when its own keeps nothing, as when its model call fails,
+  and then the turn's next start runs the calls again. Like any start, it
+  also counts as a use of the agent's entry among the 64 the module keeps,
+  so a preview that runs the calls can push out the least recently used
+  agent's kept result.
 
 To opt into a preview that includes those injections, pass
 `?injections=1` and accept the side effects. An `afterUser` injection that a
@@ -124,7 +129,7 @@ curl -fsSL -u "$WEBUI_USER:$WEBUI_PASS" \
   'https://admin.example.internal/debug/context?agent=researcher-3&pretty=1'
 ```
 
-Full-fidelity preview (spends tokens, fires MCPL hooks):
+Preview with the gathered injections (spends tokens, fires MCPL hooks):
 
 ```sh
 curl -fsSL -u "$WEBUI_USER:$WEBUI_PASS" \
@@ -226,9 +231,11 @@ config are identical to a real turn.
 With `?injections=1` it additionally mirrors the real activation's injection
 gathering (module `gatherContext` + MCPL `beforeInference`), so its injected
 context is the real activation's, except that an injection the start would
-store as a message isn't shaped or budgeted as the stored message would be.
-The one thing it never does — by design — is run the inference itself, so
-there is no model output in the response.
+store as a message isn't shaped or budgeted as the stored message would be,
+and that a preview of the subconscious leaves out the standing dispositions
+its start adds. It never runs the agent's own inference, by design, so there
+is no model output in the response, though a module's gather can make model
+calls of its own, as above.
 
 ## Sibling endpoints
 

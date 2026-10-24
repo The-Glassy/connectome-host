@@ -1475,8 +1475,10 @@ export class WebUiModule implements Module {
    *
    * Transparent by default: no inference of its own, no Chronicle writes, no
    * external MCPL calls. Pass `?injections=1` to gather the dynamic injections
-   * (lessons/retrieval/MCPL context) for full fidelity, which is NOT
-   * transparent: it can run inference and fire MCPL `beforeInference` hooks.
+   * (lessons/retrieval/MCPL context) too, which is NOT transparent: it can run
+   * inference and fire MCPL `beforeInference` hooks. An injection a start
+   * would store as a message isn't capped, sharded or budgeted in it as the
+   * stored message would be (docs/debug-context-api.md).
    */
   private async handleDebugContext(url: URL): Promise<Response> {
     const app = this.panelApp();

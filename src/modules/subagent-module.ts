@@ -1798,8 +1798,10 @@ export class SubagentModule implements Module {
     // leaves the list, which keeps each stored copy to the runs under way:
     // as many running as the concurrency limit, and the async runs waiting
     // for a slot. Once none is, an agent whose newest stored status lists a
-    // run is told, once, that none is running, so the newest copy in its
-    // context isn't one that lists runs since ended. A running subagent's
+    // run is told that none is running, until a status saying so is stored,
+    // so the newest copy in its context isn't one that lists runs since
+    // ended: once, or at each start while agent-framework holds its window
+    // and places the status rather than storing it. A running subagent's
     // progress is `peek`'s to show.
     const lines: string[] = [];
     let latestChange: number | undefined;
@@ -1820,10 +1822,12 @@ export class SubagentModule implements Module {
     // and the caller has no descendants to begin with).
     for (const [name] of this.asyncHandles) {
       if (!allowed.has(name)) continue;
-      // A run under way is listed above; an entry of a finished run under
-      // the same name, kept as history, doesn't hide a new one waiting.
-      const entry = this.activeSubagents.get(name) ?? this.activeSubagents.get(`spawn-${name}`);
-      if (entry?.status !== 'running') lines.push(`  ${name} [async] pending`);
+      // A run under way is listed above, whichever key its entry has (a
+      // fork's is its name, a spawn's `spawn-<name>`); entries of finished
+      // runs under the name, kept as history, don't hide one waiting. A name
+      // means one admitted run at a time (nameInUse), so a running entry
+      // under it is this handle's run.
+      if (!this.runningEntry(name)) lines.push(`  ${name} [async] pending`);
     }
 
     if (lines.length === 0) {
@@ -1847,20 +1851,23 @@ export class SubagentModule implements Module {
   }
 
   /** Whether the newest fleet status agent-framework stored in the agent's
-   *  own window lists a run: a line under its heading other than
-   *  "(none running)". A window that can't be read lists none. */
+   *  own window lists a run: a line other than its heading and
+   *  "(none running)". A status stored in shards is several rows, each
+   *  carrying the status's mark, in shard order, the heading in the first;
+   *  so the newest row is its last shard, whose lines are runs' whenever the
+   *  status lists one, and that row alone answers. A window that can't be
+   *  read throws, which agent-framework's registry logs, and the status adds
+   *  nothing at that start. */
   private newestStatusListsRun(agentName: string): boolean {
-    let rows: Array<{ content: ContentBlock[]; metadata?: unknown }>;
-    try {
-      rows = this.ctx!.queryMessages({ participant: FLEET_PARTICIPANT }, { forAgent: agentName }).messages;
-    } catch {
-      return false;
-    }
+    const rows = this.ctx!.queryMessages({ participant: FLEET_PARTICIPANT }, { forAgent: agentName }).messages;
     for (let i = rows.length - 1; i >= 0; i--) {
       const mark = storedInjectionMarkOf(rows[i]!.metadata);
       if (mark?.namespace !== FLEET_NAMESPACE || mark.agent !== agentName) continue;
       const text = rows[i]!.content.map((block) => (block.type === 'text' ? block.text : '')).join('');
-      return text.split('\n').slice(1).some((line) => line.trim() !== '' && line.trim() !== '(none running)');
+      return text.split('\n').some((line) => {
+        const shown = line.trim();
+        return shown !== '' && !shown.startsWith('[Fleet Status') && shown !== '(none running)';
+      });
     }
     return false;
   }
@@ -3061,7 +3068,7 @@ export class SubagentModule implements Module {
     this.asyncHandles.delete(name);
     if (!this.ctx) return;
 
-    this.addForLauncher(launcher, name, 'returned', result.summary);
+    if (!this.addForLauncher(launcher, name, 'returned', result.summary)) return;
     this.ctx.pushEvent({
       type: 'inference-request',
       agentName: launcher ?? UNNAMED_LAUNCHER,
@@ -3075,7 +3082,7 @@ export class SubagentModule implements Module {
     if (!this.ctx) return;
 
     const message = err instanceof Error ? err.message : String(err);
-    this.addForLauncher(launcher, name, 'failed', `Error: ${message}`);
+    if (!this.addForLauncher(launcher, name, 'failed', `Error: ${message}`)) return;
     this.ctx.pushEvent({
       type: 'inference-request',
       agentName: launcher ?? UNNAMED_LAUNCHER,
@@ -3091,15 +3098,18 @@ export class SubagentModule implements Module {
    *  right in whatever window it ends up in: agent-framework passes to the
    *  primary a write its launcher's window is released without reading. A
    *  result is work done, so one whose launcher agent-framework no longer
-   *  lists lands in the primary's window, the residents' slot, as every
-   *  async result did before, its line adding that the launcher has ended,
-   *  so no resident takes it for its own (Agnes-1009, room-203 #197191,
-   *  #197307). With no launcher named, it lands there as before. A write
-   *  that fails otherwise throws, as before. The wake names the launcher, so
-   *  a result that reaches the primary's window for a launcher that's gone
-   *  doesn't wake the primary: it's read at its next start, as on main
-   *  (Agnes-1009, #197466). */
-  private addForLauncher(launcher: string | undefined, name: string, outcome: 'returned' | 'failed', body: string): void {
+   *  lists when the result is written lands in the primary's window, the
+   *  residents' slot, as every async result did before, its line adding that
+   *  the launcher has ended, so no resident takes it for its own (Agnes-1009,
+   *  room-203 #197191, #197307); one agent-framework passes on later names
+   *  its launcher alone. A launcher is the launching agent's own name: a
+   *  fork's or a subagent's is unique to its attempt (nameStamp), so a later
+   *  run under the same display name is another agent. With no launcher
+   *  named, it lands there as before. A write that fails otherwise throws,
+   *  as before. Returns whether the launcher's wake should follow: not for a
+   *  launcher that has ended, whose result is read at the primary's next
+   *  start, as on main (Agnes-1009, #197466). */
+  private addForLauncher(launcher: string | undefined, name: string, outcome: 'returned' | 'failed', body: string): boolean {
     const ctx = this.ctx!;
     const listed = launcher === undefined || ctx.getAgents().some((agent) => agent.name === launcher);
     const forWhom = launcher === undefined || launcher === this.config.parentAgentName
@@ -3108,6 +3118,7 @@ export class SubagentModule implements Module {
     const content = [{ type: 'text' as const, text: `[Subagent '${name}' ${outcome}${forWhom}]\n\n${body}` }];
     if (launcher !== undefined && listed) ctx.addMessage('user', content, undefined, { forAgent: launcher });
     else ctx.addMessage('user', content);
+    return listed;
   }
 
   /** A spawn's or fork's failure as the agent reads it, in the call's answer

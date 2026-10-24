@@ -13,20 +13,32 @@ import { SubagentModule, type ActiveSubagent } from '../src/modules/subagent-mod
 
 const T0 = Date.UTC(2026, 9, 23, 14, 5, 9);
 
-type StoredRow = { participant: string; content: Array<{ type: 'text'; text: string }>; metadata: Record<string, unknown> };
+type StoredRow = { window: string; participant: string; content: Array<{ type: 'text'; text: string }>; metadata: Record<string, unknown> };
+
+const FLEET = 'system_context:subagent-fleet';
+const markFor = (agent: string, contentHash: string) => ({
+  system: true, kind: 'context-injection', contextInjection: { agent, namespace: 'subagent-fleet', contentHash, part: 0, parts: 1 },
+});
 
 /** A module whose context stores each status as agent-framework does: in
- *  the residents' shared slot, marked with the agent it's for, again only
- *  when its text differs from that agent's newest stored one. `preview`
- *  gathers and stores nothing, as previewActivation's gather does. A second
- *  module on the same `stored` rows stands for the host after a restart. */
+ *  the agent's own window (the residents' shared slot for a resident, its
+ *  own for a fork), marked with the agent it's for, again only when its text
+ *  differs from that agent's newest stored one, in `shards` rows when asked,
+ *  each carrying the status's mark, the heading in the first. Its
+ *  queryMessages reads the window `forAgent` names, the primary's when it's
+ *  left out, as agent-framework's does. `preview` gathers and stores
+ *  nothing, as previewActivation's gather does. A second module on the same
+ *  `stored` rows stands for the host after a restart. */
 function fleet(timeZone = 'UTC', stored: StoredRow[] = []) {
+  const residents = new Set(['resident', 'other']);
+  const windowOf = (agent: string) => (residents.has(agent) ? 'residents' : agent);
   const mod = new SubagentModule({ provider: 'mock', timeZone });
   (mod as unknown as { ctx: unknown }).ctx = {
     getState: () => ({ hudEnabled: true }),
     setState: () => {},
-    queryMessages: (filter: { participant?: string }) => {
-      const messages = stored.filter((row) => row.participant === filter.participant);
+    queryMessages: (filter: { participant?: string }, opts?: { forAgent?: string }) => {
+      const window = windowOf(opts?.forAgent ?? 'resident');
+      const messages = stored.filter((row) => row.window === window && row.participant === filter.participant);
       return { messages, totalCount: messages.length };
     },
   };
@@ -41,15 +53,19 @@ function fleet(timeZone = 'UTC', stored: StoredRow[] = []) {
   };
   const textOf = async (agent: string): Promise<string | undefined> =>
     ((await mod.gatherContext(agent))[0]?.content[0] as { text: string } | undefined)?.text;
-  const status = async (agent = 'resident'): Promise<string | undefined> => {
+  const status = async (agent = 'resident', shards = 1): Promise<string | undefined> => {
     const text = await textOf(agent);
-    const newest = stored.filter((row) => (row.metadata.contextInjection as { agent: string }).agent === agent).at(-1);
-    if (text !== undefined && newest?.content[0]?.text !== text) {
-      stored.push({
-        participant: 'system_context:subagent-fleet',
-        content: [{ type: 'text', text }],
-        metadata: { system: true, kind: 'context-injection', contextInjection: { agent, namespace: 'subagent-fleet', contentHash: `h${stored.length}`, part: 0, parts: 1 } },
-      });
+    const mine = stored.filter((row) => row.window === windowOf(agent) && (row.metadata.contextInjection as { agent: string } | undefined)?.agent === agent);
+    const newestHash = (mine.at(-1)?.metadata.contextInjection as { contentHash: string } | undefined)?.contentHash;
+    const newest = mine.filter((row) => (row.metadata.contextInjection as { contentHash: string }).contentHash === newestHash)
+      .map((row) => row.content[0]!.text).join('\n');
+    if (text !== undefined && newest !== text) {
+      const lines = text.split('\n');
+      const size = Math.ceil(lines.length / shards);
+      const hash = `h${stored.length}`;
+      for (let i = 0; i < lines.length; i += size) {
+        stored.push({ window: windowOf(agent), participant: FLEET, content: [{ type: 'text', text: lines.slice(i, i + size).join('\n') }], metadata: markFor(agent, hash) });
+      }
     }
     return text;
   };
@@ -134,6 +150,23 @@ describe('the fleet status', () => {
     expect(await f.status()).toBe('[Fleet Status]\n  later [async] pending');
   });
 
+  test('a running spawn isn\'t listed again as waiting beside a finished fork of its name', async () => {
+    const f = fleet();
+    // A fork's entry is under its name, a spawn's under spawn-<name>; the
+    // fork's, finished, stays as history.
+    f.mod.activeSubagents.set('later', {
+      name: 'later', type: 'fork', task: 'the fork', status: 'completed',
+      startedAt: T0, completedAt: T0 + 1_000, lastActivityAt: T0, toolCallsCount: 0, findingsCount: 0,
+    });
+    f.mod.activeSubagents.set('spawn-later', {
+      name: 'later', type: 'spawn', task: 'task for later', status: 'running',
+      startedAt: T0 + 2_000, lastActivityAt: T0, toolCallsCount: 0, findingsCount: 0,
+    });
+    f.handles.set('later', {});
+    f.mod.parentMap.set('later', 'resident');
+    expect(await f.status()).toBe('[Fleet Status, as of 14:05:11 UTC]\n  later [spawn] running since 14:05:11 parent:resident "task for later"');
+  });
+
   test('a run waiting under the name of one that has finished is listed', async () => {
     const f = fleet();
     f.mod.activeSubagents.set('spawn-later', {
@@ -181,6 +214,51 @@ describe('the fleet status', () => {
     expect(await after.status()).toBeUndefined();
   });
 
+  test('a status stored in shards is read whole, so its last shard\'s runs count', async () => {
+    const f = fleet();
+    const scout = f.add('scout');
+    const miner = f.add('miner');
+    // The heading and scout in the first shard, miner alone in the second.
+    expect(await f.status('resident', 2)).toContain('miner [spawn] running since');
+    expect(f.stored.map((row) => row.content[0]!.text)).toEqual([
+      '[Fleet Status, as of 14:05:09 UTC]\n  scout [spawn] running since 14:05:09 parent:resident "task for scout"',
+      '  miner [spawn] running since 14:05:09 parent:resident "task for miner"',
+    ]);
+    for (const run of [scout, miner]) { run.status = 'completed'; run.completedAt = T0 + 30_000; }
+    expect(await f.status()).toBe('[Fleet Status, as of 14:05:39 UTC]\n  (none running)');
+  });
+
+  test('a fork is told by the status in its own window, not the residents\'', async () => {
+    const f = fleet();
+    const scout = f.add('scout');
+    f.mod.parentMap.set('scout', 'fork-a');
+    expect(await f.status('fork-a')).toContain('scout [spawn] running since');
+    expect(f.stored.map((row) => row.window)).toEqual(['fork-a']);
+    scout.status = 'completed';
+    scout.completedAt = T0 + 30_000;
+    expect(await f.status('fork-a')).toBe('[Fleet Status, as of 14:05:39 UTC]\n  (none running)');
+  });
+
+  test('a row that isn\'t the agent\'s own fleet status, by its mark, doesn\'t count', async () => {
+    const f = fleet();
+    const listing = [{ type: 'text' as const, text: '[Fleet Status]\n  scout [spawn] running since 14:05:09 parent:resident "t"' }];
+    const mark = markFor('resident', 'h0');
+    const { parts: _parts, ...noParts } = mark.contextInjection;
+    f.stored.push(
+      // Another source's namespace, a mark that isn't whole, and no mark.
+      { window: 'residents', participant: FLEET, content: listing, metadata: { ...mark, contextInjection: { ...mark.contextInjection, namespace: 'retrieval' } } },
+      { window: 'residents', participant: FLEET, content: listing, metadata: { ...mark, contextInjection: noParts } },
+      { window: 'residents', participant: FLEET, content: listing, metadata: {} },
+    );
+    expect(await f.status()).toBeUndefined();
+  });
+
+  test('a window that can\'t be read makes the gather throw, which agent-framework\'s registry logs', async () => {
+    const f = fleet();
+    (f.mod as unknown as { ctx: { queryMessages: () => never } }).ctx.queryMessages = () => { throw new Error('store unavailable'); };
+    await expect(f.mod.gatherContext('resident')).rejects.toThrow('store unavailable');
+  });
+
   test('each agent is told by its own stored status, not another\'s', async () => {
     const f = fleet();
     const scout = f.add('scout');
@@ -218,6 +296,7 @@ describe('an async run\'s result', () => {
   function delivering(registered: string[]) {
     const mod = new SubagentModule({ provider: 'mock', timeZone: 'UTC', parentAgentName: 'resident' });
     const written: Array<{ text: string; forAgent?: string }> = [];
+    const woken: string[] = [];
     (mod as unknown as { ctx: unknown }).ctx = {
       getAgents: () => registered.map((name) => ({ name, model: 'mock', status: 'idle' })),
       addMessage: (_participant: string, content: Array<{ text: string }>, _metadata?: unknown, opts?: { forAgent?: string }) => {
@@ -226,13 +305,13 @@ describe('an async run\'s result', () => {
         written.push({ text: content[0]!.text, ...(opts?.forAgent !== undefined ? { forAgent: opts.forAgent } : {}) });
         return 'm1';
       },
-      pushEvent: () => {},
+      pushEvent: (event: { type: string; agentName?: string }) => { if (event.type === 'inference-request' && event.agentName) woken.push(event.agentName); },
     };
     const deliver = mod as unknown as {
       deliverAsyncResult: (name: string, result: { summary: string }, launcher: string | undefined) => void;
       deliverAsyncError: (name: string, err: unknown, launcher: string | undefined) => void;
     };
-    return { written, deliver };
+    return { written, woken, deliver };
   }
 
   test('lands in the window of the agent that launched it, naming a launcher that isn\'t the primary', () => {
@@ -245,12 +324,19 @@ describe('an async run\'s result', () => {
       { text: "[Subagent 'miner' failed, for 'fork-y']\n\nError: broke", forAgent: 'fork-y' },
       { text: "[Subagent 'lead' returned]\n\nmine", forAgent: 'resident' },
     ]);
+    expect(d.woken).toEqual(['fork-y', 'fork-y', 'resident']);
   });
 
   test('whose launcher has ended lands in the residents\' slot, naming whom it was for', () => {
     const d = delivering(['resident']);
     d.deliver.deliverAsyncResult('scout', { summary: 'done' }, 'fork-y');
-    expect(d.written).toEqual([{ text: "[Subagent 'scout' returned, for 'fork-y', which has ended]\n\ndone" }]);
+    d.deliver.deliverAsyncError('miner', new Error('broke'), 'fork-y');
+    expect(d.written).toEqual([
+      { text: "[Subagent 'scout' returned, for 'fork-y', which has ended]\n\ndone" },
+      { text: "[Subagent 'miner' failed, for 'fork-y', which has ended]\n\nError: broke" },
+    ]);
+    // Read at the primary's next start; no wake (Agnes-1009, room-203 #197466).
+    expect(d.woken).toEqual([]);
   });
 
   test('with no launcher named lands in the residents\' slot as before', () => {

@@ -527,10 +527,11 @@ describe('the store audit', () => {
     expect(said["a subconscious whose context a start can't read"]!.audit).toContain(' (subconscious/agent): refused: ');
   }, 90_000);
 
-  test("the subconscious's view leaves out other agents' stored injections, as agent-framework's does", () => {
-    // createSubconsciousAgent's filter, which the audit's copy follows: the
-    // residents' slot merged, tuned-out rows included, every other agent's
-    // stored injection left out, the subconscious's own kept.
+  test("the subconscious's view leaves out other agents' stored injections, as createSubconsciousAgent's filter reads", () => {
+    // createSubconsciousAgent's filter (framework.ts), which the audit's copy
+    // follows: the residents' slot merged, tuned-out rows included, every
+    // other agent's stored injection left out, the subconscious's own kept.
+    // This pins the copy's rule; the next test, its wiring.
     const view = subconsciousView('Subconscious');
     const row = (metadata?: Record<string, unknown>) => ({ id: 'm', participant: 'x', content: [], timestamp: 0, ...(metadata ? { metadata } : {}) }) as never;
     const injection = (agent: string) => ({ system: true, kind: 'context-injection', contextInjection: { agent, namespace: 'retrieval', contentHash: 'h', part: 0, parts: 1 } });
@@ -538,6 +539,29 @@ describe('the store audit', () => {
     expect(view(row(injection('Subconscious')))).toBe(true);
     expect(view(row({ tuneOut: { channel: 'c' } }))).toBe(true);
     expect(view(row())).toBe(true);
+  });
+
+  test("the audit opens a named subconscious with its own name's view, and the resident with the resident's", async () => {
+    const { dir } = await makeDataDirWith('named-subconscious', [(store) => makeStore(store, 'agents/agent', false)]);
+    saveRecipe(dir, { ...DEFAULT_RECIPE, subconscious: { enabled: true, name: 'Muse', systemPrompt: 'attend to the agent' } });
+    const views = new Map<string, (message: never) => boolean>();
+    const open = ContextManager.open.bind(ContextManager);
+    const spy = spyOn(ContextManager, 'open').mockImplementation(((options: { namespace?: string; viewFilter?: (message: never) => boolean }) => {
+      if (options.namespace !== undefined && options.viewFilter) views.set(options.namespace, options.viewFilter);
+      return open(options as never);
+    }) as never);
+    try {
+      expect((await audit([dir])).status).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+    const row = (agent: string) => ({ id: 'm', participant: 'x', content: [], timestamp: 0, metadata: {
+      system: true, kind: 'context-injection', contextInjection: { agent, namespace: 'retrieval', contentHash: 'h', part: 0, parts: 1 },
+    } }) as never;
+    const muse = views.get('subconscious/agent')!;
+    const agent = views.get('agents/agent')!;
+    expect([muse(row('Muse')), muse(row('agent')), muse(row('Subconscious'))]).toEqual([true, false, false]);
+    expect([agent(row('agent')), agent(row('Muse'))]).toEqual([true, false]);
   });
 
   test("a crossed store opens under a resident's kv-unified block that keeps gap-bearing summaries, as at its start", async () => {

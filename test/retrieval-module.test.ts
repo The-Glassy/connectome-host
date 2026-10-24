@@ -1289,9 +1289,35 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     expect(h.mod.getRetrievalTraces()[0]!.injected?.lessonIds).toEqual(['l1', 'l3']);
   });
 
+  test('a lesson that fits with the note its count ends up saying is kept, though the note for more wouldn\'t fit', async () => {
+    const heading = '## Retrieved Knowledge, for the message beginning "Tell me the memory detail."';
+    const note = '(1 more relevant lesson left out, to keep this message under its size limit)';
+    // Pad the kept lesson so the block with the one-lesson note ends on a
+    // token's last character: the note for two, a character longer, doesn't fit.
+    const base = [heading, '- [90%] memory one (tags: memory)', note].join('\n').length;
+    const content = `memory one${'!'.repeat((4 - (base % 4)) % 4)}`;
+    const lessons = [lesson('l1', content), lesson('l2', `memory ${'large '.repeat(200)}`)];
+    const expected = [heading, `- [90%] ${content} (tags: memory)`, note].join('\n');
+    const h = turnHarness(['["memory"]'], { lessons, maxMessageTokens: expected.length / 4 });
+    h.say('user', 'Tell me the memory detail.');
+    expect(h.block(await h.mod.gatherContext(AGENT))).toBe(expected);
+  });
+
+  test('a message a tune-out diverted is neither the opening message nor in what the concept step reads', async () => {
+    const h = turnHarness(['["memory"]']);
+    h.say('user', 'Tell me the memory detail.');
+    h.say('user', 'a diverted channel line', { tuneOut: { epochId: 'e1' } });
+    expect(h.block(await h.mod.gatherContext(AGENT)))
+      .toStartWith('## Retrieved Knowledge, for the message beginning "Tell me the memory detail."\n');
+    expect(JSON.stringify(h.calls[0])).not.toContain('a diverted channel line');
+  });
+
   test('a block whose lessons all fit is kept whole, with no room held for a note it doesn\'t need', async () => {
-    const whole = '## Retrieved Knowledge, for the message beginning "Tell me the memory detail."\n- [90%] memory detail (tags: memory)';
-    const h = turnHarness(['["memory"]'], { maxMessageTokens: Math.ceil(whole.length / 4) });
+    // Each lesson is shorter than the note, so the first with a note for the
+    // second wouldn't fit where the whole block does.
+    const lessons = [lesson('l1', 'memory one'), lesson('l2', 'memory two')];
+    const whole = '## Retrieved Knowledge, for the message beginning "Tell me the memory detail."\n- [90%] memory one (tags: memory)\n- [90%] memory two (tags: memory)';
+    const h = turnHarness(['["memory"]'], { lessons, maxMessageTokens: Math.ceil(whole.length / 4) });
     h.say('user', 'Tell me the memory detail.');
     expect(h.block(await h.mod.gatherContext(AGENT))).toBe(whole);
   });

@@ -10,13 +10,16 @@
  * Steps 1 and 3 use the configured retrieval model and optional reasoning.
  *
  * A turn's result is kept per agent, keyed on the turn's opening message
- * (openingMessageOf). A start that sees the same opening message, such as a
- * restart after a tool round, gets the same block, with no model calls.
- * agent-framework stores the block where the compile placed it
- * (context-manager #155 part 5), and stores it again only when the agent's
- * last request no longer held it, as after a fold took it. A lesson that
- * stays relevant is stored again with each new turn's block, whose heading
- * names that turn's opening message, and the folds take the older copies.
+ * (openingMessageOf), in this process: a start that sees the same opening
+ * message, such as a restart after a tool round, gets the same block, with
+ * no model calls, and the first start after the host restarts runs them
+ * again. agent-framework stores the block where the compile placed it
+ * (context-manager #155 part 5), and stores it again unless the agent's
+ * last request held the same text, as it doesn't once a fold took it. A
+ * lesson that stays relevant is stored again with a new turn's block, whose
+ * heading names that turn's opening message, so the text differs unless two
+ * turns open with messages that begin alike, and the folds take the older
+ * copies.
  */
 
 import type {
@@ -234,8 +237,10 @@ function fitUnderCap(heading: string, lessons: Lesson[], cap: number | undefined
   const lines: string[] = [];
   for (const lesson of lessons) {
     const line = lessonLine(lesson);
-    // Room for the note at its longest, so the count it ends up saying fits.
-    if (fits(compose([...lines, line], lessons.length))) {
+    // Room for the note at the most it can end up saying with this lesson
+    // kept: every lesson not kept so far but this one. Keeping a later one
+    // only shortens it, so the count it ends up saying fits.
+    if (fits(compose([...lines, line], lessons.length - kept.length - 1))) {
       kept.push(lesson);
       lines.push(line);
     }
@@ -327,8 +332,9 @@ export class RetrievalModule implements Module {
    * nothing when it keeps nothing. A Web UI preview with injections
    * (previewActivation) gathers too and counts as a start: overlapping a
    * start's model calls, it keeps its own result for the same opening
-   * message in that start's place, so the turn's next start may get a
-   * block the framework then stores again (Agnes-1009, room-203 #197691).
+   * message in that start's place, or nothing when its own keeps nothing, so
+   * the turn's next start may get a block the framework then stores again,
+   * or run the calls again (Agnes-1009, room-203 #197691).
    */
   async gatherContext(agentName: string): Promise<ContextInjection[]> {
     const start = ++this.starts;
@@ -688,14 +694,17 @@ export class RetrievalModule implements Module {
     // A row marked `held: true` is a write the framework still
     // holds: it reaches the agent at a later boundary, not in the request
     // these lessons go into. A row marked `heldFromResidents` arrived in a
-    // tuned-out channel, and no resident is shown it. A stored injection
+    // tuned-out channel, and no resident is shown it, nor is a stored row a
+    // tune-out diverted (`metadata.tuneOut`), which agent-framework keeps
+    // out of a resident's view while it stays in the slot. A stored injection
     // (stored-injection.ts) is no one's message, and a past lessons block
     // among them would have the concept step read its own earlier output. So
     // the window keeps to the stored rows the agent is shown, injections
     // left out.
     const { messages } = this.ctx.queryMessages({}, { forAgent: agentName });
     const shown = messages.filter(m =>
-      m.held !== true && m.heldFromResidents !== true && storedInjectionMarkOf(m.metadata) === undefined);
+      m.held !== true && m.heldFromResidents !== true && !(m.metadata as { tuneOut?: unknown } | undefined)?.tuneOut
+      && storedInjectionMarkOf(m.metadata) === undefined);
     if (shown.length === 0) return null;
 
     // Take the last 10 of them for context.
