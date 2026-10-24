@@ -15,8 +15,13 @@
     used; a Web UI preview with injections counts as a start too, so one
     that overlaps a start can leave its own result as the turn's, or none;
     a start that a later start of the agent's overtook
-    keeps nothing; a retrieval that failed, or whose concept step answered
-    with something that isn't a list, is tried again. Rows marked `system`
+    keeps nothing; a retrieval that failed, or whose concept step or
+    relevance check answered with something that isn't a list, is tried
+    again at the next start, where before, a relevance answer that didn't
+    parse was kept, as the top candidates unchecked, while the recent
+    messages stayed the same. A message stored in shards is one message, by
+    context-manager's rule of what makes up a message, and a tool call's or
+    result's is no turn's opening message. Rows marked `system`
     (clock rows, autoContinue's `[continue]`, the framework's notices and
     the host's `[host-notice]`), rows under participant `system`, a
     self-wake's line and stored injections don't open a turn; a batched
@@ -58,7 +63,10 @@
     time the result comes lands in the residents' slot, its line adding
     `, which has ended`. One whose launching attempt has ended while its
     run goes on, as after a retry, is the run's: its current attempt
-    takes it, told `launched by an earlier attempt`. One whose
+    takes it, told `launched by an earlier attempt`, and while
+    agent-framework lists no attempt of the run, between attempts or as
+    the next is set up, it lands in the residents' slot, `for an earlier
+    attempt of '…', which has ended`. One whose
     launcher's window is let go without reading it, a fork's or a
     subagent's run, or a conversation agent closed, agent-framework passes
     to the residents' slot, where its line names whom it was for. None of

@@ -926,9 +926,10 @@ describe('RetrievalModule observability', () => {
 // injection where the compile placed it, and stores it again when its text
 // differs from what the agent's last request held. So a turn's lessons are
 // kept per agent and keyed on the turn's opening message: a later start of
-// the same turn gets the same block with no model calls, whatever the
-// framework stored since, while the agent's entry is among the 64 most
-// recently used.
+// the same turn gets the same block with no model calls, whatever of its
+// own the framework stored since (its notices, clock rows, stored blocks),
+// until another message to the agent lands, and while the agent's entry is
+// among the 64 most recently used.
 describe('RetrievalModule keyed on the turn\'s opening message', () => {
   const AGENT = 'alice';
 
@@ -938,7 +939,7 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
    *  settles, to hold a model call open. */
   function turnHarness(
     responses: Array<string | Error | Promise<string>>,
-    opts: { lessons?: Lesson[]; maxMessageTokens?: number } = {},
+    opts: { lessons?: Lesson[]; maxMessageTokens?: number; maxInjectedLessons?: number } = {},
   ) {
     const calls: NormalizedRequest[] = [];
     const membrane = {
@@ -974,7 +975,11 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
       add(AGENT, [{ type: 'tool_use', id: `t${n}`, name: 'look', input: {} }]);
       add('user', [{ type: 'tool_result', toolUseId: `t${n}`, content: 'memory detail found' }]);
     };
-    const mod = new RetrievalModule({ membrane, ...(opts.maxMessageTokens !== undefined ? { maxMessageTokens: opts.maxMessageTokens } : {}) });
+    const mod = new RetrievalModule({
+      membrane,
+      ...(opts.maxMessageTokens !== undefined ? { maxMessageTokens: opts.maxMessageTokens } : {}),
+      ...(opts.maxInjectedLessons !== undefined ? { maxInjectedLessons: opts.maxInjectedLessons } : {}),
+    });
     const lessons = opts.lessons ?? [lesson('l1', 'memory detail')];
     (mod as unknown as { ctx: unknown }).ctx = {
       getModule: (name: string) => name === 'lessons' ? { getLessons: () => lessons } : null,
@@ -1319,15 +1324,46 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     expect(h.block(await h.mod.gatherContext(AGENT))).toBe(expected);
   });
 
-  test('a tool call stored in shards is passed over whole, its text-only shards included', async () => {
+  for (const tool of [
+    { type: 'tool_use', id: 't9', name: 'look', input: {} },
+    { type: 'tool_result', toolUseId: 't9', content: 'found it' },
+  ]) {
+    test(`a ${tool.type} stored in shards is passed over whole, its text-only shards included`, async () => {
+      const h = turnHarness(['["memory"]']);
+      h.say('user', 'Tell me the memory detail.');
+      // A long message with a tool block: context-manager puts the block on
+      // the first shard, and the later shards hold text alone.
+      h.add('bob', [{ type: 'text', text: 'looking it up, part one' }, tool], undefined, { bodyGroupId: 'g1', shardIndex: 0 });
+      h.add('bob', [{ type: 'text', text: 'part two of the same reply' }], undefined, { bodyGroupId: 'g1', shardIndex: 1 });
+      expect(h.block(await h.mod.gatherContext(AGENT)))
+        .toStartWith('## Retrieved Knowledge, for the message beginning "Tell me the memory detail."\n');
+    });
+  }
+
+  test('a message of the same text as a tool message stored in shards is a message of its own', async () => {
     const h = turnHarness(['["memory"]']);
-    h.say('user', 'Tell me the memory detail.');
-    // Another agent's long reply with a tool call: context-manager puts the
-    // call on the first shard, and the later shards hold text alone.
-    h.add('bob', [{ type: 'text', text: 'looking it up, part one' }, { type: 'tool_use', id: 't9', name: 'look', input: {} }], undefined, { bodyGroupId: 'g1' });
-    h.add('bob', [{ type: 'text', text: 'part two of the same reply' }], undefined, { bodyGroupId: 'g1' });
+    // The group id names the text, so the later message shares it: it's the
+    // shard order that tells the two apart, as context-manager reads it.
+    h.add('bob', [{ type: 'text', text: 'the memory detail' }, { type: 'tool_use', id: 't9', name: 'look', input: {} }], undefined, { bodyGroupId: 'g1', shardIndex: 0 });
+    h.add('bob', [{ type: 'text', text: ', pasted' }], undefined, { bodyGroupId: 'g1', shardIndex: 1 });
+    h.add('carol', [{ type: 'text', text: 'the memory detail' }], undefined, { bodyGroupId: 'g1', shardIndex: 0 });
+    h.add('carol', [{ type: 'text', text: ', pasted' }], undefined, { bodyGroupId: 'g1', shardIndex: 1 });
     expect(h.block(await h.mod.gatherContext(AGENT)))
-      .toStartWith('## Retrieved Knowledge, for the message beginning "Tell me the memory detail."\n');
+      .toStartWith('## Retrieved Knowledge, for the message beginning "the memory detail, pasted"\n');
+  });
+
+  test('a relevance reply that doesn\'t parse keeps nothing when no lesson fits, or none may be injected', async () => {
+    const lessons = ['one', 'two', 'three', 'four'].map((n, i) => lesson(`l${i + 1}`, `memory ${n} ${'long '.repeat(40)}`));
+    const tight = turnHarness(['["memory"]', 'not a list', '["memory"]', '["l2"]'], { lessons, maxMessageTokens: 20 });
+    tight.say('user', 'Tell me the memory detail.');
+    expect(await tight.mod.gatherContext(AGENT)).toEqual([]);
+    expect(await tight.mod.gatherContext(AGENT)).toEqual([]);
+    expect(tight.calls).toHaveLength(4);
+    const none = turnHarness(['["memory"]', 'not a list', '["memory"]', '["l2"]'], { lessons, maxInjectedLessons: 0 });
+    none.say('user', 'Tell me the memory detail.');
+    expect(await none.mod.gatherContext(AGENT)).toEqual([]);
+    expect(await none.mod.gatherContext(AGENT)).toEqual([]);
+    expect(none.calls).toHaveLength(4);
   });
 
   test('a relevance reply that doesn\'t parse injects the top candidates, and keeps nothing, so the next start asks again', async () => {

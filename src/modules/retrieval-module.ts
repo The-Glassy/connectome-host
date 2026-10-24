@@ -35,7 +35,7 @@ import type {
 } from '@animalabs/agent-framework';
 import { unknownToolResult } from './unknown-tool.js';
 import type { Membrane, NormalizedRequest } from '@animalabs/membrane';
-import type { ContextInjection } from '@animalabs/context-manager';
+import { bodyBoundsIn, type BodyShard, type ContextInjection } from '@animalabs/context-manager';
 import type { LessonsModule, Lesson } from './lessons-module.js';
 import { storedInjectionMarkOf } from '@animalabs/agent-framework';
 import {
@@ -138,7 +138,21 @@ interface ShownRow {
   content: ReadonlyArray<{ type: string; text?: unknown }>;
   metadata?: unknown;
   bodyGroupId?: unknown;
+  shardIndex?: unknown;
 }
+
+/** Each row's place in a message stored in shards, for context-manager's
+ *  own rule of which rows make up a message (`bodyBoundsIn`), which reads
+ *  store order and shard index rather than the group id alone, since that
+ *  id names the text and two messages of the same text share it. */
+function bodyShardsOf(shown: readonly ShownRow[]): BodyShard[] {
+  return shown.map(r => ({
+    bodyGroupId: typeof r.bodyGroupId === 'string' ? r.bodyGroupId : undefined,
+    shardIndex: typeof r.shardIndex === 'number' ? r.shardIndex : undefined,
+  }));
+}
+
+const holdsATool = (row: ShownRow): boolean => row.content.some(b => b.type === 'tool_use' || b.type === 'tool_result');
 
 /** `metadata.source` of a self-wake's line, agent-framework's EventGate
  *  (`event-gate.ts`, the self-wake timer): "[self-wake] your … timer
@@ -169,20 +183,22 @@ const SELF_WAKE_SOURCE = 'gate:self-wake';
  * key until another such message lands, as one held for the agent and
  * drained at a tool round can, which is a turn's newer opening message.
  * (A message stored in shards is keyed on its last shard, which stays its
- * last, and is read whole: a tool call's or result's text shards count as
- * the tool row they belong to.) The key is null where no row qualifies,
+ * last, and is read whole, by context-manager's rule of what makes up a
+ * message: a tool call's or result's text shards count as the tool row
+ * they belong to.) The key is null where no row qualifies,
  * and then the result is shared until someone else's message lands. The
  * result is undefined where the row's id can't be read, so nothing is kept
  * under a key that isn't the row's.
  */
 function openingMessageOf(shown: readonly ShownRow[], agentName: string): OpeningMessage | undefined {
-  const toolGroups = new Set(shown
-    .filter(r => typeof r.bodyGroupId === 'string' && r.bodyGroupId !== '' && r.content.some(b => b.type === 'tool_use' || b.type === 'tool_result'))
-    .map(r => r.bodyGroupId));
+  const bodies = bodyShardsOf(shown);
   for (let i = shown.length - 1; i >= 0; i--) {
     const row = shown[i]!;
-    if (!isAMessageTo(row, agentName)) continue;
-    if (typeof row.bodyGroupId === 'string' && toolGroups.has(row.bodyGroupId)) continue;
+    const { from, to } = bodyBoundsIn(bodies, i);
+    if (!isAMessageTo(row, agentName) || shown.slice(from, to + 1).some(holdsATool)) {
+      i = from;
+      continue;
+    }
     let id: unknown;
     try {
       id = row.id;
@@ -190,29 +206,27 @@ function openingMessageOf(shown: readonly ShownRow[], agentName: string): Openin
       return undefined;
     }
     if (typeof id !== 'string' && typeof id !== 'number') return undefined;
-    return { key: String(id), excerpt: excerptOf(textOfMessage(shown, row)) };
+    return { key: String(id), excerpt: excerptOf(textOfMessage(shown, bodyBoundsIn(bodies, i))) };
   }
   return { key: null, excerpt: undefined };
 }
 
 function isAMessageTo(row: ShownRow, agentName: string): boolean {
   if (row.participant === agentName || row.participant === 'system') return false;
-  if (row.content.some(b => b.type === 'tool_use' || b.type === 'tool_result')) return false;
   const metadata = row.metadata as { system?: unknown; source?: unknown } | undefined;
   return metadata?.system !== true && metadata?.source !== SELF_WAKE_SOURCE;
 }
 
-/** A row's text, or for a message stored in shards, its shards' text in
- *  store order, which is theirs: context-manager writes a message's shards
- *  in order (`ContextManager.addMessage`). */
-function textOfMessage(shown: readonly ShownRow[], row: ShownRow): string {
+/** The text of the message at `shown[from..to]`: a row's, or for a
+ *  message stored in shards, its shards' text in store order, which is
+ *  theirs: context-manager writes a message's shards in order
+ *  (`ContextManager.addMessage`). */
+function textOfMessage(shown: readonly ShownRow[], { from, to }: { from: number; to: number }): string {
   const textOf = (r: ShownRow): string => r.content
     .filter(b => b.type === 'text' && typeof b.text === 'string')
     .map(b => b.text as string)
     .join(' ');
-  const group = row.bodyGroupId;
-  if (typeof group !== 'string' || group === '') return textOf(row);
-  return shown.filter(r => r.bodyGroupId === group).map(textOf).join('');
+  return shown.slice(from, to + 1).map(textOf).join('');
 }
 
 /** A lesson's line in the block. */
@@ -445,7 +459,7 @@ export class RetrievalModule implements Module {
       const injected = relevant.slice(0, maxLessons);
 
       if (injected.length === 0) {
-        this.keepTurnBlock(agentName, start, opening, [], []);
+        if (validated) this.keepTurnBlock(agentName, start, opening, [], []);
         trace?.finish('no-relevant-lessons');
         return [];
       }

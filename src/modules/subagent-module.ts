@@ -446,19 +446,6 @@ const UNNAMED_LAUNCHER = 'agent';
  *  agent-framework stores it under (`system_context:<namespace>`). */
 const FLEET_NAMESPACE = 'subagent-fleet';
 const FLEET_PARTICIPANT = `system_context:${FLEET_NAMESPACE}`;
-/** A run's display name from one of its attempts' names, which it carries
- *  whether the run goes on or has ended (runOfAttempt keeps an attempt only
- *  until then): a spawn's `spawn-<name>-<stamp>` and a fork's
- *  `<name>-d<depth>[-retry<n>]-<stamp>` give `<name>`; another name, such
- *  as a resident's, is cut as before. */
-function runNameOf(attempt: string): string {
-  const spawned = /^spawn-(.+)-\d+$/.exec(attempt);
-  if (spawned) return spawned[1]!;
-  const forked = /^(.+)-d\d+(?:-retry\d+)?-\d+$/.exec(attempt);
-  if (forked) return forked[1]!;
-  return attempt.replace(/^(spawn|fork)-/, '').replace(/-retry\d+$/, '');
-}
-
 /** A fleet status's heading line, which gatherContext writes first. */
 const FLEET_HEADING = /^\[Fleet Status(, as of [^\]]*)?\]$/;
 
@@ -1361,6 +1348,12 @@ export class SubagentModule implements Module {
   /** Parent agent name for each subagent (for fleet tree reconstruction). */
   readonly parentMap = new Map<string, string>();
 
+  /** Each subagent's launcher as agents know it (shownName), recorded as it
+   *  launched the run, while it ran: the fleet status's `parent:` label,
+   *  the name the result's line gives it. A link restored from the store
+   *  has none, and its run has ended. */
+  private readonly launcherShownOf = new Map<string, string>();
+
   // Stashed results from subagent--return tool calls, keyed by framework agent name
   private returnedResults = new Map<string, string | undefined>();
 
@@ -1599,6 +1592,7 @@ export class SubagentModule implements Module {
 
     this.activeSubagents.clear();
     this.parentMap.clear();
+    this.launcherShownOf.clear();
 
     for (const [key, pa] of Object.entries(persisted.agents)) {
       const sa: ActiveSubagent = {
@@ -1830,9 +1824,11 @@ export class SubagentModule implements Module {
       if (latestChange === undefined || changedAt > latestChange) latestChange = changedAt;
       if (sa.status !== 'running') continue;
       const parent = this.parentMap.get(sa.name) ?? 'agent';
-      // The launcher as agents know it, its run's display name, as the
-      // result's line names it, whether its run goes on or has ended.
-      const parentShort = runNameOf(parent);
+      // The launcher as agents know it, as the result's line names it,
+      // recorded as it launched the run, whether its run goes on or has
+      // ended; a link with no record is cut as before.
+      const parentShort = this.launcherShownOf.get(sa.name)
+        ?? parent.replace(/^(spawn|fork)-/, '').replace(/-d\d+-\d+$/, '').replace(/-retry\d+$/, '');
       const task = sa.task.length > 50 ? sa.task.slice(0, 47) + '...' : sa.task;
       lines.push(`  ${sa.name} [${sa.type}] running since ${this.clockTime(sa.startedAt)} parent:${parentShort} "${task}"`);
     }
@@ -2239,8 +2235,18 @@ export class SubagentModule implements Module {
    *  the name. */
   private claimName(name: string, parent: string | undefined): void {
     this.lastInputTokens.delete(name);
-    if (parent) this.parentMap.set(name, parent);
-    else this.parentMap.delete(name);
+    if (parent) {
+      this.parentMap.set(name, parent);
+      this.launcherShownOf.set(name, this.shownName(parent));
+    } else {
+      this.unlinkParent(name);
+    }
+  }
+
+  /** Drop a run's parent link and its launcher's recorded name. */
+  private unlinkParent(name: string): void {
+    this.parentMap.delete(name);
+    this.launcherShownOf.delete(name);
   }
 
   /** Drop a run's attempts from the index as the run ends: nameInUse keeps
@@ -2411,29 +2417,39 @@ export class SubagentModule implements Module {
    */
   private getDescendantDisplayNames(rootFrameworkAgentName: string): Set<string> {
     const result = new Set<string>();
-    // A child is its launcher's run's, whichever of the run's attempts
-    // launched it (runOfAttempt, as childrenOf reads it), while the run goes
-    // on (Agnes-1009, room-203 #199188); a resident's is its own name's.
-    const queue: Array<{ attempt: string; run: string | undefined }> = [
-      { attempt: rootFrameworkAgentName, run: this.runOfAttempt.get(rootFrameworkAgentName) },
-    ];
-    while (queue.length > 0) {
-      const { attempt, run } = queue.shift()!;
-      for (const [childDisplayName, parentName] of this.parentMap) {
-        if (result.has(childDisplayName)) continue;
-        if (parentName !== attempt && (run === undefined || this.runOfAttempt.get(parentName) !== run)) continue;
-        result.add(childDisplayName);
-        const childLive = this.liveSubagents.get(childDisplayName);
-        queue.push({ attempt: childLive?.frameworkAgentName ?? childDisplayName, run: childDisplayName });
+    this.collectDescendants(rootFrameworkAgentName, this.runOfAttempt.get(rootFrameworkAgentName), result);
+    return result;
+  }
+
+  /** Add to `into` the runs launched by the agent named `attempt` or by any
+   *  attempt of the run named `run`, and below each one still going on, the
+   *  runs it launched. A child is its launcher's run's, whichever of the
+   *  run's attempts launched it (runOfAttempt, as childrenOf reads it), while
+   *  the run goes on, between attempts too (Agnes-1009, room-203 #199188); a
+   *  resident's is its own name's. A finished run's children aren't its
+   *  any more: their launcher's run has ended (orphanedRuns). A parent link
+   *  names an agent, an attempt or a resident, never a run's display name,
+   *  so a run is matched only through its attempts. Each run going on is
+   *  walked once. */
+  private collectDescendants(attempt: string | undefined, run: string | undefined, into: Set<string>): void {
+    const goingOn = new Set(this.runOfAttempt.values());
+    const pending: Array<{ attempt: string | undefined; run: string | undefined }> = [{ attempt, run }];
+    while (pending.length > 0) {
+      const next = pending.shift()!;
+      for (const [child, parent] of this.parentMap) {
+        if (into.has(child)) continue;
+        const launched = parent === next.attempt || (next.run !== undefined && this.runOfAttempt.get(parent) === next.run);
+        if (!launched) continue;
+        into.add(child);
+        if (goingOn.has(child)) pending.push({ attempt: undefined, run: child });
       }
     }
-    return result;
   }
 
   /** The runs an agent sees in its fleet status and through `peek`: its
    *  descendants (getDescendantDisplayNames), and for the primary, each run
    *  whose launcher's run has ended (orphanedRuns), with the runs under one
-   *  still under way. Such a run delivers its result to the primary's
+   *  still going on, between its attempts too. Such a run delivers its result to the primary's
    *  window (addForLauncher), and with its launcher's run gone it's in no
    *  other agent's tree (Agnes-1009, room-203 #198350). The status lists
    *  the ones running or waiting, and `peek` shows the ones running. Its finished ones only
@@ -2444,9 +2460,9 @@ export class SubagentModule implements Module {
     const scope = this.getDescendantDisplayNames(agentFrameworkName);
     if (agentFrameworkName !== this.config.parentAgentName) return scope;
     for (const child of this.orphanedRuns()) {
+      if (scope.has(child)) continue;
       scope.add(child);
-      const childRun = this.liveSubagents.get(child);
-      if (childRun) for (const name of this.getDescendantDisplayNames(childRun.frameworkAgentName)) scope.add(name);
+      this.collectDescendants(undefined, child, scope);
     }
     return scope;
   }
@@ -3178,7 +3194,9 @@ export class SubagentModule implements Module {
    *  result is work done, so one whose launcher agent-framework no longer
    *  lists when the result is written is its run's (Agnes-1009, room-203
    *  #199188): while the run goes on, its current attempt's, told an earlier
-   *  attempt launched it, or between attempts the primary's; once the run
+   *  attempt launched it, or the primary's while agent-framework lists no
+   *  attempt of the run, between attempts and while the next one is being
+   *  set up (registerLive comes before agent-framework lists it); once the run
    *  has ended, the primary's window, the residents' slot, as every async
    *  result did before, its line adding that the launcher has ended, so no
    *  resident takes it for its own (#197191, #197307). One agent-framework
@@ -3211,8 +3229,9 @@ export class SubagentModule implements Module {
     }
     // The attempt that launched it has ended. While its run goes on, the
     // result is the run's (Agnes-1009, room-203 #199188): its current attempt
-    // takes it, told an earlier attempt launched it, or, between attempts,
-    // the primary does, told the launching attempt has ended.
+    // takes it, told an earlier attempt launched it, or, while
+    // agent-framework lists none (between attempts, or while the next is
+    // being set up), the primary does, told the launching attempt has ended.
     const run = this.runOfAttempt.get(launcher);
     if (run !== undefined) {
       const current = this.liveSubagents.get(run)?.frameworkAgentName;
@@ -3433,7 +3452,7 @@ export class SubagentModule implements Module {
       cancel.dispose();
       // A run that never started leaves no parent link behind, whether a
       // cancel or the slot's timeout ended its wait.
-      this.parentMap.delete(input.name);
+      this.unlinkParent(input.name);
       if (err instanceof SubagentTerminated) return this.endQueued(input.name, err);
       throw this.failedRun(input.name, 'spawn', err, run);
     }
@@ -3642,7 +3661,7 @@ export class SubagentModule implements Module {
       cancel.dispose();
       // A run that never started leaves no parent link behind, whether a
       // cancel or the slot's timeout ended its wait.
-      this.parentMap.delete(input.name);
+      this.unlinkParent(input.name);
       if (err instanceof SubagentTerminated) return this.endQueued(input.name, err);
       throw this.failedRun(input.name, 'fork', err, run);
     }
