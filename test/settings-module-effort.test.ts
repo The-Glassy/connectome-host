@@ -1,6 +1,6 @@
 import { describe, test, expect, spyOn } from 'bun:test';
 import { SettingsModule, type ReasoningEffort } from '../src/modules/settings-module.js';
-import type { ModuleContext } from '@animalabs/agent-framework';
+import { ModuleRegistry, type ModuleContext } from '@animalabs/agent-framework';
 import { JsStore } from '@animalabs/chronicle';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -239,12 +239,14 @@ describe('reasoning follows branch state without restarting the module', () => {
       const originalBranch = store.currentBranch().name;
       store.createBranch('earlier');
       const mod = new SettingsModule('medium');
-      // Same synchronous store binding used by AF ModuleContext; CM branch
+      // Started through agent-framework's own registry, so its context is the
+      // framework's, which reads the store at each getState; CM's branch
       // selection calls switchBranch on this same store.
-      await mod.start({
-        getState: () => store.getStateJson(stateId),
-        setState: (state: unknown) => { store.setStateJson(stateId, state); },
-      } as unknown as ModuleContext);
+      const unused = (): never => { throw new Error('not used by this test'); };
+      await new ModuleRegistry(store, {} as never, {
+        getAgents: () => [], addMessage: unused, editMessage: unused, removeMessage: unused, getMessage: unused,
+        queryMessages: unused, pushEvent: unused, onTrace: () => () => {}, callTool: unused,
+      }).addModule(mod);
       const ext = mod.getAgentSettingsExtension();
       ext.update('a', { reasoning_effort: 'high' });
       const sourceState = store.getStateJson(stateId);
@@ -252,7 +254,7 @@ describe('reasoning follows branch state without restarting the module', () => {
       expect(store.getStateJson(stateId)).toBeNull();
       // Write first, with no read of the settings before it.
       expect(ext.update('a', { reasoning_display: 'omitted' }).reasoning_effort).toBe('medium');
-      expect(store.getStateJson(stateId)).toEqual({ reasoning: { enabled: false, budgetTokens: 8192, display: 'omitted' } });
+      expect(store.getStateJson(stateId)).toEqual({ reasoning: { enabled: false, budgetTokens: 8192, display: 'omitted' }, externalIdMap: {} });
       store.switchBranch(originalBranch);
       expect(mod.getReasoning().effort).toBe('high');
       expect(store.getStateJson(stateId)).toEqual(sourceState);
