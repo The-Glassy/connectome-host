@@ -1326,6 +1326,45 @@ describe('a name means one subagent until its result has come back', () => {
     }, 20_000);
   }
 
+  for (const kind of ['an async fork', 'a failing spawn', 'a sync spawn moved to the background'] as const) {
+    test(`${kind}'s result names its launcher by its display name`, async () => {
+      let h!: Harness;
+      let lead = '';
+      h = await harness({ maxConcurrent: 3, maxRetries: 0 }, async (agent) => {
+        if (agent.name.startsWith('spawn-lead-')) {
+          lead = agent.name;
+          const call = kind === 'an async fork' ? fork('child') : kind === 'a failing spawn' ? spawn('child') : spawn('child', { sync: true, timeoutMs: 50 });
+          await h.subagent.handleToolCall({ ...call, callerAgentName: agent.name });
+          return new Promise(() => { /* the launcher runs on, so it's listed */ });
+        }
+        if (kind === 'a failing spawn') throw new Error('broke');
+        if (kind === 'a sync spawn moved to the background') await sleep(300);
+        return ran('child done');
+      });
+      const ctx = (h.subagent as unknown as { ctx: {
+        addMessage(participant: string, content: Array<{ type: string; text?: string }>, metadata?: unknown, opts?: { forAgent?: string }): unknown;
+      } }).ctx;
+      const add = ctx.addMessage.bind(ctx);
+      const written: Array<{ text: string; forAgent?: string }> = [];
+      ctx.addMessage = (participant, content, metadata, opts) => {
+        const text = content[0]?.text ?? '';
+        if (text.startsWith("[Subagent 'child'")) written.push({ text, ...(opts?.forAgent !== undefined ? { forAgent: opts.forAgent } : {}) });
+        return add(participant, content, metadata, opts);
+      };
+      try {
+        await h.subagent.handleToolCall(spawn('lead'));
+        await until(() => written.length > 0);
+        expect(lead).toStartWith('spawn-lead-');
+        const outcome = kind === 'a failing spawn' ? 'failed' : 'returned';
+        expect(written[0]!.text).toStartWith(`[Subagent 'child' ${outcome}, for 'lead']\n\n`);
+        expect(written[0]!.forAgent).toBe(lead);
+      } finally {
+        h.subagent.cancelSubagent('lead');
+        await h.cleanup();
+      }
+    }, 20_000);
+  }
+
   test('a child whose launcher has ended is listed in the primary\'s fleet status while it runs', async () => {
     let releaseChild!: () => void;
     const childMayEnd = new Promise<void>((resolve) => { releaseChild = resolve; });
@@ -1345,6 +1384,9 @@ describe('a name means one subagent until its result has come back', () => {
       await h.subagent.handleToolCall(spawn('lead'));
       await until(() => h.running('child') && !sub.asyncHandles.has('lead')); // lead has ended, its child runs on
       expect(await status()).toContain("child [spawn] running since");
+      // peek sees what the status lists (scopeOf).
+      expect((await h.subagent.peek(undefined, 'parent')).map((snapshot) => snapshot.name)).toContain('child');
+      expect((await h.subagent.peek('child', 'parent')).map((snapshot) => snapshot.name)).toEqual(['child']);
       releaseChild();
       await until(() => !sub.asyncHandles.has('child'));
       // Once it has ended it isn't listed. Whether "(none running)" follows

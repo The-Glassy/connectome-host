@@ -1783,23 +1783,12 @@ export class SubagentModule implements Module {
     if (!persisted.hudEnabled) return [];
 
     // Postmortem 2026-05-28 P3 #8: scope the Fleet Status HUD to the
-    // calling agent's descendants. Pre-fix the HUD injected the whole
+    // calling agent's descendants, and for the primary the runs whose
+    // launcher has ended (scopeOf). Pre-fix the HUD injected the whole
     // fleet roster every turn, which (a) encouraged peer-coordination
     // anti-patterns and (b) amplified false zombie/failed flags across
     // the orchestrator's context.
-    const allowed = this.getDescendantDisplayNames(agentName);
-    // A run whose launcher has ended delivers its result to the primary's
-    // window (addForLauncher), so the primary's status lists it, and the runs
-    // under it: once its launcher's run is gone, it's in no other agent's
-    // tree (Agnes-1009, room-203 #198350). A launcher agent-framework no
-    // longer lists has ended, as addForLauncher reads it.
-    if (agentName === this.config.parentAgentName) {
-      const listed = new Set(this.ctx.getAgents().map((agent) => agent.name));
-      for (const parent of new Set(this.parentMap.values())) {
-        if (listed.has(parent)) continue;
-        for (const name of this.getDescendantDisplayNames(parent)) allowed.add(name);
-      }
-    }
+    const allowed = this.scopeOf(agentName);
 
     // agent-framework stores this injection where the compile placed it, and
     // stores it again when its text differs from what the agent's last
@@ -1807,8 +1796,9 @@ export class SubagentModule implements Module {
     // running or waiting, each started one with its start as a clock time,
     // under "as of" its latest start or end: the same state gives the same
     // text, where an elapsed count changed it at nearly every start. A
-    // finished run has reported in its launcher's conversation already, as
-    // its tool result or `[Subagent '…' returned]` (addForLauncher), so it
+    // finished run has reported already, as its tool result or `[Subagent
+    // '…' returned]` in its launcher's conversation, or in the primary's
+    // when its launcher had ended (addForLauncher), so it
     // leaves the list, which keeps each stored copy to the runs under way:
     // as many running as the concurrency limit, and the async runs waiting
     // for a slot. Once none is, a status saying none is running is added at
@@ -1827,7 +1817,10 @@ export class SubagentModule implements Module {
       if (latestChange === undefined || changedAt > latestChange) latestChange = changedAt;
       if (sa.status !== 'running') continue;
       const parent = this.parentMap.get(sa.name) ?? 'agent';
-      const parentShort = parent.replace(/^(spawn|fork)-/, '').replace(/-d\d+-\d+$/, '').replace(/-retry\d+$/, '');
+      // The launcher as agents know it while it runs (shownName), as the
+      // result's line names it; an ended one's name is cut down as before.
+      const parentShort = this.runOfAttempt.get(parent)
+        ?? parent.replace(/^(spawn|fork)-/, '').replace(/-d\d+-\d+$/, '').replace(/-retry\d+$/, '');
       const task = sa.task.length > 50 ? sa.task.slice(0, 47) + '...' : sa.task;
       lines.push(`  ${sa.name} [${sa.type}] running since ${this.clockTime(sa.startedAt)} parent:${parentShort} "${task}"`);
     }
@@ -2420,6 +2413,41 @@ export class SubagentModule implements Module {
     return result;
   }
 
+  /** The runs an agent sees in its fleet status and through `peek`: its
+   *  descendants (getDescendantDisplayNames), and for the primary, each run
+   *  whose launcher has ended (orphanedRuns), with the runs under one still
+   *  under way. Such a run delivers its result to the primary's window
+   *  (addForLauncher), and with its launcher's run gone it's in no other
+   *  agent's tree (Agnes-1009, room-203 #198350). Its finished ones only
+   *  date the status: a later "as of", with nothing changed since, says no
+   *  less, where leaving one out would date a "(none running)" before that
+   *  run's end. */
+  private scopeOf(agentFrameworkName: string): Set<string> {
+    const scope = this.getDescendantDisplayNames(agentFrameworkName);
+    if (agentFrameworkName !== this.config.parentAgentName) return scope;
+    for (const child of this.orphanedRuns()) {
+      scope.add(child);
+      const childRun = this.liveSubagents.get(child);
+      if (childRun) for (const name of this.getDescendantDisplayNames(childRun.frameworkAgentName)) scope.add(name);
+    }
+    return scope;
+  }
+
+  /** The runs, finished or not, whose launcher has ended: agent-framework no
+   *  longer lists it and its run is no longer live here, so a run whose
+   *  launcher is between the two is still its launcher's tree's alone. One
+   *  pass over the parent links. */
+  private orphanedRuns(): string[] {
+    if (!this.ctx) return [];
+    const listed = new Set(this.ctx.getAgents().map((agent) => agent.name));
+    const live = new Set([...this.liveSubagents.values()].map((run) => run.frameworkAgentName));
+    const orphans: string[] = [];
+    for (const [child, parent] of this.parentMap) {
+      if (!listed.has(parent) && !live.has(parent)) orphans.push(child);
+    }
+    return orphans;
+  }
+
   /** The direct children of the run named: the parentMap entries whose
    *  parent is the framework agent of any of its attempts (runOfAttempt),
    *  queued children included, since a run takes its parent link when it
@@ -2517,12 +2545,13 @@ export class SubagentModule implements Module {
    * Postmortem 2026-05-28 P3 #8: when a `callerFrameworkAgentName` is
    * supplied (the normal tool-call path threads it through `handlePeek`),
    * the result is scoped to the caller's descendants — peers/cousins are
-   * filtered out. Internal callers without a known identity (omit the arg)
+   * filtered out — and for the primary to the runs under way whose
+   * launcher has ended too, as its fleet status lists them (scopeOf). Internal callers without a known identity (omit the arg)
    * keep the global view for backward compatibility.
    */
   async peek(name?: string, callerFrameworkAgentName?: string): Promise<SubagentPeekSnapshot[]> {
     const allowed = callerFrameworkAgentName
-      ? this.getDescendantDisplayNames(callerFrameworkAgentName)
+      ? this.scopeOf(callerFrameworkAgentName)
       : null;
     if (name) {
       if (allowed && !allowed.has(name)) return [];

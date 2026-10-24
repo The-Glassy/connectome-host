@@ -927,7 +927,8 @@ describe('RetrievalModule observability', () => {
 // differs from what the agent's last request held. So a turn's lessons are
 // kept per agent and keyed on the turn's opening message: a later start of
 // the same turn gets the same block with no model calls, whatever the
-// framework stored since.
+// framework stored since, while the agent's entry is among the 64 most
+// recently used.
 describe('RetrievalModule keyed on the turn\'s opening message', () => {
   const AGENT = 'alice';
 

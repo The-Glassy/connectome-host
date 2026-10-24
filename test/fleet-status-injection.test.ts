@@ -234,6 +234,22 @@ describe('the fleet status', () => {
     expect(await f.status()).toBe('[Fleet Status, as of 14:05:39 UTC]\n  (none running)');
   });
 
+  test('the primary\'s status takes no run whose launcher is listed, or still running here', async () => {
+    const f = fleet('UTC', [], { primary: true });
+    // A run another resident launched, which agent-framework lists.
+    f.add('theirs');
+    f.mod.parentMap.set('theirs', 'other');
+    // A run whose launcher agent-framework no longer lists but which hasn't
+    // ended here yet: its tree is still its ancestor's.
+    f.add('lead');
+    f.mod.parentMap.set('lead', 'other');
+    f.live('lead', 'lead-d1-1');
+    f.add('kid');
+    f.mod.parentMap.set('kid', 'lead-d1-1');
+    expect(await f.status()).toBeUndefined();
+    expect(await f.status('other')).toContain('kid [spawn] running since');
+  });
+
   test('with the hud off, nothing is added, a stored status listing a run included', async () => {
     const f = fleet();
     const scout = f.add('scout');

@@ -12,7 +12,8 @@
  * A turn's result is kept per agent, keyed on the turn's opening message
  * (openingMessageOf), in this process: a start that sees the same opening
  * message, such as a restart after a tool round, gets the same block, with
- * no model calls, and the first start after the host restarts runs them
+ * no model calls, while the agent's entry is among the TURN_BLOCKS_MAX most
+ * recently used, and the first start after the host restarts runs them
  * again. agent-framework stores the block where the compile placed it
  * (context-manager #155 part 5), and stores it again unless the agent's
  * last request held the same text, as it doesn't once a fold took it. A
