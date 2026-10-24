@@ -61,6 +61,8 @@ interface Harness {
   /** Whether a run of this subagent is in the framework now, past its
    *  setup: the point at which a stop or a reclaim can end it. */
   running(name: string): boolean;
+  /** The framework's store, for a framework opened on it again. */
+  storePath: string;
   cleanup(): Promise<void>;
 }
 
@@ -110,6 +112,7 @@ async function harness(
   return {
     framework,
     subagent,
+    storePath: join(tmpDir, 'store'),
     runs: () => runs,
     running: (name: string) => [...fw.agents.keys()].some((k) => k.startsWith(`spawn-${name}-`) || k.startsWith(`${name}-d`)),
     cleanup: async () => {
@@ -837,6 +840,34 @@ describe('module stop reaches the whole run', () => {
       } finally { await h.cleanup(); }
     }, 20_000);
   }
+
+  test("a run the framework's stop ended reads as interrupted when its session is opened again", async () => {
+    const h = await harness({ maxRetries: 1 }, async () => { throw new Error('503 overloaded'); });
+    const waits = watchWaits(h.subagent);
+    let again: AgentFramework | undefined;
+    try {
+      await h.subagent.handleToolCall(spawn('scout'));
+      await until(() => waits.length === 1);
+      await h.framework.stop();
+      // The session opened again, as a switch back to it opens it.
+      const next = new SubagentModule({ parentAgentName: 'parent', defaultModel: 'mock', defaultMaxTokens: 256 });
+      again = await AgentFramework.create({
+        storePath: h.storePath,
+        membrane: new Membrane(new MockAdapter({ defaultResponse: 'ok' }), { formatter: new NativeFormatter() }),
+        agents: [{ name: 'parent', model: 'mock', systemPrompt: 'parent', maxTokens: 256 }],
+        modules: [next as unknown as Module],
+      });
+      next.setFramework(again);
+      again.start();
+      await until(() => internal(next).activeSubagents.has('spawn-scout'));
+      const restored = internal(next).activeSubagents.get('spawn-scout') as { status: string; statusMessage?: string };
+      expect(restored.status).toBe('cancelled');
+      expect(restored.statusMessage).toBe('interrupted (branch/session switch)');
+    } finally {
+      await again?.stop().catch(() => { /* noop */ });
+      await h.cleanup();
+    }
+  }, 20_000);
 
   test("module stop ends a run's queued child for the module's stop too, not as a user's cancel", async () => {
     const h = await harness({ maxConcurrent: 1, maxRetries: 0 }, () => new Promise(() => { /* stopped by the module */ }));
