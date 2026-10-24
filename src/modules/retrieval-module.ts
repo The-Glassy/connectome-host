@@ -186,7 +186,9 @@ const SELF_WAKE_SOURCE = 'gate:self-wake';
  * last, and is read whole, by context-manager's rule of what makes up a
  * message: a tool call's or result's text shards count as the tool row
  * they belong to.) The key is null where no row qualifies,
- * and then the result is shared until someone else's message lands. The
+ * and then the result is shared until someone else's message lands: for a
+ * subconscious, whose own store holds none, while its entry is kept among
+ * the most recently used (Agnes-1009, room-203 #196733). The
  * result is undefined where the row's id can't be read, so nothing is kept
  * under a key that isn't the row's.
  */

@@ -1813,9 +1813,10 @@ export class SubagentModule implements Module {
     // agent-framework has stored one, so the newest copy in its context
     // isn't one that lists runs since ended. That's usually the next start;
     // while agent-framework holds the agent's window it places the status
-    // rather than storing it, and at the first start after, it may skip it
-    // as one the last request held. A running subagent's progress is
-    // `peek`'s to show.
+    // rather than storing it, and stores it at the first start after, since
+    // what it skips as held is what the last request rendered from the store
+    // (noteRenderedInjections), which a placed status isn't. A running
+    // subagent's progress is `peek`'s to show.
     const lines: string[] = [];
     let latestChange: number | undefined;
     for (const [, sa] of this.activeSubagents) {
@@ -1825,10 +1826,13 @@ export class SubagentModule implements Module {
       if (sa.status !== 'running') continue;
       const parent = this.parentMap.get(sa.name) ?? 'agent';
       // The launcher as agents know it, as the result's line names it,
-      // recorded as it launched the run, whether its run goes on or has
-      // ended; a link with no record is cut as before.
-      const parentShort = this.launcherShownOf.get(sa.name)
-        ?? parent.replace(/^(spawn|fork)-/, '').replace(/-d\d+-\d+$/, '').replace(/-retry\d+$/, '');
+      // recorded as it launched the run (claimName), whether its run goes on
+      // or has ended. Every run listed here has that record: it's in scope
+      // through its link, which claimName made with the record, and a link
+      // without one is a restored run's, which is never running
+      // (restoreFromStore). The link itself is the fallback that keeps the
+      // label total.
+      const parentShort = this.launcherShownOf.get(sa.name) ?? parent;
       const task = sa.task.length > 50 ? sa.task.slice(0, 47) + '...' : sa.task;
       lines.push(`  ${sa.name} [${sa.type}] running since ${this.clockTime(sa.startedAt)} parent:${parentShort} "${task}"`);
     }
@@ -2452,17 +2456,24 @@ export class SubagentModule implements Module {
    *  still going on, between its attempts too. Such a run delivers its result to the primary's
    *  window (addForLauncher), and with its launcher's run gone it's in no
    *  other agent's tree (Agnes-1009, room-203 #198350). The status lists
-   *  the ones running or waiting, and `peek` shows the ones running. Its finished ones only
+   *  the ones running and the async ones waiting for a slot (a sync run
+   *  waiting for one has no entry yet), and `peek` shows the ones running.
+   *  Its finished ones only
    *  date the status: a later "as of", with nothing changed since, says no
    *  less, where leaving one out would date a "(none running)" before that
    *  run's end. */
   private scopeOf(agentFrameworkName: string): Set<string> {
     const scope = this.getDescendantDisplayNames(agentFrameworkName);
     if (agentFrameworkName !== this.config.parentAgentName) return scope;
+    const goingOn = new Set(this.runOfAttempt.values());
     for (const child of this.orphanedRuns()) {
       if (scope.has(child)) continue;
       scope.add(child);
-      this.collectDescendants(undefined, child, scope);
+      // Only a run going on has runs under it here: a finished one's
+      // children are orphans of their own (orphanedRuns lists them), since
+      // its attempts are neither listed nor indexed any more. So a read walks
+      // the links once per orphan going on, however many have finished.
+      if (goingOn.has(child)) this.collectDescendants(undefined, child, scope);
     }
     return scope;
   }
@@ -3205,7 +3216,7 @@ export class SubagentModule implements Module {
    *  same display name is another agent; runOfAttempt gives the run of each
    *  attempt until the run ends. The line names it as agents know it
    *  (`launcherShown`, shownName): a fork's or a subagent's display name,
-   *  read while it ran (#198350). With no launcher named, it lands there as
+   *  read while it ran (#198350). With no launcher named, or the empty name, it lands there as
    *  before. A write that fails otherwise throws, as before. Returns the
    *  agent to wake, or null: none for a result the primary takes because
    *  its launcher's attempt has ended, read at its next start, as on main
@@ -3217,7 +3228,9 @@ export class SubagentModule implements Module {
       if (forAgent !== undefined) ctx.addMessage('user', content, undefined, { forAgent });
       else ctx.addMessage('user', content);
     };
-    if (launcher === undefined) {
+    // The empty name is none, as claimName reads it, and agent-framework
+    // refuses it as a write's target even where an agent is registered under it.
+    if (launcher === undefined || launcher === '') {
       say('');
       return UNNAMED_LAUNCHER;
     }

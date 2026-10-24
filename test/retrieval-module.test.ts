@@ -993,7 +993,7 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     return { calls, rows, add, say, own, toolRound, mod, block, responses };
   }
 
-  test('a restart after tool rounds gets the turn\'s block, with no model calls', async () => {
+  test('a budget restart after tool rounds gets the turn\'s block, with no model calls', async () => {
     const h = turnHarness(['["memory"]']);
     h.say('user', 'What do you remember about the memory detail?');
     const first = await h.mod.gatherContext(AGENT);
@@ -1025,7 +1025,7 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     expect(h.block(await h.mod.gatherContext(AGENT))).toStartWith('## Retrieved Knowledge\n');
   });
 
-  test('a message stored in shards is quoted from its start, and a restart keeps its block', async () => {
+  test('a message stored in shards is quoted from its start, and a budget restart keeps its block', async () => {
     const h = turnHarness(['["memory"]']);
     h.add('user', [{ type: 'text', text: 'memory shard zero ' }], undefined, { bodyGroupId: 'g1', shardIndex: 0 });
     h.add('user', [{ type: 'text', text: 'and shard one' }], undefined, { bodyGroupId: 'g1', shardIndex: 1 });
@@ -1096,7 +1096,7 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     expect(sent).not.toContain('an earlier lesson');
   });
 
-  test('a turn whose retrieval found nothing keeps that: a restart makes no call', async () => {
+  test('a turn whose retrieval found nothing keeps that: a budget restart makes no call', async () => {
     const h = turnHarness(['[]']);
     h.say('user', 'Nothing to recall here.');
     expect(await h.mod.gatherContext(AGENT)).toEqual([]);
@@ -1228,7 +1228,7 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     expect(h.calls).toHaveLength(2);
   });
 
-  test('a turn whose concepts match no lesson keeps that: a restart makes no call', async () => {
+  test('a turn whose concepts match no lesson keeps that: a budget restart makes no call', async () => {
     const h = turnHarness(['["zebra"]']);
     h.say('user', 'Tell me about zebras.');
     expect(await h.mod.gatherContext(AGENT)).toEqual([]);
@@ -1236,7 +1236,7 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     expect(h.calls).toHaveLength(1);
   });
 
-  test('a turn whose relevance check keeps no lesson keeps that: a restart makes no call', async () => {
+  test('a turn whose relevance check keeps no lesson keeps that: a budget restart makes no call', async () => {
     const lessons = [1, 2, 3, 4].map(n => lesson(`l${n}`, `memory detail ${n}`));
     const h = turnHarness(['["memory"]', '[]'], { lessons });
     h.say('user', 'Tell me the memory detail.');

@@ -9,7 +9,7 @@
     most recently used, where they followed the residents' conversation.
     It keeps each agent's lessons for the turn's opening message, the
     newest row someone other than the agent wrote to it. A later start of
-    the same turn, such as a restart after a tool round, gets the same
+    the same turn, such as a budget restart after a tool round, gets the same
     block with no model calls, an empty result of those calls included,
     within one process and while its entry is among the 64 most recently
     used; a Web UI preview with injections counts as a start too, so one
