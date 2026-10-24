@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, spyOn } from 'bun:test';
 import { SettingsModule, type ReasoningEffort } from '../src/modules/settings-module.js';
 import type { ModuleContext } from '@animalabs/agent-framework';
 import { JsStore } from '@animalabs/chronicle';
@@ -210,6 +210,24 @@ describe('reasoning follows branch state without restarting the module', () => {
     expect(mod.getReasoning()).toEqual(destination.reasoning);
     expect(states.get('B')).toEqual(destination);
     expect(states.get('A')).toEqual(source);
+  });
+
+  test('a malformed saved value is logged once however often it is read, and a different one is logged too', async () => {
+    const errors = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      let saved: unknown = { reasoning: { display: 'loud' } };
+      const mod = new SettingsModule();
+      await mod.start({ getState: () => saved, setState: (s: unknown) => { saved = structuredClone(s); } } as unknown as ModuleContext);
+      for (let i = 0; i < 3; i++) expect(mod.getReasoning().display).toBe('summarized');
+      mod.getAgentSettingsExtension().get('a');
+      saved = { reasoning: { display: 'quiet' } };
+      mod.getReasoning();
+      mod.getReasoning();
+      const lines = errors.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('reasoning.display'));
+      expect(lines).toEqual([expect.stringContaining('"loud"'), expect.stringContaining('"quiet"')]);
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   test('real Chronicle branch switch to earlier empty state uses recipe effort and isolates writes', async () => {

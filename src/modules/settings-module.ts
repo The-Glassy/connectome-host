@@ -75,6 +75,8 @@ export class SettingsModule implements Module {
   readonly name = 'settings';
 
   private ctx: ModuleContext | null = null;
+  /** Each malformed saved value already logged, so it's named once rather than on every read. */
+  private readonly warned = new Set<string>();
 
   constructor(private readonly initialEffort: ReasoningEffort = 'default') {}
 
@@ -90,7 +92,7 @@ export class SettingsModule implements Module {
   private current(): { reasoning: ReasoningSettings; effortOverride: ReasoningEffort | undefined } {
     const saved = this.ctx?.getState<{ reasoning?: unknown }>()?.reasoning;
     const baseline = { ...DEFAULTS.reasoning, effort: this.initialEffort };
-    return { reasoning: restoreReasoning(saved, baseline), effortOverride: savedEffortOverride(saved) };
+    return { reasoning: restoreReasoning(saved, baseline, this.warned), effortOverride: savedEffortOverride(saved) };
   }
 
   async stop(): Promise<void> {
@@ -266,15 +268,19 @@ function reasoningSettingsView(r: ReasoningSettings): Record<string, unknown> {
  * display and effort are sent on every turn, one bad value would fail every
  * turn, leaving the agent no turn to fix the setting with. Such a value falls
  * back to the baseline, which is the default except for an effort the recipe
- * sets, and the host logs the value it uses instead.
+ * sets, and the host logs the value it uses instead, once for each saved value
+ * it meets.
  */
-function restoreReasoning(saved: unknown, baseline = DEFAULTS.reasoning): ReasoningSettings {
+function restoreReasoning(saved: unknown, baseline = DEFAULTS.reasoning, warned?: Set<string>): ReasoningSettings {
   const restored = clone(baseline);
   if (!saved || typeof saved !== 'object') return restored;
   const s = saved as Record<string, unknown>;
-  const ignore = (field: keyof ReasoningSettings, value: unknown) => console.error(
-    `[settings] ignoring saved reasoning.${field}=${JSON.stringify(value)}: not a valid value; using ${JSON.stringify(restored[field])}`,
-  );
+  const ignore = (field: keyof ReasoningSettings, value: unknown) => {
+    const line = `[settings] ignoring saved reasoning.${field}=${JSON.stringify(value)}: not a valid value; using ${JSON.stringify(restored[field])}`;
+    if (warned?.has(line)) return;
+    warned?.add(line);
+    console.error(line);
+  };
   if (s.enabled !== undefined) {
     if (typeof s.enabled === 'boolean') restored.enabled = s.enabled;
     else ignore('enabled', s.enabled);
