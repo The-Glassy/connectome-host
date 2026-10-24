@@ -214,7 +214,7 @@ describe('the fleet status', () => {
     expect(await after.status()).toBeUndefined();
   });
 
-  test('a status stored in shards is read whole, so its last shard\'s runs count', async () => {
+  test('a status stored in shards is judged by its newest row, its last shard, whose first line is a run\'s, not its heading', async () => {
     const f = fleet();
     const scout = f.add('scout');
     const miner = f.add('miner');
