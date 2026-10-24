@@ -243,6 +243,7 @@ function inputsOf(input: unknown): Record<string, unknown> | null {
 function stopLabel(reason: SubagentTerminated['reason']): string {
   switch (reason) {
     case 'cancelled': return 'Stopped by user';
+    case 'killed': return "Stopped: its session stopped, as at a session switch or the host's exit";
     case 'zombie': return `Stopped: it showed no activity for over ${duration(ZOMBIE_THRESHOLD_MS)}, so the host reclaimed its slot`;
     default: return 'Stopped';
   }
@@ -1519,6 +1520,19 @@ export class SubagentModule implements Module {
       clearInterval(this.reaperTimer);
       this.reaperTimer = null;
     }
+    // End every run left, such as one waiting for a slot, a retry back-off or
+    // a rate-limit cooldown, so none tries again once its wait ends. A live
+    // attempt was rejected before this, by framework.stop(), which rejects
+    // every ephemeral run before it stops modules, and its run ended on that
+    // while ctx was still set. A run queued behind it is admitted as that
+    // run fails, and its own attempt meets the framework's refusal before
+    // this runs, so it ends as a failure too. The runs this ends settle in a
+    // later microtask, once ctx is null, so a background run's result isn't
+    // delivered (deliverAsyncResult) and its end isn't persisted
+    // (persistState): restoreFromStore reads one that had started as
+    // interrupted, as before stop() ended it, and one still queued for a
+    // slot left no record.
+    for (const name of [...this.cancellationHandles.keys()]) this.stopTree(name, 'killed');
     this.ctx = null;
   }
 
@@ -2085,8 +2099,9 @@ export class SubagentModule implements Module {
 
   /** A cancel for one run, by its name, from before the run queues. A name
    *  means one live run (nameInUse refuses a second), so the name finds it.
-   *  cancelSubagent and the zombie reaper reject it and drop it, and the
-   *  run's end drops it (dispose). Everything the run waits on races it:
+   *  cancelSubagent, cancelAll and the module's stop (stopTree) and the
+   *  zombie reaper reject it and drop it, and the run's end drops it
+   *  (dispose). Everything the run waits on races it:
    *  the slot queue, an attempt's setup (creating the agent, a fork's read
    *  of its parent's context, compiling its prompt), each attempt's race and
    *  the waits between attempts. A cancel that lands just as compiling
@@ -2109,10 +2124,11 @@ export class SubagentModule implements Module {
     };
   }
 
-  /** End a run a cancel or the reaper stopped: 'cancelled', with what it
-   *  had said so far. `started` says whether an attempt reached its run
-   *  (failedRun), so a stop before that says nothing ran, as one while it
-   *  queued does (endQueued). */
+  /** End a run that a cancel, the module's stop or the reaper stopped:
+   *  'cancelled', with the stop's reason as its statusMessage, and its
+   *  label (stopLabel) before what it had said so far. `started` says
+   *  whether an attempt reached its run (failedRun), so a stop before that
+   *  says nothing ran, as one while it queued does (endQueued). */
   private endTerminated(name: string, entry: ActiveSubagent, err: SubagentTerminated, waitedMs: number, started: boolean): SubagentResult {
     // Postmortem 2026-05-28 P1 #4: terminal-but-benign — 'cancelled', not
     // 'completed'. Before this, the TUI subagent list rendered these as
@@ -2269,11 +2285,12 @@ export class SubagentModule implements Module {
     return count;
   }
 
-  /** Stop the run named, its children first (bottom-up, so their results
-   *  propagate before the parent's), and return how many runs this stopped. */
-  private stopTree(displayName: string): number {
+  /** Stop the run named and its children, each child rejected before its
+   *  parent (bottom-up), each for `reason`: 'cancelled' for a cancel,
+   *  'killed' for the module's stop. Returns how many runs this stopped. */
+  private stopTree(displayName: string, reason: 'cancelled' | 'killed' = 'cancelled'): number {
     let stopped = 0;
-    for (const child of this.childrenOf(displayName)) stopped += this.stopTree(child);
+    for (const child of this.childrenOf(displayName)) stopped += this.stopTree(child, reason);
 
     const handle = this.cancellationHandles.get(displayName);
     if (!handle) return stopped;
@@ -2289,7 +2306,8 @@ export class SubagentModule implements Module {
     }
 
     // End the run wherever it waits: the slot queue, an attempt or a back-off
-    handle.reject(new SubagentTerminated('cancelled', partial, `Subagent "${displayName}" cancelled by user`));
+    const cause = reason === 'cancelled' ? 'cancelled by user' : 'stopped as its module stopped';
+    handle.reject(new SubagentTerminated(reason, partial, `Subagent "${displayName}" ${cause}`));
     this.cancellationHandles.delete(displayName);
     return stopped + 1;
   }
