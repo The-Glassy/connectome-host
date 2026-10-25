@@ -16,7 +16,6 @@ import {
   mergeRecipeServers,
   RECIPE_OVERRIDABLE_SERVER_FIELDS,
 } from '../src/mcpl-config.js';
-import type { McplServerConfigWithToolHints } from '../src/af-toolhints-shim.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -74,8 +73,5 @@ describe('what the host hands agent-framework', () => {
     const merged = mergeRecipeServers({ surfaces: { url: 'ws://127.0.0.1:1/mcpl', toolHints: true } }, []);
     const final = applyAgentOverlay(merged, join(tmpdir(), 'no-such-dir', 'mcpl-servers.agent.json'));
     expect(final).toEqual([{ id: 'surfaces', url: 'ws://127.0.0.1:1/mcpl', toolHints: true }]);
-    // The shape agent-framework's RFC-014 release takes.
-    const config: McplServerConfigWithToolHints = { id: 'surfaces', url: 'ws://127.0.0.1:1/mcpl', toolHints: true };
-    expect(config.toolHints).toBe(true);
   });
 });

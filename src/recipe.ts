@@ -19,7 +19,6 @@ import { parseHandWrittenJson } from './hand-written-json.js';
 import { validateToolClassTable, validateToolLifecycle } from './tool-lifecycle-config.js';
 import { isLoopbackOrTailnetHost } from './history-semantic.js';
 import { REASONING_EFFORTS, type ReasoningEffort } from './modules/settings-module.js';
-import type { McplServerConfigWithToolHints } from './af-toolhints-shim.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -530,7 +529,7 @@ export interface RecipeMcpServer {
    * Hints confer no authority. Passed through to agent-framework; omitted,
    * the framework's default applies.
    */
-  toolHints?: McplServerConfigWithToolHints['toolHints'];
+  toolHints?: boolean;
   /**
    * Tool allow-list (bare tool names as the server exports them, no toolPrefix).
    * `*` is a substring wildcard (`read_*`, `*_file`, `*`).

@@ -9,7 +9,6 @@ import { resolve, dirname } from 'node:path';
 import { namesEnvReference, type RecipeToolLifecycle } from './recipe.js';
 import { validateToolLifecycle } from './tool-lifecycle-config.js';
 import { parseHandWrittenJson } from './hand-written-json.js';
-import type { McplServerConfigWithToolHints } from './af-toolhints-shim.js';
 import { resolveServerBinding, serverConfigProblems } from '@animalabs/agent-framework';
 
 /** Default config file path, resolved from cwd. */
@@ -69,7 +68,7 @@ export interface ServerFileEntry {
   /** MCPL tool lifecycle (RFC-007) policy — see RecipeMcpServer.toolLifecycle. */
   toolLifecycle?: RecipeToolLifecycle;
   /** MCPL RFC-014 opt-in — see RecipeMcpServer.toolHints. */
-  toolHints?: McplServerConfigWithToolHints['toolHints'];
+  toolHints?: boolean;
 }
 
 export interface McplServersFile {
