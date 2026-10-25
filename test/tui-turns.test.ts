@@ -2,8 +2,9 @@
  * The TUI's Escape and its session switch, run through runTui itself
  * (test/mock-tui-turns-child.ts): when Escape acts, the lines it shows and
  * the aborts it asks for in each state of the root's turn and with a
- * subagent running, where the status bar offers it, and which framework the
- * status line follows once a switch ends.
+ * subagent running, where the status bar offers it, which framework the
+ * status line follows once a switch ends, and the error lines and phase a
+ * subagent's failed and exhausted streams show.
  */
 import { describe, expect, test } from 'bun:test';
 import { spawn } from 'node:child_process';
@@ -190,5 +191,36 @@ describe("the TUI's Escape with a subagent running, through runTui", () => {
     expect(at('subagents, Escape').aborts).toEqual(['first:spawn-1', 'cancelAll', 'first:agent']);
     expect(at('subagents, Escape').frame).toContain('1 subagent stopped');
     expect(at('subagent compiled').aborts).toEqual(['first:spawn-1', 'cancelAll', 'first:agent', 'first:spawn-1']);
+  }, 40000);
+});
+
+describe("the TUI's subagent exhaustion, through runTui", () => {
+  test("shows lone failures, deduplicates paired ends and tracks the failed phase", async () => {
+    const steps = await play('subagent-exhausted');
+    const at = (name: string): Step => {
+      const step = steps.get(name);
+      if (!step) throw new Error(`no step ${name}`);
+      return step;
+    };
+    expect(at('before exhaustion').frame).toMatch(/web  \[sending /);
+    expect(at('failed phase').frame).toMatch(/web  \[failed /);
+
+    const web = '[spawn-web-1700000000000] Error: ';
+    const cases = [
+      ['lone first', [`${web}lone first stream`]],
+      ['paired', [`${web}paired stream`]],
+      ['lone later', [`${web}lone later stream`]],
+      ['other agent', ['[spawn-2] Error: other agent stream']],
+      ['retried', [`${web}first try`, `${web}retry exhausted`]],
+      ['interleaved', ['[spawn-web-1700000000001] Error: failing stream', '[spawn-web-1700000000002] Error: lone stream']],
+    ] as const;
+    for (let i = 0; i < cases.length; i++) {
+      const frame = at(cases[i]![0]).frame;
+      for (let j = 0; j < cases.length; j++) {
+        for (const line of cases[j]![1]) expect(times(frame, line)).toBe(j <= i ? 1 : 0);
+      }
+    }
+
+    expect(times(at('after switch').frame, `${web}after switch`)).toBe(1);
   }, 40000);
 });
