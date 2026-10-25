@@ -596,7 +596,6 @@ export async function runTui(app: AppContext): Promise<void> {
   // Subagent phase tracking
   type SubagentPhase = 'sending' | 'streaming' | 'invoking' | 'executing' | 'done' | 'failed';
   const subagentPhase = new Map<string, SubagentPhase>();
-  // A stream can exhaust alone or after a failure already shown in chat.
   const subagentFailureShown = new Set<string>();
   const PHASE_COLOR: Record<SubagentPhase, string> = {
     sending: YELLOW,
@@ -2113,7 +2112,6 @@ export async function runTui(app: AppContext): Promise<void> {
       }
 
       case 'inference:exhausted': {
-        // The root uses rootEnd; a paired subagent failure already showed.
         if (agent !== rootAgentName) {
           if (agent && subagentFailureShown.delete(agent)) break;
           if (agent) subagentPhase.set(shortAgentName(agent), 'failed');

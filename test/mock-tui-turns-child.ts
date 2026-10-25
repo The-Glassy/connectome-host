@@ -4,8 +4,8 @@
  * step names to every listener, as agent-framework's emitTrace calls each
  * one, and its abortInference aborts only once told an agent's model call is
  * in flight, then sends `inference:aborted` alone, as agent-framework
- * 0.22.3's does. In the `subagents` scenario its subagent module stands in
- * for the host's.
+ * 0.22.3's does. In the `subagents` and `subagent-exhausted` scenarios its
+ * subagent module stands in for the host's.
  * Prints one `TUI_STEP` line of JSON per step: the frame's text and the
  * aborts asked for so far.
  */
@@ -29,7 +29,7 @@ let ready!: () => void;
 const initialized = new Promise<void>(resolve => { ready = resolve; });
 const aborts: string[] = [];
 
-/** The subagent module, as runTui reads it: one live attempt, spawn-1. */
+/** The subagent module, as runTui reads it: in `subagents`, one live attempt, spawn-1. */
 const subagents = {
   name: 'subagent',
   activeSubagents: new Map(),
@@ -255,7 +255,6 @@ async function play(): Promise<void> {
     await step('subagent compiled');
   } else if (scenario === 'subagent-exhausted') {
     const agentName = 'spawn-web-1700000000000';
-    // Keep the module status running: only the trace can set the TUI phase.
     subagents.activeSubagents.set(agentName, {
       name: 'web', status: 'running', startedAt: Date.now(),
       task: 'Check stream failures', toolCallsCount: 0,
@@ -284,6 +283,30 @@ async function play(): Promise<void> {
     first.send('inference:started', { agentName: 'spawn-2' });
     first.send('inference:exhausted', { agentName: 'spawn-2', error: 'other agent stream' });
     await step('other agent');
+
+    first.send('inference:started', { agentName });
+    first.send('inference:failed', { agentName, error: 'first try' });
+    first.send('inference:started', { agentName });
+    first.send('inference:exhausted', { agentName, error: 'retry exhausted' });
+    await step('retried');
+
+    const failing = 'spawn-web-1700000000001';
+    const lone = 'spawn-web-1700000000002';
+    first.send('inference:started', { agentName: failing });
+    first.send('inference:failed', { agentName: failing, error: 'failing stream' });
+    first.send('inference:started', { agentName: lone });
+    first.send('inference:exhausted', { agentName: lone, error: 'lone stream' });
+    first.send('inference:exhausted', { agentName: failing, error: 'failing stream' });
+    await step('interleaved');
+
+    first.send('inference:started', { agentName });
+    first.send('inference:failed', { agentName, error: 'before switch' });
+    await command('/session switch other');
+    await until(async () => (await frame()).includes('switching'), 'the switch to start');
+    endSwitch('switched');
+    await until(async () => (await frame()).includes('Session: other'), 'the switch to end');
+    second.send('inference:exhausted', { agentName, error: 'after switch' });
+    await step('after switch');
   } else {
     throw new Error(`unknown scenario ${scenario}`);
   }
