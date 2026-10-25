@@ -337,7 +337,7 @@ Servers an agent deploys for itself (`mcpl-servers.agent.json`) can never hold e
 }
 ```
 
-Set it in the recipe, or in `mcpl-servers.json` for a server the recipe names. A recipe naming such a server may override it, so `false` there turns it off. It must be `true` or `false`; anything else stops the load. Omitted, agent-framework's default applies. It takes effect with an agent-framework that implements RFC-014; older ones ignore it.
+Set it in the recipe, or in `mcpl-servers.json` for a server the recipe names. A recipe naming such a server may override it, so `false` there turns it off. It must be `true` or `false`: anything else stops the load. In the agent's own overlay (`mcpl-servers.agent.json`), anything else is left out and named in a startup line, and the server gets the default. Omitted, agent-framework's default applies. It takes effect with an agent-framework that implements RFC-014; older ones ignore it.
 
 ### Included recipes
 

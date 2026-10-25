@@ -14,6 +14,8 @@ import {
   applyAgentOverlay,
   loadMcplServers,
   mergeRecipeServers,
+  overlayWarnings,
+  readOverlayEntry,
   RECIPE_OVERRIDABLE_SERVER_FIELDS,
 } from '../src/mcpl-config.js';
 
@@ -21,10 +23,10 @@ const dirs: string[] = [];
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
-function serversFile(servers: Record<string, unknown>): string {
+function serversFile(servers: Record<string, unknown>, name = 'mcpl-servers.json'): string {
   const dir = mkdtempSync(join(tmpdir(), 'tool-hints-'));
   dirs.push(dir);
-  const path = join(dir, 'mcpl-servers.json');
+  const path = join(dir, name);
   writeFileSync(path, JSON.stringify({ mcplServers: servers }));
   return path;
 }
@@ -73,5 +75,44 @@ describe('what the host hands agent-framework', () => {
     const merged = mergeRecipeServers({ surfaces: { url: 'ws://127.0.0.1:1/mcpl', toolHints: true } }, []);
     const final = applyAgentOverlay(merged, join(tmpdir(), 'no-such-dir', 'mcpl-servers.agent.json'));
     expect(final).toEqual([{ id: 'surfaces', url: 'ws://127.0.0.1:1/mcpl', toolHints: true }]);
+  });
+});
+
+describe('the agent overlay: toolHints', () => {
+  test('passes true or false through, including over a recipe server it replaces', () => {
+    const merged = mergeRecipeServers({ surfaces: { url: 'ws://127.0.0.1:1/mcpl', toolHints: true } }, []);
+    const overlay = serversFile(
+      { surfaces: { url: 'ws://127.0.0.1:1/mcpl', toolHints: false }, mine: { command: 'node', toolHints: true } },
+      'mcpl-servers.agent.json',
+    );
+    const byId = Object.fromEntries(applyAgentOverlay(merged, overlay).map((s) => [s.id, s]));
+    expect(byId.surfaces.toolHints).toBe(false);
+    expect(byId.mine.toolHints).toBe(true);
+    expect(overlayWarnings(merged, overlay).filter((line) => line.includes('toolHints'))).toEqual([]);
+  });
+
+  test('refuses any other value: left out of what the boot loads, and named in the startup lines', () => {
+    const odd: Record<string, unknown> = { quoted: 'false', one: 1, empty: null, listed: [true], object: {} };
+    const overlay = serversFile(
+      Object.fromEntries(Object.entries(odd).map(([id, toolHints]) => [id, { command: 'node', toolHints }])),
+      'mcpl-servers.agent.json',
+    );
+    const loaded = applyAgentOverlay([], overlay);
+    expect(loaded.map((s) => s.id).sort()).toEqual(Object.keys(odd).sort());
+    // Each server still loads, with no toolHints for agent-framework to read by its truth.
+    for (const server of loaded) expect('toolHints' in server).toBe(false);
+    const lines = overlayWarnings([], overlay).filter((line) => line.includes('toolHints'));
+    expect(lines).toHaveLength(Object.keys(odd).length);
+    for (const id of Object.keys(odd)) {
+      expect(lines.some((line) => line.includes(`server "${id}"`) && line.includes('its toolHints isn\'t true or false, so it\'s left out'))).toBe(true);
+    }
+    // No line quotes the value it refused.
+    expect(lines.join('\n')).not.toContain('"false"');
+  });
+
+  test('refuses a new write (mcpl_deploy\'s strict reading) whose toolHints isn\'t true or false', () => {
+    expect(readOverlayEntry({ command: 'node', toolHints: 'true' }, { strict: true }).problem)
+      .toBe('its toolHints is neither true nor false');
+    expect(readOverlayEntry({ command: 'node', toolHints: true }, { strict: true }).entry?.toolHints).toBe(true);
   });
 });
