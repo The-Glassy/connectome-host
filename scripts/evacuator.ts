@@ -40,6 +40,7 @@ import { tmpdir } from 'node:os';
 import { Membrane, AnthropicAdapter } from '@animalabs/membrane';
 import { createLineReader, type LineReader } from './lib/line-reader.js';
 import { SessionManager, type SessionMeta } from '../src/session-manager.js';
+import { PRIVATE_DIR_MODE } from '../src/update/data-swap.js';
 import { resolveAgentName } from '../src/agent-name.js';
 import { parseHandWrittenJson } from '../src/hand-written-json.js';
 
@@ -215,10 +216,15 @@ function loadState(dataDir: string): State {
   }
 }
 
+export function writeRecipeOut(out: string, recipe: Record<string, unknown>): void {
+  mkdirSync(dirname(out), { recursive: true, mode: PRIVATE_DIR_MODE });
+  writeFileSync(out, JSON.stringify(recipe, null, 2) + '\n');
+}
+
 /** rename(2) replaces atomically only within one filesystem, so the temp file
  *  sits beside the state file. */
-function saveState(dataDir: string, state: State): void {
-  mkdirSync(dataDir, { recursive: true });
+export function saveState(dataDir: string, state: State): void {
+  mkdirSync(dataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
   const final = statePath(dataDir);
   const tmp = `${final}.tmp`;
   writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n');
@@ -852,8 +858,7 @@ async function runPipeline(opts: Opts, state: State, reader: LineReader) {
       );
     }
   }
-  mkdirSync(dirname(opts.out), { recursive: true });
-  writeFileSync(opts.out, JSON.stringify(recipe, null, 2) + '\n');
+  writeRecipeOut(opts.out, recipe);
 
   const composed = (recipe.agent as Record<string, unknown>).systemPrompt as string;
   console.log(`\n→ Recipe written to ${opts.out}`);

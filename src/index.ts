@@ -52,7 +52,7 @@ import { SettingsModule } from './modules/settings-module.js';
 import { AgentFramework, WorkspaceModule, resolveTimeZone, HistoryModule, type Module } from '@animalabs/agent-framework';
 import { resolve, join, basename } from 'node:path';
 import { appendFile, mkdir, stat, rename } from 'node:fs/promises';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { SubagentModule } from './modules/subagent-module.js';
 import { historyModuleOptions, assertSemanticSearchRegistered } from './history-semantic.js';
 import { LessonsModule } from './modules/lessons-module.js';
@@ -84,6 +84,7 @@ import { currentForStart, releaseHere, type ReleaseHere } from './update/host.js
 import { childrenFilePath, trialPlaces } from './update/contract.js';
 import { hostUpdate, hostVersionOf } from './update/update.js';
 import { armTrialLog } from './update/trial-log.js';
+import { PRIVATE_DIR_MODE } from './update/data-swap.js';
 import { HOST_PACKAGE_JSON } from './bun-floor-check.js';
 import { switchSessionSteps } from './session-switch.js';
 import { resolveAgentName } from './agent-name.js';
@@ -795,6 +796,8 @@ async function main() {
   await waitToBeListed();
   installHere = releaseHere();
   if (installHere !== null) armTrialLog(installHere);
+  // mkdirSync's mode applies only to the directories it creates.
+  mkdirSync(config.dataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
   const recipe = await resolveRecipe();
   const provider = resolveProvider(recipe);
 
