@@ -71,10 +71,13 @@ describe('what the host hands agent-framework', () => {
     expect(merged.find((s) => s.id === 'kept')!.toolHints).toBe(true);
   });
 
-  test('a server the recipe defines itself keeps it as written, through the agent overlay\'s pass', () => {
+  test('a server the recipe defines itself keeps it as written, beside an agent overlay that loads', () => {
     const merged = mergeRecipeServers({ surfaces: { url: 'ws://127.0.0.1:1/mcpl', toolHints: true } }, []);
-    const final = applyAgentOverlay(merged, join(tmpdir(), 'no-such-dir', 'mcpl-servers.agent.json'));
-    expect(final).toEqual([{ id: 'surfaces', url: 'ws://127.0.0.1:1/mcpl', toolHints: true }]);
+    // A real overlay with an entry of its own, so the overlay's pass runs.
+    const overlay = serversFile({ mine: { command: 'node' } }, 'mcpl-servers.agent.json');
+    const final = applyAgentOverlay(merged, overlay);
+    expect(final.find((s) => s.id === 'surfaces')).toEqual({ id: 'surfaces', url: 'ws://127.0.0.1:1/mcpl', toolHints: true });
+    expect(final.map((s) => s.id)).toEqual(['surfaces', 'mine']);
   });
 });
 
