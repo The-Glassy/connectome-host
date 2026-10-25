@@ -240,7 +240,7 @@ loads only when a recipe names its id. For a named id the registry supplies
 the command, args and env, and the recipe entry may carry only policy fields —
 no `command` or `url` needed: `channelSubscription`, `toolPrefix`, feature-set
 and tool toggles, reconnect settings, WebSocket transport, `access`,
-`toolLifecycle` and `inheritEnv` (`RECIPE_OVERRIDABLE_SERVER_FIELDS` in
+`toolLifecycle`, `toolHints` and `inheritEnv` (`RECIPE_OVERRIDABLE_SERVER_FIELDS` in
 `src/mcpl-config.ts`).
 An id-only entry the registry doesn't define is a startup error. Changes take
 effect on restart.
@@ -326,6 +326,18 @@ An unclassed tool is treated as the most restrictive class: observable that it r
 To check what each tool ended up as, and which of the three sources decided it, run `/tools [agent]`, open the web UI's MCP tab, or `GET /debug/tool-classes`. With `mcplAdmin` enabled, the agent's `mcpl_list` shows the same for each server's tools.
 
 Servers an agent deploys for itself (`mcpl-servers.agent.json`) can never hold either permission. The overlay denies `toolLifecycle` and strips any `toolLifecycle` block, as it already does for context hooks and server-initiated inference. To let such a server observe, the operator moves it into the recipe. These settings take effect with an agent-framework that includes tool lifecycle (anima-research/agent-framework#199); older ones ignore them.
+
+### Tool hints and toolsets (MCPL RFC-014)
+
+`toolHints: true` on a server's entry turns on RFC-014 for that server. The host advertises `toolHints` to it, and the server then lists every tool with hints: static or dynamic, visible or not, and which toolset it belongs to. Its toolsets (a game, a builder) can then be opened and closed instead of all being present at once. Hints confer no authority: what the server may do is still its grant.
+
+```json
+"mcpServers": {
+  "surfaces": { "url": "wss://surfaces.example/mcpl", "toolHints": true }
+}
+```
+
+Set it in the recipe, or in `mcpl-servers.json` for a server the recipe names. A recipe naming such a server may override it, so `false` there turns it off. It must be `true` or `false`: anything else stops the load. In the agent's own overlay (`mcpl-servers.agent.json`), anything else is left out and named in a startup line, and the server gets the default. Omitted, agent-framework's default applies. It takes effect with an agent-framework that implements RFC-014; older ones ignore it.
 
 ### Included recipes
 
