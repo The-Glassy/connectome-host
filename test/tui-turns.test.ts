@@ -192,3 +192,30 @@ describe("the TUI's Escape with a subagent running, through runTui", () => {
     expect(at('subagent compiled').aborts).toEqual(['first:spawn-1', 'cancelAll', 'first:agent', 'first:spawn-1']);
   }, 40000);
 });
+
+describe("the TUI's subagent exhaustion, through runTui", () => {
+  test("shows lone failures, deduplicates paired ends and tracks the failed phase", async () => {
+    const steps = await play('subagent-exhausted');
+    const at = (name: string): Step => {
+      const step = steps.get(name);
+      if (!step) throw new Error(`no step ${name}`);
+      return step;
+    };
+    expect(at('before exhaustion').frame).toMatch(/web  \[sending /);
+    expect(at('failed phase').frame).toMatch(/web  \[failed /);
+
+    const cases = [
+      ['lone first', '[spawn-web-1700000000000] Error: lone first stream'],
+      ['paired', '[spawn-web-1700000000000] Error: paired stream'],
+      ['lone later', '[spawn-web-1700000000000] Error: lone later stream'],
+      ['other agent', '[spawn-2] Error: other agent stream'],
+    ] as const;
+    // Each frame retains exactly one line for every failure seen so far.
+    for (let i = 0; i < cases.length; i++) {
+      const frame = at(cases[i]![0]).frame;
+      for (let j = 0; j < cases.length; j++) {
+        expect(times(frame, cases[j]![1])).toBe(j <= i ? 1 : 0);
+      }
+    }
+  }, 40000);
+});

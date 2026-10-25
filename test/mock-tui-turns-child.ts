@@ -36,6 +36,7 @@ const subagents = {
   parentMap: new Map(),
   restoreFromStore() {},
   peek: async () => [],
+  onPeekStream: () => () => {},
   isSubagentAgent: (agentName: string) => agentName === 'spawn-1',
   cancelAll() { aborts.push('cancelAll'); return 1; },
 };
@@ -52,7 +53,7 @@ function fakeFramework(name: string) {
     send(type: string, extra: Trace = {}) {
       for (const listener of [...listeners]) listener({ type, agentName: 'agent', ...extra });
     },
-    getAllModules: () => (scenario === 'subagents' ? [subagents] : []),
+    getAllModules: () => (['subagents', 'subagent-exhausted'].includes(scenario) ? [subagents] : []),
     getAllAgents: () => (scenario === 'subagents' ? [{ name: 'agent' }, { name: 'spawn-1' }] : [{ name: 'agent' }]),
     getModule: () => undefined,
     getAgent: (agentName: string) => agentName === 'agent'
@@ -252,6 +253,37 @@ async function play(): Promise<void> {
     first.send('inference:tokens', { agentName: 'spawn-1' });
     await Promise.resolve();
     await step('subagent compiled');
+  } else if (scenario === 'subagent-exhausted') {
+    const agentName = 'spawn-web-1700000000000';
+    // Keep the module status running: only the trace can set the TUI phase.
+    subagents.activeSubagents.set(agentName, {
+      name: 'web', status: 'running', startedAt: Date.now(),
+      task: 'Check stream failures', toolCallsCount: 0,
+    });
+    const tab = () => pressed(() => mockInput.pressTab(), 'Tab');
+    await tab();
+    await until(async () => /web  \[sending /.test(await frame()), 'the running subagent row');
+    await step('before exhaustion');
+    await tab();
+
+    first.send('inference:started', { agentName });
+    first.send('inference:exhausted', { agentName, error: 'lone first stream' });
+    await step('lone first');
+    await tab();
+    await until(async () => /web  \[failed /.test(await frame()), 'the failed subagent phase');
+    await step('failed phase');
+    await tab();
+
+    first.send('inference:started', { agentName });
+    first.send('inference:failed', { agentName, error: 'paired stream' });
+    first.send('inference:exhausted', { agentName, error: 'paired stream' });
+    await step('paired');
+    first.send('inference:started', { agentName });
+    first.send('inference:exhausted', { agentName, error: 'lone later stream' });
+    await step('lone later');
+    first.send('inference:started', { agentName: 'spawn-2' });
+    first.send('inference:exhausted', { agentName: 'spawn-2', error: 'other agent stream' });
+    await step('other agent');
   } else {
     throw new Error(`unknown scenario ${scenario}`);
   }
