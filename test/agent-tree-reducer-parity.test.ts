@@ -76,6 +76,7 @@ function inlineFold(events: Array<Record<string, unknown>>): InlineFold {
         break;
       }
       case 'inference:failed':
+      case 'inference:exhausted':
         if (agent) phaseByAgent.set(agent, 'failed');
         break;
       case 'tool:started': {
@@ -189,6 +190,13 @@ describe('AgentTreeReducer parity with inline fold', () => {
     assertParity([
       { type: 'inference:started', agentName: 'a', timestamp: t(0) },
       { type: 'inference:failed', agentName: 'a', error: 'rate limited', timestamp: t(1) },
+    ]);
+  });
+
+  test('lone exhausted inference', () => {
+    assertParity([
+      { type: 'inference:started', agentName: 'a', timestamp: t(0) },
+      { type: 'inference:exhausted', agentName: 'a', error: 'Stream aborted', timestamp: t(1) },
     ]);
   });
 

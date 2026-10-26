@@ -655,7 +655,7 @@ describe('scope filters', () => {
     expect(f).toEqual(entry);
   });
 
-  test("a trace needs every scope whose data it carries, a token or block its block's too, and any type not in the table goes to full clients alone", () => {
+  test("a trace needs every scope whose data it carries, a token or block its block's too, a server's refusal before any model ops alone, and any type not in the table goes to full clients alone", () => {
     expect(traceScopes({ type: 'message:added' })).toEqual(['messages']);
     expect(traceScopes({ type: 'inference:tokens', blockType: 'text' })).toEqual(['messages']);
     expect(traceScopes({ type: 'inference:tokens', blockType: 'thinking' })).toEqual(['messages', 'thinking']);
@@ -687,6 +687,23 @@ describe('scope filters', () => {
     expect(traceScopes({ type: 'mcpl:server-closed' })).toEqual(['ops']);
     // A batched wake run without its gate line, which agent-framework adds after 0.26.0.
     expect(traceScopes({ type: 'gate:wake-line-omitted' })).toEqual(['ops']);
+    for (const type of [
+      'gate:policy-added', 'gate:policy-removed', 'gate:config-reconciled', 'gate:shadow-warnings',
+      'mcpl:channels-register', 'mcpl:channel-descriptor-rejected', 'mcpl:channels-changed', 'mcpl:channels-incoming',
+      'mcpl:channel-reconcile-failed', 'mcpl:channel-open-substituted',
+      'mcpl:channel-reconcile-skipped', 'mcpl:channel-opened-by-send', 'mcpl:channel-open-failed',
+      'mcpl:state_registered', 'mcpl:checkpoint_recorded', 'mcpl:state_rollback', 'mcpl:push_event',
+      'tune-out:entered', 'tune-out:cancelled', 'tune-out:timer-failed', 'tune-out:ack-failed',
+    ]) {
+      expect(traceScopes({ type })).toEqual(['ops']);
+    }
+    expect(traceScopes({ type: 'mcpl:channel-lazy-registered' })).toEqual(['messages', 'ops']);
+    for (const type of ['mcpl:inference_start', 'mcpl:inference_fail', 'mcpl:inference_complete']) {
+      expect(traceScopes({ type })).toEqual(['health', 'ops']);
+    }
+    expect(traceScopes({ type: 'mcpl:inference_fail', model: 'claude-sonnet-4-5' })).toEqual(['health', 'ops']);
+    expect(traceScopes({ type: 'mcpl:inference_fail', model: null })).toEqual(['ops']);
+    expect(childEventScopes({ type: 'mcpl:inference_fail', model: null } as never)).toEqual(['ops']);
     expect(traceScopes({ type: 'mcpl:speech-routed' })).toEqual(['messages', 'ops']);
     for (const type of ['inference:published', 'inference:published_complete']) {
       expect(traceScopes({ type })).toEqual(['messages']);
@@ -724,6 +741,7 @@ describe('scope filters', () => {
   test('a frame sent to more than one client needs what its welcome field or request needs, and any other goes to full clients alone', () => {
     const scopesOf = (frame: Record<string, unknown>) => frameScopes(frame as never);
     expect(scopesOf({ type: 'trace', event: { type: 'tool:started' } })).toEqual(['messages', 'tools']);
+    expect(scopesOf({ type: 'trace', event: { type: 'mcpl:inference_fail', model: null } })).toEqual(['ops']);
     expect(scopesOf({ type: 'child-event', childName: 'kid', event: { type: 'lifecycle' } })).toEqual(['health']);
     for (const type of ['usage', 'call-ledger', 'credential-state', 'host-mode']) expect(scopesOf({ type })).toEqual(['health']);
     for (const type of ['inbound-trigger', 'branch-changed', 'stream-ended']) expect(scopesOf({ type })).toEqual(['messages']);

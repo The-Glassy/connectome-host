@@ -67,6 +67,8 @@ export interface ServerFileEntry {
   access?: string;
   /** MCPL tool lifecycle (RFC-007) policy — see RecipeMcpServer.toolLifecycle. */
   toolLifecycle?: RecipeToolLifecycle;
+  /** MCPL RFC-014 opt-in — see RecipeMcpServer.toolHints. */
+  toolHints?: boolean;
 }
 
 export interface McplServersFile {
@@ -117,6 +119,7 @@ export function loadMcplServers(configPath: string): LoadedServerConfig[] {
       disabledTools: entry.disabledTools,
       channelSubscription: entry.channelSubscription,
       ...(entry.toolLifecycle !== undefined ? { toolLifecycle: checkedToolLifecycle(entry.toolLifecycle, id) } : {}),
+      ...(entry.toolHints !== undefined ? { toolHints: checkedToolHints(entry.toolHints, id) } : {}),
     });
   }
 
@@ -125,6 +128,11 @@ export function loadMcplServers(configPath: string): LoadedServerConfig[] {
 
 function checkedInheritEnv(value: unknown, where: string): boolean {
   if (typeof value !== 'boolean') throw new Error(`${where}.inheritEnv must be a boolean`);
+  return value;
+}
+
+function checkedToolHints(value: unknown, id: string): boolean {
+  if (typeof value !== 'boolean') throw new Error(`mcpl-servers.json: mcplServers.${id}.toolHints must be true or false`);
   return value;
 }
 
@@ -147,6 +155,10 @@ export const RECIPE_OVERRIDABLE_SERVER_FIELDS = [
   // MCPL RFC-007: observation of the agent's other tool calls is per-recipe
   // policy, like tool toggles — not a property of where the server came from.
   'toolLifecycle',
+  // MCPL RFC-014: whether the host reads the server's tool hints, and so
+  // whether its toolsets open and close, is how the agent is shown its
+  // tools, which is the recipe's to decide.
+  'toolHints',
 ] as const;
 
 /** A file-defined server with the recipe's policy overrides applied. */
@@ -400,6 +412,10 @@ function setsSomething(value: unknown): boolean {
  *   which reads as false, and the framework is handed true or false, since
  *   agent-framework 0.22.3 refuses any value but true, false or null (null,
  *   main's way of saying off, reads as false, unnamed).
+ * - a `toolHints` that isn't true or false is left out, and named: recipes
+ *   and mcpl-servers.json refuse one, and the overlay refuses its value
+ *   rather than guess what it meant (a truthy "false" would turn hints on),
+ *   so the server gets agent-framework's default.
  * Where main's handling broke:
  * - `args` holding numbers or true/false read as their text, where main
  *   stopped the start (`arg.startsWith`);
@@ -431,7 +447,8 @@ function setsSomething(value: unknown): boolean {
  * `strict` is for new writes (mcpl_deploy): what a model writes now is held
  * to the plain shapes, text where text is meant, lists of text, an env map
  * of text, numbers or true/false, a transport of stdio or websocket, and a
- * reconnect of true or false, so anything else is refused, not saved.
+ * reconnect and a toolHints of true or false, so anything else is refused,
+ * not saved.
  * (mcpl_deploy reads numbers and true/false in a list as their text before
  * this reading, as the boot reads args, so those are saved as text.) It
  * names every field that breaks them at once, joined by "; ", so a deploy
@@ -482,6 +499,7 @@ export function readOverlayEntry(raw: unknown, opts: { strict?: boolean } = {}):
       }
     }
     if (e.reconnect !== undefined && typeof e.reconnect !== 'boolean') problems.push('its reconnect is neither true nor false');
+    if (e.toolHints !== undefined && typeof e.toolHints !== 'boolean') problems.push('its toolHints is neither true nor false');
     if (problems.length > 0) return { problem: problems.join('; ') };
   }
   const notes: string[] = [];
@@ -512,6 +530,13 @@ export function readOverlayEntry(raw: unknown, opts: { strict?: boolean } = {}):
     const read = typeof e.reconnect === 'string' && e.reconnect.trim().toLowerCase() === 'false' ? false : Boolean(e.reconnect);
     notes.push(`its reconnect isn't true or false, so it's read as ${read}: write true or false, without quotes`);
     e.reconnect = read;
+  }
+  // MCPL RFC-014's opt-in is true or false, as recipes and
+  // mcpl-servers.json require. Any other value is left out rather than read
+  // by its truth, so the server gets agent-framework's default.
+  if (e.toolHints !== undefined && typeof e.toolHints !== 'boolean') {
+    notes.push('its toolHints isn\'t true or false, so it\'s left out and the server gets the default: write true or false, without quotes');
+    delete e.toolHints;
   }
   for (const k of OPERATOR_ONLY_OVERLAY_FIELDS) {
     if (setsSomething(e[k])) notes.push(`its ${k} is left out, since only the operator's config grants that: set it in ${OPERATOR_FIELD_HOME[k]}${k === 'enabledCapabilities' ? NARROW_INSTEAD : ''}`);

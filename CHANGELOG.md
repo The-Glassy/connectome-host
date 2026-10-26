@@ -6,6 +6,122 @@ release time — see [CONTRIBUTING.md](CONTRIBUTING.md#changelog).
 
 ## Unreleased
 
+## 0.14.0 — 2026-10-26
+
+### Breaking
+
+- **Scripts driving piped mode:** in piped mode (`--no-tui`, or a batch run
+  whose stdin isn't a TTY), `(turn ended: <error>)`, the line for a primary
+  agent's turn that agent-framework ended as a failure, now prints on
+  stderr, beside the `Error:` lines. It printed on stdout before, among the
+  agent's answer. A script that looked for it on stdout reads stderr for it
+  now, or it takes a failed turn's partial answer as the turn's. Another
+  agent's turn that agent-framework ended this way now prints an `Error:`
+  line on stderr, as that agent's failed attempts already did, where it
+  printed nothing before; an `Error:` line doesn't name its agent.
+  Unchanged: `(turn ended: …)` is the primary agent's alone, the agent's
+  prose and a stop's `(turn aborted: <reason>)` stay on stdout, `Error:`
+  lines stay on stderr, and a script reading stdout and stderr together
+  (`2>&1`) sees the primary agent's lines where it did before.
+
+### Added
+
+- **Operators:** recipes take `agent.autoContinue` (`true`, or
+  `{ "maxConsecutive": 1–20 }`, default 3; off when omitted), passed through
+  to agent-framework's `AgentConfig.autoContinue`: a turn the model ends
+  itself is followed by another until the agent calls `skip_reply`, ends on
+  a `>>skip_reply` / `>>>skip_reply` envelope, or reaches the cap, and each
+  next turn reads a short `[continue]` row. It takes effect with the
+  agent-framework release that adds it; an earlier one ignores it. A value
+  that isn't true, false or such an object is refused when the recipe loads.
+- **Operators:** a fork's or spawn's orientation lists `auto-continue` among the
+  agent settings a subagent stream doesn't take from its launch (`off` for
+  the stream, beside the parent's), since subagents don't inherit it.
+
+- Per-server `toolHints` (the MCPL RFC-014 opt-in that turns on tool hints
+  and toolsets for a server) in recipes and `mcpl-servers.json`, each
+  validated as `true` or `false` (the agent's own overlay leaves any other
+  value out and names it at startup), overridable by a recipe that names a server
+  from `mcpl-servers.json`, and passed through to agent-framework. Takes
+  effect with an agent-framework that implements RFC-014.
+
+### Changed
+
+- **Dependencies:** `@animalabs/agent-framework` ^0.27.0 (was ^0.26.1),
+  `@animalabs/context-manager` ^0.22.1 (was ^0.20.1) and `@animalabs/membrane`
+  ^0.7.2 (was ^0.7.1). `package-lock.json` and `bun.lock` move those three
+  packages and nothing else. What operators and agents meet comes from those
+  releases; see their changelogs. Among it: agent-framework is now the one
+  retry layer for a turn; an agent's own `channel_close` or `channel_decline`
+  holds against its own speech in that channel; the workspace's `read`,
+  `grep`, `edit` and `edit_many` answer as the text the model reads, with
+  their fields in `structured`; a gate policy's `match.channel` in the
+  registered form meets every event in that channel; and `agent.autoContinue`
+  and a server's `toolHints`, which this host already passes through, take
+  effect.
+
+- **Agents on Fable 5/5.1, Mythos 5.1, Opus 5.5 and Sonnet 5.5:** the notes these models write between
+  tool calls ("found X, checking Y next") come back as signed `thinking` blocks, empty under thinking
+  display `'omitted'`, which is also what the API applies when no thinking config is sent. On these
+  models (dated snapshot IDs included) the host now sends `thinking: { type: 'adaptive', display:
+  'updates' }` on streamed calls through the Anthropic API (agent turns, and an MCPL server's streamed
+  inference) wherever it would have left display at `'omitted'`: with reasoning off (these models think anyway), with
+  `reasoning_display` set to `'omitted'`, and, with reasoning off, with a recipe's `agent.thinking.display`
+  set to `'omitted'` (with reasoning on, `reasoning_display` decides). This step leaves
+  one-shot `complete()` calls alone, since they make no tool calls; the reasoning setting still applies
+  to them as before. Reasoning stays hidden as before, and the notes come back as text, in stores,
+  logs and the web UI. A `'summarized'` config, which already returns them (mixed with reasoning
+  summaries), goes as it is, and other models' thinking configs are unchanged. With reasoning off, a recipe's
+  `agent.thinking.display` reaches the host only in the thinking config membrane builds from the
+  recipe's `thinking`. Where membrane builds none, as for a display alone on Fable and Mythos, the call
+  goes as `'updates'` like any other without a config, a recipe's `'summarized'` included.
+  Needs membrane 0.7.0 or later, which adds the `thinking-display-updates-2026-08-18` beta that
+  `'updates'` requires.
+  - **Cache:** on these models the first call after upgrading also sends a thinking config where none
+    or `'omitted'` went before. For an agent given `agent_settings`, that adds no write of its own:
+    the `reasoning_display` description change below already has its whole cached prompt written
+    again at that call. For other requests on these models, such as a subagent whose tools leave
+    `agent_settings` out or an MCPL server's streamed inference, the cached message prefix may be
+    written again, once.
+  - **Bedrock:** an agent on `provider: 'bedrock'` goes through `LoggingBedrockAdapter`, which
+    applies none of `agent_settings`' reasoning fields, this step included: its requests carry the
+    thinking config membrane builds from the recipe, as before.
+- `agent_settings`' `reasoning_display` description no longer tells the agent its reasoning is lost
+  to it on replay under `'omitted'`: a thinking block sent back gives the model its full reasoning
+  either way, and the setting changes only what is recorded as readable text.
+  - **Cache:** the description is part of the `agent_settings` tool, which every host registers, and
+    tools come first in a request. So for each agent given that tool, on any provider whose prompt
+    cache covers the tools, the whole cached prompt is written again once, at its first call after
+    upgrading.
+
+- Piped mode (`--no-tui`, or a batch run whose stdin isn't a TTY) now ends
+  the agent's line on stdout before an `Error:` line, where what came next,
+  such as a batch's echo of its next line or `Done.`, used to follow on the
+  same line. The `Error:` line no longer begins with a line break, nor does
+  `(turn ended: …)` on stderr, so in a terminal showing both the line breaks
+  fall as before. Where stdout's line had already ended, as after a tool's
+  line, stdout now gets an empty line there, and a retried attempt's answer
+  can start after a blank line.
+
+### Fixed
+
+- Reasoning settings now follow the current branch after undo, redo, checkout, or branch switches without a module restart. Partial settings updates and resets preserve destination settings and recipe effort fallback.
+
+- A session switch or the host's exit now ends subagent spawns and forks still waiting for a concurrency slot, a retry back-off or a rate-limit cooldown, rather than leaving each to try again once its wait ends. Such a run's result says "Stopped: its session stopped".
+
+- The TUI now reports a subagent's lone inference:exhausted as a failure in the main log and marks its phase failed, while failed followed by exhausted still shows one failure line there.
+
+- A Web UI observer with the `ops` scope now gets the traces agent-framework
+  already emits for gate.json's policy writes and shadowed rules, an MCPL
+  server's channels, state, checkpoints and pushes, and channel tune-outs.
+  A channel registered at its first push carries the label the push gives
+  it, for a direct message the person's name, so that trace needs
+  `messages` as well.
+  The traces of inference an MCPL server asks for name the model it went
+  to and, at the end, its token counts, so they need `health` as well.
+  Without entries in the observers' trace table they reached full clients
+  only.
+
 ## 0.13.2 — 2026-10-24
 
 ### Added

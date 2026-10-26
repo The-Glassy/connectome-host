@@ -621,6 +621,7 @@ export async function runTui(app: AppContext): Promise<void> {
   // Subagent phase tracking
   type SubagentPhase = 'sending' | 'streaming' | 'invoking' | 'executing' | 'done' | 'failed';
   const subagentPhase = new Map<string, SubagentPhase>();
+  const subagentFailureShown = new Set<string>();
   const PHASE_COLOR: Record<SubagentPhase, string> = {
     sending: YELLOW,
     streaming: CYAN,
@@ -2029,6 +2030,7 @@ export async function runTui(app: AppContext): Promise<void> {
       case 'inference:started': {
         // A new stream: its usage samples count from zero.
         if (agent) streamUsage.set(agent, emptyUsage());
+        if (agent && agent !== rootAgentName) subagentFailureShown.delete(agent);
         if (agent === rootAgentName) {
           if (backgrounded) {
             // Root agent is running in background — don't show stream UI
@@ -2133,7 +2135,17 @@ export async function runTui(app: AppContext): Promise<void> {
           if (agent) {
             const short = shortAgentName(agent);
             subagentPhase.set(short, 'failed');
+            subagentFailureShown.add(agent);
           }
+          addEvent(`[${agent}] Error: ${traceError(event)}`, DIM_GRAY);
+        }
+        break;
+      }
+
+      case 'inference:exhausted': {
+        if (agent !== rootAgentName) {
+          if (agent && subagentFailureShown.delete(agent)) break;
+          if (agent) subagentPhase.set(shortAgentName(agent), 'failed');
           addEvent(`[${agent}] Error: ${traceError(event)}`, DIM_GRAY);
         }
         break;
@@ -2521,6 +2533,7 @@ export async function runTui(app: AppContext): Promise<void> {
     summaryPending.clear();
     summaryBackoffUntil.clear();
     subagentPhase.clear();
+    subagentFailureShown.clear();
     state.subagents = [];
     seenFleetHeaders.clear();
     expandedNodes.clear();

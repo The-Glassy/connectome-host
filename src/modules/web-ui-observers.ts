@@ -640,8 +640,7 @@ const ALL_BUT_DEBUG: FrameScopes = AGENT_TREE_SCOPES;
  * request-host-mode are 'health'. Refusals, failures and what operators did
  * are 'ops' alerts, as request-operator-log is. A trace type not here goes to
  * full clients alone, so a framework release's new types reach no observer
- * until they're given an entry; a test reads the installed framework's types
- * and fails on one without.
+ * until they're given an entry.
  */
 export const TRACE_SCOPES: Readonly<Record<string, FrameScopes>> = {
   // The conversation and its turns.
@@ -706,6 +705,10 @@ export const TRACE_SCOPES: Readonly<Record<string, FrameScopes>> = {
   'gate:config-reloaded': OPS,
   'gate:decision': OPS,
   'gate:wake-line-omitted': OPS,
+  'gate:policy-added': OPS,
+  'gate:policy-removed': OPS,
+  'gate:config-reconciled': OPS,
+  'gate:shadow-warnings': OPS,
   'mcpl:push-event-rejected': OPS,
   'mcpl:channel-incoming-rejected': OPS,
   'mcpl:empty-content-dropped': OPS,
@@ -732,6 +735,27 @@ export const TRACE_SCOPES: Readonly<Record<string, FrameScopes>> = {
   'mcpl:conversation-closed': OPS,
   'mcpl:conversation-disposed': OPS,
   'mcpl:speech-route-failed': OPS,
+  'mcpl:channels-register': OPS,
+  'mcpl:channel-descriptor-rejected': OPS,
+  'mcpl:channels-changed': OPS,
+  'mcpl:channels-incoming': OPS,
+  'mcpl:channel-lazy-registered': ['messages', 'ops'],
+  'mcpl:channel-reconcile-failed': OPS,
+  'mcpl:channel-open-substituted': OPS,
+  'mcpl:channel-reconcile-skipped': OPS,
+  'mcpl:channel-opened-by-send': OPS,
+  'mcpl:channel-open-failed': OPS,
+  'mcpl:state_registered': OPS,
+  'mcpl:checkpoint_recorded': OPS,
+  'mcpl:state_rollback': OPS,
+  'mcpl:push_event': OPS,
+  'mcpl:inference_start': ['health', 'ops'],
+  'mcpl:inference_fail': ['health', 'ops'],
+  'mcpl:inference_complete': ['health', 'ops'],
+  'tune-out:entered': OPS,
+  'tune-out:cancelled': OPS,
+  'tune-out:timer-failed': OPS,
+  'tune-out:ack-failed': OPS,
   // Held speech's delivery: held, resent, dismissed, with no text.
   'prose:drafts-held': OPS,
   'prose:draft-resent': OPS,
@@ -747,8 +771,11 @@ export const TRACE_SCOPES: Readonly<Record<string, FrameScopes>> = {
 
 /** What a trace needs before it may go to an observer (TRACE_SCOPES). A token
  *  delta or a content block needs its block's scope as well: a thinking
- *  block's 'thinking', a tool call's or result's 'tools'. */
-export function traceScopes(event: { type: string; blockType?: unknown }): FrameScopes {
+ *  block's 'thinking', a tool call's or result's 'tools'. A server's
+ *  inference refused before any model was routed names no model, so it needs
+ *  'ops' alone. */
+export function traceScopes(event: { type: string; blockType?: unknown; model?: unknown }): FrameScopes {
+  if (event.type === 'mcpl:inference_fail' && event.model === null) return OPS;
   if (event.type === 'inference:tokens' || event.type === 'inference:content_block') {
     if (event.blockType === 'text') return MESSAGES;
     if (event.blockType === 'thinking') return THINKING;

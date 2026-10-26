@@ -522,6 +522,15 @@ export interface RecipeMcpServer {
   /** Feature-set deny-list; wins over enabledFeatureSets on overlap. */
   disabledFeatureSets?: string[];
   /**
+   * MCPL RFC-014 opt-in: whether this host advertises `toolHints` to the
+   * server, so it lists every tool with its hints (static or dynamic,
+   * visible or not, which toolset) and its toolsets can be opened and
+   * closed, instead of tailoring its list to a host that reads no hints.
+   * Hints confer no authority. Passed through to agent-framework; omitted,
+   * the framework's default applies.
+   */
+  toolHints?: boolean;
+  /**
    * Tool allow-list (bare tool names as the server exports them, no toolPrefix).
    * `*` is a substring wildcard (`read_*`, `*_file`, `*`).
    * If set, only matching tools are exposed to the model AND callable at dispatch.
@@ -2631,6 +2640,9 @@ export function validateRecipe(raw: unknown): Recipe {
       }
       if (server.inheritEnv !== undefined && typeof server.inheritEnv !== 'boolean') {
         throw new Error(`mcpServers.${id}.inheritEnv must be a boolean`);
+      }
+      if (server.toolHints !== undefined && typeof server.toolHints !== 'boolean') {
+        throw new Error(`mcpServers.${id}.toolHints must be true or false`);
       }
       if (server.requestTimeoutMs !== undefined
           && !(typeof server.requestTimeoutMs === 'number' && Number.isFinite(server.requestTimeoutMs) && server.requestTimeoutMs >= 0)) {
