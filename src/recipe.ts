@@ -820,6 +820,41 @@ export interface RecipeWorkspaceMount {
   followSymlinks?: boolean;
 }
 
+/** `modules.wake` as an object: starting rules, and the reply judge. */
+export interface RecipeWake extends Partial<import('@animalabs/agent-framework').GateConfig> {
+  /**
+   * The reply judge: the small model a `judge` wake rule asks whether now is a
+   * good time for the agent to reply, before it wakes the agent
+   * (agent-framework's `GateOptions.judge`). Every key is optional, and
+   * agent-framework's defaults apply where one is left out: Claude Haiku 5.5
+   * on this host's provider, 90,000 input tokens, low effort, a 20 s timeout,
+   * and a wake when the judge fails.
+   */
+  judge?: RecipeReplyJudge;
+}
+
+/** `modules.wake.judge`, as agent-framework's `ReplyJudgeOptions` takes it. */
+export interface RecipeReplyJudge {
+  /** False leaves the judge unwired: `judge` rules then wake as debounces. */
+  enabled?: boolean;
+  /** The judge's model id as this host's provider names it (e.g. an
+   *  `anthropic.`/`anthropic/` prefix on Bedrock/OpenRouter). */
+  model?: string;
+  /** The most input tokens one judge request may carry (4000 or more; default 90000). */
+  maxInputTokens?: number;
+  /** How long a judge request may take, in ms. */
+  timeoutMs?: number;
+  /** What a failed judge does: wake the agent (default) or not. */
+  onError?: 'wake' | 'skip';
+  /** The judge's effort; `none` sends none, for a provider without Anthropic's `output_config`. */
+  effort?: 'low' | 'medium' | 'high' | 'none';
+  /** The prompt cache's lifetime for the judge's context document. */
+  cacheTtl?: '5m' | '1h';
+}
+
+/** `modules.wake.judge`'s keys, kept in step with RecipeReplyJudge (recipeKeyListsInStep). */
+const RECIPE_REPLY_JUDGE_KEYS = ['enabled', 'model', 'maxInputTokens', 'timeoutMs', 'onError', 'effort', 'cacheTtl'] as const;
+
 export interface RecipeModules {
   /**
    * Subagent forking (spawn/fork parallel agents). OPT-IN — defaults to off
@@ -847,7 +882,13 @@ export interface RecipeModules {
      */
     reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   };
-  wake?: boolean | import('@animalabs/agent-framework').GateConfig;
+  /**
+   * The gate (wake rules). `true` or left out: on, with the rules the agent
+   * keeps in its gate.json. `false`: off. An object: on, with `policies` and
+   * `default` as the host's starting rules (agent-framework's GateConfig),
+   * and `judge` configuring the reply judge that `judge` wake rules ask.
+   */
+  wake?: boolean | RecipeWake;
   /**
    * The workspace's mounts. `configMount: true` adds `_config`, the
    * session's config directory, holding only files named `gate.json`,
@@ -1774,7 +1815,8 @@ const recipeKeyListsInStep: [
   ListsExactly<keyof RecipeKvUnifiedConfig['policy'] & string, typeof RECIPE_KV_UNIFIED_POLICY_KEYS>,
   ListsExactly<keyof ClockConfig & string, typeof RECIPE_AGENT_CLOCK_KEYS>,
   ListsExactly<keyof RecipeAutoContinue & string, typeof RECIPE_AGENT_AUTO_CONTINUE_KEYS>,
-] = [true, true, true, true, true, true, true, true];
+  ListsExactly<keyof RecipeReplyJudge & string, typeof RECIPE_REPLY_JUDGE_KEYS>,
+] = [true, true, true, true, true, true, true, true, true];
 void recipeKeyListsInStep;
 
 const RECIPE_WORKSPACE_KEYS = ['mounts', 'configMount'] as const;
@@ -1910,6 +1952,34 @@ const MAX_PENDING_RECIPE_WARNINGS = 50;
 
 export function takeRecipeWarnings(): string[] {
   return pendingRecipeWarnings.splice(0);
+}
+
+/** `modules.wake.judge`, refused with the key and what it must be where it isn't. */
+function validateRecipeReplyJudge(wake: unknown): void {
+  // Only an object can hold a judge; other shapes load as they did before.
+  if (wake === null || typeof wake !== 'object' || Array.isArray(wake)) return;
+  const judge = (wake as Record<string, unknown>).judge;
+  if (judge === undefined) return;
+  if (judge === null || typeof judge !== 'object' || Array.isArray(judge)) {
+    throw new Error('Recipe modules.wake.judge must be an object, such as {"model": "claude-haiku-5-5"}.');
+  }
+  rejectUnknownKeys('modules.wake.judge', judge, RECIPE_REPLY_JUDGE_KEYS);
+  const checks: { readonly [K in keyof RecipeReplyJudge]-?: MountValueCheck } = {
+    enabled: trueOrFalse,
+    model: nonEmptyText,
+    // agent-framework reads a budget under 4000 as 4000.
+    maxInputTokens: (v) => typeof v === 'number' && Number.isInteger(v) && v >= 4000 ? null : 'a whole number of tokens, 4000 or more',
+    timeoutMs: timerMs(1),
+    onError: oneOf(['wake', 'skip']),
+    effort: oneOf(['low', 'medium', 'high', 'none']),
+    cacheTtl: oneOf(['5m', '1h']),
+  };
+  for (const key of RECIPE_REPLY_JUDGE_KEYS) {
+    const value = (judge as Record<string, unknown>)[key];
+    if (value === undefined) continue;
+    const must = checks[key](value);
+    if (must) throw new Error(`Recipe modules.wake.judge.${key} is ${JSON.stringify(value)}; it must be ${must}.`);
+  }
 }
 
 export function validateRecipe(raw: unknown): Recipe {
@@ -2778,6 +2848,11 @@ export function validateRecipe(raw: unknown): Recipe {
         }
       }
     }
+
+    // Validate the reply judge when configured: the host hands it to
+    // agent-framework as written, and agent-framework reads a value it can't
+    // use as its default, so a typo would load as no setting at all.
+    validateRecipeReplyJudge(mods.wake);
 
     const retrieval = mods.retrieval;
     if (retrieval !== undefined && typeof retrieval !== 'boolean') {
