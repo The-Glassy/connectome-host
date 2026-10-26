@@ -42,9 +42,7 @@ async function withChild(home: string, name: string, dataDir: string, then: (rec
 describe("a fleet child's agent overlay", () => {
   test('a new child gets an empty overlay of its own in its data directory, its owner\'s alone whatever the working directory\'s mode, and every reader of the overlay takes its path', async () => {
     const { home, overlay, text } = parentHome();
-    // The working directory's overlay as the host writes it under a common
-    // umask, readable by others; and no umask now, so the mode the seed asks
-    // for is the mode the file gets.
+    // With no umask, the mode the seed asks for is the mode the file gets.
     const umask = process.umask(0);
     try {
       chmodSync(overlay, 0o644);
@@ -197,7 +195,6 @@ describe("a fleet child's agent overlay", () => {
     }
   }, 60_000);
 
-  // Root writes into a directory whatever its mode, so there the seed can't be made to fail.
   test.skipIf(process.getuid?.() === 0)('a new child whose overlay can\'t be written leaves no startup.log, so a later launch starts it empty, not from a copy',
     async () => {
       const { home } = parentHome();
@@ -264,7 +261,6 @@ describe("a fleet child's agent overlay", () => {
       }
     }, 60_000);
 
-  // CI runs the suite on Linux, where a file-size limit was checked to fail a copy partway.
   test.skipIf(process.platform !== 'linux')('a seed whose copy or write fails after making the file, as on a full disk, leaves no file for the next launch to keep', () => {
     const home = mkdtempSync(join(tmpdir(), 'fleet-child-overlay-full-'));
     try {
@@ -324,7 +320,6 @@ describe("a fleet child's agent overlay", () => {
       mkdirSync(join(home, 'source-dir'));
       expect(() => seedChildAgentOverlay(join(home, 'none.json'), join(home, 'source-dir'), true)).toThrow();
       expect(existsSync(join(home, 'none.json'))).toBe(false);
-      // Root reads a file whatever its mode.
       if (process.getuid?.() !== 0) {
         writeFileSync(join(home, 'shut.json'), text);
         chmodSync(join(home, 'shut.json'), 0o000);
