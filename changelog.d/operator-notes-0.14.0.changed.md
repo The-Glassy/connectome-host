@@ -9,10 +9,11 @@
     agent-framework retried a failed turn up to three times, 1, 2 and 4 s
     apart, and each try went through the host's own retries, up to three
     sends with a 529 retried as any other failure. Those counts and waits hold
-    when the provider states no wait. A wait it states is waited when it's
-    longer, up to ten minutes each, and a resident is held for it before any
-    retry counts; under 0.13 releases, agent-framework's own retries waited a
-    stated wait in place of their 1, 2 and 4 s. `agent.retry` now applies only
+    when the provider states no wait. A longer wait the provider states is
+    waited instead: a resident is held for all of it before any retry counts,
+    and a subagent's run waits up to ten minutes of it and ends on a longer
+    one. Under 0.13 releases, agent-framework's own retries waited a stated
+    wait in place of their 1, 2 and 4 s. `agent.retry` now applies only
     to the host's own provider calls: compression and merging, retrieval,
     session naming and the TUI's status line. The recipe documentation now
     says so.
@@ -21,9 +22,11 @@
     `agent.strategy.maxLiveImages` of 0 now keeps up to 500 live images, and a
     `maxLiveImageBytes` of 0 up to 24 MiB. These are context-manager's image
     ceilings, and a value above one is held to it. This host doesn't pass the
-    ceilings, so a recipe can't raise them. A recipe that sets neither keeps
-    the defaults, 6 images and 20 MiB, as before. The recipe documentation and
-    the agents' memory guide now say so.
+    ceilings, so a recipe can't raise them. The strategy warns at start about
+    a value above a ceiling, and says once which ceiling it held a 0 to when
+    that first leaves an image as a placeholder. A recipe that sets neither
+    keeps the defaults, 6 images and 20 MiB, as before. The recipe
+    documentation and the agents' memory guide now say so.
   - **A pin or document mark on a long message now covers the whole
     message.** Under adaptive resolution, which this host turns on for agents
     on the autobiographical strategy (the default) or frontdesk unless a
@@ -32,10 +35,12 @@
     it now covers every part. So the first compile after upgrading rewrites
     the request once, from that message on, or from earlier where older history
     folds further to make room for it. Where the whole message doesn't fit,
-    the compile refuses as over budget, as for any pin the budget can't hold.
-    Compression requests after the message carry it whole, so they cost more.
-    A mark made as a long message arrived can leave parts no chunk holds,
-    which compression requests carry without counting them against
+    the compile refuses as over budget, as for any pin the budget can't hold;
+    where the plan's middle is what's over, the refusal names the mark and the
+    tokens it keeps raw. Compression requests after the message carry it
+    whole, so they cost more. A mark made as a long message arrived can leave
+    parts no chunk holds, which compression requests carry without counting
+    them against
     `compressionContextBudgetTokens`. Where those come to more than that
     budget, a summarizer with a smaller window would refuse those requests,
     and compression would stop making progress for that store unless
@@ -84,4 +89,6 @@
     under a new key, one embedding per summary; until a branch's summaries
     have been sent again, a search on it can miss one. Going back to a 0.13
     release with `/update back` leaves those summaries out of its searches
-    until the index is rebuilt, and this host has no command that rebuilds it.
+    until the index is rebuilt. The index lives in the embedding service, and
+    neither `/update back`'s data restore nor any command of this host
+    rebuilds it.
