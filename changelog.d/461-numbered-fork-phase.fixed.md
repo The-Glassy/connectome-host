@@ -1,0 +1,1 @@
+- Keep numeric parts of requested subagent names, such as `web-1`, when shortening fork names in the TUI fleet view, so failure or exhaustion marks the numbered fork's own row (#461).

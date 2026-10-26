@@ -355,13 +355,14 @@ export function rootTurnStep(
  *   fork:  `{name}-d{depth}-{stamp}` / `{name}-d{depth}-retry{n}-{stamp}` — no
  *          fork- prefix at all; the -d{depth} suffix must be stripped too,
  *          or every fork resolves to e.g. `web-d1` and matches nothing.
+ * Remove only the generated fork envelope so numeric parts of the requested
+ * name, such as `web-1`, remain intact.
  */
 export function shortAgentName(full: string): string {
-  return full
-    .replace(/^(spawn|fork)-/, '')
-    .replace(/-d\d+(-retry\d+)?-\d+$/, '')
-    .replace(/-\d+$/, '')
-    .replace(/-retry\d+$/, '');
+  const name = full.replace(/^(spawn|fork)-/, '');
+  const fork = name.replace(/-d\d+(-retry\d+)?-\d+$/, '');
+  if (fork !== name) return fork;
+  return name.replace(/-\d+$/, '').replace(/-retry\d+$/, '');
 }
 
 interface AppContext {

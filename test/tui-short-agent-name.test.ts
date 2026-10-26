@@ -20,6 +20,12 @@ describe('shortAgentName', () => {
     expect(shortAgentName('web-d2-retry1-1753221234567')).toBe('web');
   });
 
+  test('numeric parts of requested names survive fork and spawn suffixes', () => {
+    expect(shortAgentName('web-1-d1-1700000000000')).toBe('web-1');
+    expect(shortAgentName('web-1-d2-retry1-1700000000001')).toBe('web-1');
+    expect(shortAgentName('spawn-web-1-1700000000002')).toBe('web-1');
+  });
+
   test('bare trailing -retryN (historical defensive strip)', () => {
     expect(shortAgentName('web-retry2')).toBe('web');
   });

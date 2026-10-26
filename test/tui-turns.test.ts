@@ -224,3 +224,20 @@ describe("the TUI's subagent exhaustion, through runTui", () => {
     expect(times(at('after switch').frame, `${web}after switch`)).toBe(1);
   }, 40000);
 });
+
+describe("the TUI's numbered fork phases, through runTui", () => {
+  for (const scenario of ['numbered-fork-failed', 'numbered-fork-exhausted']) {
+    test(scenario + ': only the numbered row changes from sending to failed', async () => {
+      const steps = await play(scenario);
+      const before = steps.get('before');
+      const after = steps.get('after');
+      if (!before || !after) throw new Error('missing numbered fork frames');
+
+      expect(before.frame).toMatch(/web  \[sending /);
+      expect(before.frame).toMatch(/web-1  \[sending /);
+      expect(after.frame).toMatch(/web-1  \[failed /);
+      expect(after.frame).toMatch(/web  \[sending /);
+      expect(after.frame).not.toMatch(/web  \[failed /);
+    }, 40000);
+  }
+});
