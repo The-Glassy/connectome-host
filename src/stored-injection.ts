@@ -1,7 +1,7 @@
 /**
- * agent-framework stores a module's `afterUser` injection in the agent's
- * store, under participant `system_context:<namespace>`, marked as its
- * `storedInjectionMarkOf` reads (anima-research/context-manager#155 part 5).
+ * agent-framework stores a module's `afterUser` injection in the
+ * agent's store, under participant `system_context:<namespace>`,
+ * marked as its `storedInjectionMarkOf` reads.
  */
 import { storedInjectionMarkOf, type StoredInjectionMark } from '@animalabs/agent-framework';
 import type { CompileResult } from '@animalabs/context-manager';
@@ -11,8 +11,7 @@ export function storedInjectionLabel(mark: Pick<StoredInjectionMark, 'agent' | '
 }
 
 /** A compiled message carries no metadata, so the compile's provenance
- *  decides which are stored injections, as agent-framework's own fork seed
- *  does. */
+ *  decides which are stored injections. */
 export function compiledWithoutStoredInjections<M>(
   result: { messages: M[] } & Pick<CompileResult, 'provenance' | 'rawBodies'>,
 ): M[] {

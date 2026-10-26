@@ -1,10 +1,3 @@
-/**
- * Synesthete — auto-generates evocative session names via a quick Haiku call.
- *
- * Called after a few user messages in an auto-named session. Produces a
- * 2–4 word name that captures the session's topic/mood.
- */
-
 import type { Membrane } from '@animalabs/membrane';
 import { storedInjectionMarkOf } from '@animalabs/agent-framework';
 
@@ -45,10 +38,6 @@ export function namingSummary(
     .join('\n');
 }
 
-/**
- * Generate a session name from conversation content.
- * Returns the generated name, or null if the call fails.
- */
 export async function generateSessionName(
   membrane: Membrane,
   conversationSummary: string,
@@ -76,7 +65,6 @@ export async function generateSessionName(
       .join('')
       .trim();
 
-    // Sanity check: should be short and non-empty
     if (!text || text.length > 60 || text.includes('\n')) return null;
     return text;
   } catch {
