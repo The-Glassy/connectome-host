@@ -2729,6 +2729,7 @@ export class WebUiModule implements Module {
   private async handleQuitConfirm(action: 'kill-children' | 'detach' | 'cancel'): Promise<void> {
     if (action === 'cancel') return;
     if (action === 'detach') {
+      this.fleetModule()?.setDetachMode(true);
       this.scheduleShutdown();
       return;
     }
