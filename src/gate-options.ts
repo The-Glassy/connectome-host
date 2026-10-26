@@ -21,7 +21,9 @@ export function gateOptionsFor(
   const { judge, ...rules } = typeof wake === 'object' && wake !== null ? wake : {};
   return {
     configPath: join(storePath, 'config', 'gate.json'),
-    ...('policies' in rules ? { config: rules as GateConfig } : {}),
+    // Starting rules when the recipe gives either part: a `default` alone is a
+    // starting default over no rules, which agent-framework reads as such.
+    ...('policies' in rules || 'default' in rules ? { config: rules as GateConfig } : {}),
     // The `sleep` tool's privileged users, who may wake the agent through a
     // sleep window: ./sleep-privileged.json in the working directory, shared by
     // every session, unless SLEEP_PRIVILEGED_FILE names another. Edit the file

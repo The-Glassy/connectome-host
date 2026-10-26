@@ -90,6 +90,12 @@ describe('gate options for modules.wake', () => {
     expect((options as unknown as { judge?: unknown }).judge).toEqual({ enabled: false });
   });
 
+  test('a default without policies still goes as the starting rules', () => {
+    const options = gateOptionsFor({ default: 'defer', judge: { model: 'm' } }, '/store', env)!;
+    expect(options.config).toEqual({ default: 'defer' } as never);
+    expect((options as unknown as { judge?: unknown }).judge).toEqual({ model: 'm' });
+  });
+
   test('the privileged-users file defaults to the install directory', () => {
     expect(gateOptionsFor(true, '/store', {})!.privilegedUsersPath).toBe(resolve('./sleep-privileged.json'));
   });
