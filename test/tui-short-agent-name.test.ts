@@ -34,14 +34,12 @@ describe('shortAgentName', () => {
     expect(shortAgentName('fork-1-d1-retry2-1700000000007')).toBe('fork-1');
   });
 
-  test('bare trailing -retryN (historical defensive strip)', () => {
-    expect(shortAgentName('web-retry2')).toBe('web');
-  });
-
   test('a name in none of these shapes comes back whole', () => {
     expect(shortAgentName('helper-2')).toBe('helper-2');
     expect(shortAgentName('web-1')).toBe('web-1');
     expect(shortAgentName('fork-web')).toBe('fork-web');
+    expect(shortAgentName('web-retry2')).toBe('web-retry2');
+    expect(shortAgentName('helper-retry2')).toBe('helper-retry2');
   });
 
   test('names that are substrings of each other stay distinct', () => {

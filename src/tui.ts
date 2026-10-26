@@ -343,24 +343,9 @@ export function rootTurnStep(
   return { showing: false, end: rootTurnEnd(event, showing) };
 }
 
-/**
- * Canonical short name for a subagent's full framework name. The single
- * source of truth for full↔short resolution — ad-hoc `.includes()` matching
- * here used to cross-wire agents whose names were substrings of each other
- * (e.g. `web` / `websearch`).
- *
- * Naming schemes (see subagent-module.ts spawn/fork paths; {stamp} is
- * nameStamp()'s number, the time in ms or one past the last name's):
- *   spawn: `spawn-{name}-{stamp}`
- *   fork:  `{name}-d{depth}-{stamp}` / `{name}-d{depth}-retry{n}-{stamp}` — no
- *          fork- prefix at all; the -d{depth} suffix must be stripped too,
- *          or every fork resolves to e.g. `web-d1` and matches nothing.
- */
 export function shortAgentName(full: string): string {
   if (full.startsWith('spawn-')) return full.slice('spawn-'.length).replace(/-\d+$/, '');
-  const fork = full.replace(/-d\d+(-retry\d+)?-\d+$/, '');
-  if (fork !== full) return fork;
-  return full.replace(/-retry\d+$/, '');
+  return full.replace(/-d\d+(-retry\d+)?-\d+$/, '');
 }
 
 interface AppContext {
@@ -450,7 +435,6 @@ type FleetNodeKind = 'researcher' | 'subagent' | 'fleet-child' | 'fleet-child-ag
 interface FleetNode {
   /** Short display name (used as key in expandedNodes / visibleNodeIds). */
   name: string;
-  /** Full agent name (for lookups in transcript/token maps). */
   fullName: string;
   /** What this node represents — drives renderer behavior. */
   kind: FleetNodeKind;
@@ -1130,7 +1114,8 @@ export async function runTui(app: AppContext): Promise<void> {
       const parentFullName = agentParent.get(sa.name);
       if (parentFullName && parentFullName !== rootAgentName) {
         // Find the parent's short name
-        const parentShort = byName.has(parentFullName) ? parentFullName : shortAgentName(parentFullName);
+        const short = byName.has(parentFullName) ? parentFullName : shortAgentName(parentFullName);
+        const parentShort = byName.has(short) ? short : short.replace(/-retry\d+$/, '');
         if (byName.has(parentShort)) {
           byName.get(parentShort)!.children.push(byName.get(sa.name)!);
           continue;

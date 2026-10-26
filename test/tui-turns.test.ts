@@ -225,7 +225,29 @@ describe("the TUI's subagent exhaustion, through runTui", () => {
   }, 40000);
 });
 
+function parentRows(frame: string): Map<string, string> {
+  const rows: Array<{ name: string; column: number }> = [];
+  for (const line of frame.split('\n')) {
+    const row = /([▼►─]) (\S+)  \[/.exec(line);
+    if (row) rows.push({ name: row[2]!, column: row.index });
+  }
+  const parents = new Map<string, string>();
+  rows.forEach((row, i) => {
+    const parent = rows.slice(0, i).reverse().find(r => r.column < row.column);
+    if (parent) parents.set(row.name, parent.name);
+  });
+  return parents;
+}
+
 describe("the TUI's fleet rows, through runTui", () => {
+  test("a restored child hangs under its parent's row: a fork named web-retry1, or web saved by its retry name from before forks were named by depth", async () => {
+    const fleet = (await play('fleet-parents')).get('fleet');
+    if (!fleet) throw new Error('missing fleet frame');
+    const parents = parentRows(fleet.frame);
+    expect(parents.get('saved-child')).toBe('web');
+    expect(parents.get('live-child')).toBe('web-retry1');
+  }, 40000);
+
   for (const scenario of ['fork-figures', 'fork-figures-reversed']) {
     test(`${scenario}: each fork's row shows its own context figure, beside a fork whose name is its own plus a suffix`, async () => {
       const fleet = (await play(scenario)).get('fleet');
