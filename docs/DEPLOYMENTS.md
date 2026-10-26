@@ -205,9 +205,13 @@ it, and what has to happen first. A pull doesn't stop for it. So:
   what each agent keeps while it's stopped: its data directory
   (`DATA_DIR`, or `./data` in its working directory), its fleet children's
   data directories (`data/<child>` under its working directory, unless the
-  recipe's entry for the child or a launch named another), the MCPL
+  recipe's entry for the child or a launch named another), which hold each
+  child's own `mcpl-servers.agent.child.json`, with any tokens its deploys
+  carry, the MCPL
   server settings it saves in its working directory (`mcpl-servers.json`
-  and `mcpl-servers.agent.json`), and the files its MCPL servers keep
+  and `mcpl-servers.agent.json`, or in that file's place the agent overlay
+  the agent's `MCPL_AGENT_OVERLAY_FILE` names, where it names one), and
+  the files its MCPL servers keep
   their state in, such as heartbeat-mcpl's `HEARTBEAT_CONFIG_FILE` and
   those discord-mcpl's README lists under
   [Stored state](https://github.com/anima-research/discord-mcpl#stored-state).
@@ -343,8 +347,9 @@ reasons unless the grant holds `ops` too.
   ended (a stop, or the OOM killer) or whose code didn't load, and what its
   servers' processes wrote.
 - **What each update copies:** the data directory, each fleet child's data
-  directory, the MCPL settings files in the working directory, and the
-  state setup recorded. A fleet child given `.` as its data directory makes
+  directory, the MCPL settings file in the working directory, the agent
+  overlay the host reads (in the working directory, unless
+  `MCPL_AGENT_OVERLAY_FILE` names another), and the state setup recorded. A fleet child given `.` as its data directory makes
   the whole working directory part of that, so keep the install root outside
   it. The copy stays until the next switch replaces it.
 - **A request refused before anything changed,** such as one that finds a
