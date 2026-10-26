@@ -17,7 +17,7 @@ function routeOf(recipe: Recipe, env: Env, credentials: BuiltCredential | null |
     case 'anthropic':
       return {
         endpoint: { setting: 'ANTHROPIC_BASE_URL', value: env.ANTHROPIC_BASE_URL },
-        credential: credentials ? 'the subscription credential (/auth status says which one is in use)' : 'ANTHROPIC_API_KEY',
+        credential: credentials ? 'the subscription credential (/auth status shows its state)' : 'ANTHROPIC_API_KEY',
       };
     case 'openai-responses':
       return { endpoint: { setting: 'OPENAI_BASE_URL', value: env.OPENAI_BASE_URL }, credential: 'OPENAI_API_KEY' };
@@ -31,7 +31,7 @@ function routeOf(recipe: Recipe, env: Env, credentials: BuiltCredential | null |
     case 'openai-codex':
       return {
         endpoint: { setting: 'CODEX_BASE_URL', value: env.CODEX_BASE_URL },
-        credential: codexGateAuth(env) ? 'CODEX_GATE_TOKEN' : 'the ChatGPT login (/auth status says its state)',
+        credential: codexGateAuth(env) ? 'CODEX_GATE_TOKEN' : 'the ChatGPT login (/auth status shows its state)',
       };
     case 'openai-compatible':
       return { endpoint: { setting: "the recipe's agent.baseUrl", value: recipe.agent.baseUrl }, credential: 'OPENAI_COMPATIBLE_API_KEY' };
@@ -45,7 +45,7 @@ function routeOf(recipe: Recipe, env: Env, credentials: BuiltCredential | null |
 function endpointState(value: string | undefined): string {
   if (!value) return 'not set, so the default';
   const host = URL.canParse(value) ? new URL(value).host : '';
-  return host === '' ? 'set, but not to a URL with a host' : `set to ${host}`;
+  return host === '' ? 'set, but not to a URL such as https://host:port' : `set to ${host}`;
 }
 
 export function failureHint(

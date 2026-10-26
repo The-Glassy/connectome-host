@@ -65,19 +65,20 @@ describe('a batch run\'s failed turn', () => {
     expect(err).toEqual(['Error: Connection error.', 'Error: Connection error.', 'Turn ended after 2 attempts.']);
   });
 
-  test('a retry that ends without its own failure counts as an attempt, after the line that says the turn ended', () => {
-    const { err, emit, attempt } = batch((type) => (type === 'timeout' ? 'Check the network.' : undefined));
+  // agent-framework 0.27.0 ends a stream it aborts with a lone exhausted that carries no errorType.
+  test('a retry the framework aborts counts as an attempt, after the line that says the turn ended', () => {
+    const { err, emit, attempt } = batch((type) => (type === undefined ? undefined : 'Check the network.'));
     attempt('Connection error.');
     emit('inference:started');
-    emit('inference:exhausted', { error: 'Stream aborted: timeout', errorType: 'timeout' });
-    expect(err).toEqual(['Error: Connection error.', '(turn ended: Stream aborted: timeout)', '2 attempts in all. Check the network.']);
+    emit('inference:exhausted', { error: 'Stream aborted: timeout' });
+    expect(err).toEqual(['Error: Connection error.', '(turn ended: Stream aborted: timeout)', '2 attempts in all.']);
   });
 
-  test('a first attempt that ends without a failure adds only what to check', () => {
-    const { err, emit } = batch((type) => (type === 'timeout' ? 'Check the network.' : undefined));
+  test('a first attempt the framework aborts says only that the turn ended', () => {
+    const { err, emit } = batch((type) => (type === undefined ? undefined : 'Check the network.'));
     emit('inference:started');
-    emit('inference:exhausted', { error: 'Stream aborted: timeout', errorType: 'timeout' });
-    expect(err).toEqual(['(turn ended: Stream aborted: timeout)', 'Check the network.']);
+    emit('inference:exhausted', { error: 'Stream aborted: timeout' });
+    expect(err).toEqual(['(turn ended: Stream aborted: timeout)']);
   });
 
   test('a failure whose start it never saw is neither printed nor counted', () => {
@@ -88,10 +89,11 @@ describe('a batch run\'s failed turn', () => {
     expect(err).toEqual(['Error: Connection error.', 'Turn ended after 1 attempt.']);
   });
 
-  test('a session switch starts the count again', () => {
+  test('a session switch starts the count again, and forgets the old framework\'s streams', () => {
     const { err, emit, attempt, turns } = batch();
     attempt('Connection error.');
     turns.switched();
+    emit('inference:failed', { error: 'Connection error.' });
     attempt('Connection error.');
     emit('inference:exhausted', { error: 'Connection error.' });
     expect(err).toEqual(['Error: Connection error.', 'Error: Connection error.', 'Turn ended after 1 attempt.']);
@@ -114,11 +116,10 @@ describe('the TUI\'s failure line', () => {
       .toEqual({ show: 'ended', attempts: 3, alone: false, errorType: 'network' });
   });
 
-  test('a turn stopped after a failure says nothing of attempts, and a lone end is one attempt', () => {
+  test('a turn stopped after a failure says nothing of attempts', () => {
     const failures = createTurnFailures();
     failures.onTrace({ type: 'inference:failed', agentName: 'clerk', error: 'x' });
     expect(failures.onTrace({ type: 'inference:aborted', agentName: 'clerk' })).toBeNull();
-    expect(failures.onTrace({ type: 'inference:exhausted', agentName: 'clerk', error: 'Stream aborted' })).toEqual({ show: 'ended', attempts: 1, alone: true });
   });
 
   test('the give-up line counts one attempt as one', () => {
@@ -170,8 +171,8 @@ describe('what to check names where this host sends its calls', () => {
   test('a setting that is set is named by its host only', () => {
     const env = { ANTHROPIC_BASE_URL: 'https://key:secret@gate.example.com:8443/anthropic?token=t' };
     expect(failureHint(recipe(), env, null)('network')).toBe('Check the network, any proxy, and ANTHROPIC_BASE_URL (set to gate.example.com:8443).');
-    expect(failureHint(recipe(), { ANTHROPIC_BASE_URL: 'gate' }, null)('network')).toBe('Check the network, any proxy, and ANTHROPIC_BASE_URL (set, but not to a URL with a host).');
-    expect(failureHint(recipe(), { ANTHROPIC_BASE_URL: 'localhost:8080' }, null)('network')).toBe('Check the network, any proxy, and ANTHROPIC_BASE_URL (set, but not to a URL with a host).');
+    expect(failureHint(recipe(), { ANTHROPIC_BASE_URL: 'gate' }, null)('network')).toBe('Check the network, any proxy, and ANTHROPIC_BASE_URL (set, but not to a URL such as https://host:port).');
+    expect(failureHint(recipe(), { ANTHROPIC_BASE_URL: 'localhost:8080' }, null)('network')).toBe('Check the network, any proxy, and ANTHROPIC_BASE_URL (set, but not to a URL such as https://host:port).');
   });
 
   test('each provider\'s own setting', () => {
@@ -188,16 +189,16 @@ describe('what to check names where this host sends its calls', () => {
     const auth = (agent: Record<string, unknown>, env: Record<string, string> = {}, built: { provider: string } | null = null) =>
       failureHint(recipe(agent), env, built)('auth');
     expect(auth({})).toBe('Check ANTHROPIC_API_KEY.');
-    expect(auth({}, {}, { provider: 'anthropic' })).toBe('Check the subscription credential (/auth status says which one is in use).');
+    expect(auth({}, {}, { provider: 'anthropic' })).toBe('Check the subscription credential (/auth status shows its state).');
     expect(auth({ provider: 'openai-responses' })).toBe('Check OPENAI_API_KEY.');
     expect(auth({ provider: 'openrouter' })).toBe('Check OPENROUTER_API_KEY.');
     expect(auth({ provider: 'openai-compatible', baseUrl: 'http://localhost:11434/v1' })).toBe('Check OPENAI_COMPATIBLE_API_KEY.');
     expect(auth({ provider: 'bedrock' })).toBe('Check AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.');
     expect(auth({ provider: 'bedrock' }, { AWS_SESSION_TOKEN: 's' })).toBe('Check AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN.');
     const gate = { CODEX_GATE_TOKEN: 'g', CODEX_BASE_URL: 'https://gate.example.com/codex' };
-    expect(auth({ provider: 'openai-codex' }, {}, { provider: 'openai-codex' })).toBe('Check the ChatGPT login (/auth status says its state).');
+    expect(auth({ provider: 'openai-codex' }, {}, { provider: 'openai-codex' })).toBe('Check the ChatGPT login (/auth status shows its state).');
     expect(auth({ provider: 'openai-codex' }, gate, { provider: 'openai-codex via https://gate.example.com/codex' })).toBe('Check CODEX_GATE_TOKEN.');
-    expect(auth({ provider: 'openai-codex' }, { ...gate, CODEX_GATE_TOKEN: '  ' }, { provider: 'openai-codex' })).toBe('Check the ChatGPT login (/auth status says its state).');
+    expect(auth({ provider: 'openai-codex' }, { ...gate, CODEX_GATE_TOKEN: '  ' }, { provider: 'openai-codex' })).toBe('Check the ChatGPT login (/auth status shows its state).');
   });
 
   test('any other kind gets nothing to check', () => {

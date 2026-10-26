@@ -241,6 +241,9 @@ describe("the TUI's subagent exhaustion, through runTui", () => {
       for (let j = 0; j < cases.length; j++) {
         for (const line of cases[j]![1]) expect(times(frame, line)).toBe(j <= i ? 1 : 0);
       }
+      // A subagent giving up isn't the operator's turn ending.
+      expect(frame).not.toContain('Turn ended after');
+      expect(frame).not.toContain('in all.');
     }
 
     expect(times(at('after switch').frame, `${web}after switch`)).toBe(1);

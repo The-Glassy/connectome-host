@@ -152,6 +152,7 @@ export function createPipedTurns(
   }
 
   function switched(): void {
+    streams.clear();
     failures = createTurnFailures();
   }
 

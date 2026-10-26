@@ -31,7 +31,7 @@ const channel = {
 };
 const push = { inboundSource: { kind: 'unscoped', lane: 'push/event', serverId: 'heartbeat', binding: 'b2', acceptedAt: 1 } };
 
-describe('a row reads as "you" only when someone typed it at one of the host\'s surfaces', () => {
+describe('a row reads as "you" only when it came in as the host\'s own input', () => {
   test('typed input reads as you on both screens', () => {
     expect(shown(surface)).toEqual({ tui: 'You: hello', web: 'you' });
   });
@@ -48,8 +48,10 @@ describe('a row reads as "you" only when someone typed it at one of the host\'s 
 });
 
 describe('the host\'s own rows read as the host\'s, by kind', () => {
-  test('a host mark wins over a surface stamp', () => {
+  test('a host mark wins over a surface stamp, and a server\'s own mark is no host\'s', () => {
     expect(shown({ ...surface, hostNote: 'session-start' }).web).toBe('host · session start');
+    expect(shown({ ...channel, hostNote: 'session-start' }).web).toBe('alice in #general');
+    expect(shown({ ...push, hostNote: 'restart' }).web).toBe('heartbeat (push)');
   });
 
   test('agent-framework\'s clock row and a host notice', () => {
@@ -130,10 +132,13 @@ describe('someone else\'s words read as theirs', () => {
     const unlabelled = { ...channel, author: { id: 'u42', name: '' }, inboundSource: { ...channel.inboundSource, label: undefined } };
     expect(shown(unlabelled).web).toBe('u42 in discord:42');
     expect(shown({ ...channel, author: undefined }).web).toBe('someone in #general');
+    expect(shown({ ...channel, author: { id: '', name: 'alice' } }).web).toBe('alice in #general');
   });
 
-  test('a push that names no channel reads as its server\'s', () => {
+  test('a push that names no channel reads as the author it names, or else as its server\'s', () => {
     expect(shown(push)).toEqual({ tui: 'heartbeat (push): hello', web: 'heartbeat (push)' });
+    expect(shown({ ...push, authorName: 'alice', authorId: 'u42' }).web).toBe('alice (push from heartbeat)');
+    expect(shown({ ...push, authorId: 'u42' }).web).toBe('u42 (push from heartbeat)');
   });
 
   test('a push to a channel reads as the author it names, or else as its server\'s in that channel', () => {
@@ -142,6 +147,7 @@ describe('someone else\'s words read as theirs', () => {
     expect(shown({ ...pushed, authorId: 'u42' }).web).toBe('u42 in #general');
     expect(shown({ ...pushed, author: { id: '', name: 'Someone' } }).web).toBe('heartbeat (push) in #general');
     expect(shown({ ...pushed, author: { id: '', name: 'Someone' }, authorName: 'alice' }).web).toBe('alice in #general');
+    expect(shown({ ...pushed, author: { id: '', name: 'Bob' } }).web).toBe('Bob in #general');
     expect(shown(pushed).web).toBe('heartbeat (push) in #general');
   });
 });
@@ -196,12 +202,13 @@ describe('the host\'s mark stays in the store', () => {
     const typed = stored.find((m) => JSON.stringify(m.content).includes('hi there'));
     expect(typed && shown(typed.metadata).web).toBe('you');
 
-    const requests = adapter.getRequestLog().map((r) => JSON.stringify(r.request));
+    const requests = adapter.getRequestLog().map((r) => r.request as { messages?: Array<Record<string, unknown>> });
     expect(requests.length).toBeGreaterThan(0);
     for (const request of requests) {
-      expect(request).toContain('at the start of this session');
-      expect(request).not.toContain('hostNote');
-      expect(request).not.toContain('session-start');
+      const carrying = (request.messages ?? []).find((m) => JSON.stringify(m).includes('at the start of this session'));
+      expect(carrying?.role ?? carrying?.participant).toBe('user');
+      expect(JSON.stringify(request)).not.toContain('hostNote');
+      expect(JSON.stringify(request)).not.toContain('session-start');
     }
   });
 });
