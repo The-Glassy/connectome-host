@@ -290,6 +290,17 @@ wake?" decision. Heavy logic belongs in your turn once you're up, not here.
   ends the turn without replying and arms a one-shot self-wake. Unlike `sleep` it
   suppresses nothing, and *any* turn start cancels it — it fires only if nothing
   else woke you first, arriving as a `[self-wake]` note.
+- **Your heartbeat and reminders** — your own schedule of wakes:
+  `heartbeat--heartbeat_status` / `--heartbeat_configure` (interval, `paused`,
+  `deliveryMode` `"message"` or `"silent"`, `message`) / `--heartbeat_trigger`, and
+  `heartbeat--reminder_add` (a delay, an `atIso` time, or a repeat interval) /
+  `--reminder_list` / `--reminder_cancel`. On a host with `modules.heartbeat` on,
+  agent-framework keeps them, and they wake you past your rules and through a
+  sleep. A reply judge (`judge` rules) is told your next tick and pending
+  reminders, so it can let a batch wait when you'll be up soon anyway. On a host
+  that still runs the heartbeat-mcpl server instead, the tools are the same, but
+  its ticks are `mcpl:push-event`s from `heartbeat`, which your rules see, and the
+  judge doesn't know its schedule.
 - **`tune_out`** (only when you have a subconscious) — hands a channel to your
   subconscious: its traffic stops entering your context and waking you, your
   subconscious summarizes it on a cadence and judges whether a mention merits

@@ -39,6 +39,7 @@ import {
 import { LoggingAnthropicAdapter, offPathRefusalAlert } from './logging-adapter.js';
 import { recipeFormatter } from './recipe-formatter.js';
 import { gateOptionsFor } from './gate-options.js';
+import { heartbeatOptionsFor } from './heartbeat-options.js';
 import { CredentialMonitor } from './credential-state.js';
 import { AnthropicOAuthCredentials } from './anthropic-credentials.js';
 import { LoggingProviderAdapter } from './logging-provider-wrapper.js';
@@ -486,6 +487,12 @@ agents: [agentConfig],
     modules: moduleInstances,
     mcplServers: finalServers,
     gate: gateOptions,
+    // The framework's heartbeat (heartbeat-options.ts): passed by spread, so
+    // an agent-framework without it reads nothing it doesn't know.
+    ...((): Record<string, unknown> => {
+      const heartbeat = heartbeatOptionsFor(modules.heartbeat);
+      return heartbeat !== undefined ? { heartbeat } : {};
+    })(),
     timeZone,
     // A 429 while a subscription window is spent is a quota, not a throttle:
     // park until it resets instead of retrying into it.

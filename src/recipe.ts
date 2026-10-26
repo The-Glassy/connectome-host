@@ -852,6 +852,30 @@ export interface RecipeReplyJudge {
   cacheTtl?: '5m' | '1h';
 }
 
+/** `modules.heartbeat` as an object. */
+export interface RecipeHeartbeat {
+  /** The state file; relative to the install directory. Default `{storePath}/config/heartbeat.json`. */
+  statePath?: string;
+  /** The schedule a first start writes when there's nothing to import. */
+  defaults?: RecipeHeartbeatDefaults;
+  /** heartbeat-mcpl's files (its HEARTBEAT_CONFIG_FILE and HEARTBEAT_REMINDERS_FILE),
+   *  read once by a start that finds no state file; relative to the install directory. */
+  importFrom?: { configPath?: string; remindersPath?: string };
+}
+
+/** `modules.heartbeat.defaults`. */
+export interface RecipeHeartbeatDefaults {
+  /** 60 or more. */
+  intervalSeconds?: number;
+  paused?: boolean;
+  message?: string;
+  deliveryMode?: 'message' | 'silent';
+}
+
+const RECIPE_HEARTBEAT_KEYS = ['statePath', 'defaults', 'importFrom'] as const;
+const RECIPE_HEARTBEAT_DEFAULTS_KEYS = ['intervalSeconds', 'paused', 'message', 'deliveryMode'] as const;
+const RECIPE_HEARTBEAT_IMPORT_KEYS = ['configPath', 'remindersPath'] as const;
+
 /** `modules.wake.judge`'s keys, kept in step with RecipeReplyJudge (recipeKeyListsInStep). */
 const RECIPE_REPLY_JUDGE_KEYS = ['enabled', 'model', 'maxInputTokens', 'timeoutMs', 'onError', 'effort', 'cacheTtl'] as const;
 
@@ -889,6 +913,16 @@ export interface RecipeModules {
    * and `judge` configuring the reply judge that `judge` wake rules ask.
    */
   wake?: boolean | RecipeWake;
+  /**
+   * The heartbeat, kept by agent-framework (its `FrameworkConfig.heartbeat`):
+   * the agent's own periodic check-in and reminders, with the tools
+   * `heartbeat--heartbeat_status`, `--heartbeat_configure`, `--heartbeat_trigger`,
+   * `--reminder_add`, `--reminder_list` and `--reminder_cancel`. OPT-IN: off
+   * by default. It replaces the heartbeat-mcpl server, so a recipe that turns
+   * it on can't also name an `mcpServers.heartbeat`. `importFrom` brings that
+   * server's schedule and reminders along on the first start.
+   */
+  heartbeat?: boolean | RecipeHeartbeat;
   /**
    * The workspace's mounts. `configMount: true` adds `_config`, the
    * session's config directory, holding only files named `gate.json`,
@@ -1791,7 +1825,7 @@ const RECIPE_AGENT_MOCK_KEYS = [
 const RECIPE_MODULE_KEYS = [
   'subagents', 'lessons', 'retrieval', 'wake', 'workspace', 'instructions', 'activity', 'notices',
   'mcplAdmin', 'history', 'identity', 'fleet', 'webui', 'ttsRelay', 'subscriptionGc',
-  'channelMode', 'selfRestart',
+  'channelMode', 'selfRestart', 'heartbeat',
 ] as const;
 const RECIPE_KV_UNIFIED_KEYS = [
   'policy', 'tokenBucketSize', 'continuityBucketSize', 'fidelityBucketSize', 'labelCeiling',
@@ -1816,7 +1850,9 @@ const recipeKeyListsInStep: [
   ListsExactly<keyof ClockConfig & string, typeof RECIPE_AGENT_CLOCK_KEYS>,
   ListsExactly<keyof RecipeAutoContinue & string, typeof RECIPE_AGENT_AUTO_CONTINUE_KEYS>,
   ListsExactly<keyof RecipeReplyJudge & string, typeof RECIPE_REPLY_JUDGE_KEYS>,
-] = [true, true, true, true, true, true, true, true, true];
+  ListsExactly<keyof RecipeHeartbeat & string, typeof RECIPE_HEARTBEAT_KEYS>,
+  ListsExactly<keyof RecipeHeartbeatDefaults & string, typeof RECIPE_HEARTBEAT_DEFAULTS_KEYS>,
+] = [true, true, true, true, true, true, true, true, true, true, true];
 void recipeKeyListsInStep;
 
 const RECIPE_WORKSPACE_KEYS = ['mounts', 'configMount'] as const;
@@ -1952,6 +1988,60 @@ const MAX_PENDING_RECIPE_WARNINGS = 50;
 
 export function takeRecipeWarnings(): string[] {
   return pendingRecipeWarnings.splice(0);
+}
+
+/**
+ * `modules.heartbeat`: true, false, or an object of the keys agent-framework
+ * reads, each checked. On, it can't stand beside an `mcpServers.heartbeat`
+ * (heartbeat-mcpl): agent-framework refuses both at create, and saying so at
+ * load names the fix.
+ */
+function validateRecipeHeartbeat(heartbeat: unknown, servers: unknown): void {
+  if (heartbeat === undefined || heartbeat === false) return;
+  if (heartbeat !== true) {
+    if (heartbeat === null || typeof heartbeat !== 'object' || Array.isArray(heartbeat)) {
+      throw new Error('Recipe modules.heartbeat must be true, false or an object, such as {"defaults": {"intervalSeconds": 14400}}.');
+    }
+    const h = heartbeat as Record<string, unknown>;
+    rejectUnknownKeys('modules.heartbeat', h, RECIPE_HEARTBEAT_KEYS);
+    if (h.statePath !== undefined && nonEmptyText(h.statePath)) {
+      throw new Error(`Recipe modules.heartbeat.statePath is ${JSON.stringify(h.statePath)}; it must be ${nonEmptyText(h.statePath)}.`);
+    }
+    for (const [key, keys] of [['defaults', RECIPE_HEARTBEAT_DEFAULTS_KEYS], ['importFrom', RECIPE_HEARTBEAT_IMPORT_KEYS]] as const) {
+      const value = h[key];
+      if (value === undefined) continue;
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error(`Recipe modules.heartbeat.${key} must be an object.`);
+      }
+      rejectUnknownKeys(`modules.heartbeat.${key}`, value, keys);
+    }
+    const defaults = (h.defaults ?? {}) as Record<string, unknown>;
+    const checks: { readonly [K in keyof RecipeHeartbeatDefaults]-?: MountValueCheck } = {
+      intervalSeconds: (v) => typeof v === 'number' && Number.isFinite(v) && v >= 60 ? null : 'a number of seconds, 60 or more',
+      paused: trueOrFalse,
+      message: nonEmptyText,
+      deliveryMode: oneOf(['message', 'silent']),
+    };
+    for (const key of RECIPE_HEARTBEAT_DEFAULTS_KEYS) {
+      if (defaults[key] === undefined) continue;
+      const must = checks[key](defaults[key]);
+      if (must) throw new Error(`Recipe modules.heartbeat.defaults.${key} is ${JSON.stringify(defaults[key])}; it must be ${must}.`);
+    }
+    const from = (h.importFrom ?? {}) as Record<string, unknown>;
+    for (const key of RECIPE_HEARTBEAT_IMPORT_KEYS) {
+      if (from[key] === undefined) continue;
+      const must = nonEmptyText(from[key]);
+      if (must) throw new Error(`Recipe modules.heartbeat.importFrom.${key} is ${JSON.stringify(from[key])}; it must be ${must}.`);
+    }
+  }
+  if (servers !== null && typeof servers === 'object' && Object.hasOwn(servers, 'heartbeat')) {
+    throw new Error(
+      'Recipe turns modules.heartbeat on and names mcpServers.heartbeat (heartbeat-mcpl): both would wake the agent, and '
+      + 'their tools share the names heartbeat--…. Remove mcpServers.heartbeat to use the framework\'s heartbeat '
+      + '(modules.heartbeat.importFrom can bring that server\'s schedule and reminders along: its HEARTBEAT_CONFIG_FILE '
+      + 'and HEARTBEAT_REMINDERS_FILE), or turn modules.heartbeat off to keep the server.',
+    );
+  }
 }
 
 /** `modules.wake.judge`, refused with the key and what it must be where it isn't. */
@@ -2853,6 +2943,7 @@ export function validateRecipe(raw: unknown): Recipe {
     // agent-framework as written, and agent-framework reads a value it can't
     // use as its default, so a typo would load as no setting at all.
     validateRecipeReplyJudge(mods.wake);
+    validateRecipeHeartbeat(mods.heartbeat, (raw as { mcpServers?: unknown }).mcpServers);
 
     const retrieval = mods.retrieval;
     if (retrieval !== undefined && typeof retrieval !== 'boolean') {

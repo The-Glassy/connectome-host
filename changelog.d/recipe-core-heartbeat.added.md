@@ -1,0 +1,5 @@
+- `modules.heartbeat` in recipes turns on agent-framework's heartbeat (`FrameworkConfig.heartbeat`), which replaces the heartbeat-mcpl server: the agent's periodic check-in and reminders, with the same `heartbeat--…` tools. It's off by default.
+  - `true` uses agent-framework's defaults. An object takes `statePath`, `defaults` (`intervalSeconds` of 60 or more, `paused`, `message`, `deliveryMode`) and `importFrom` (`configPath`, `remindersPath`: heartbeat-mcpl's files, brought along on the first start). Each is validated at load, and paths are read from the install directory.
+  - A recipe that turns it on and names `mcpServers.heartbeat` is refused at load, naming both fixes.
+  - Takes effect with an agent-framework that has the heartbeat; with today's it's passed through and ignored.
+  - docs/ATTENTION-AND-GATING.md, docs/AGENT-ONBOARDING.md and docs/DEPLOYMENTS.md say how to move a resident over.
