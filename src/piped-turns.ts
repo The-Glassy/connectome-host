@@ -9,7 +9,8 @@
  * agent was created with: a sync subagent streams inside the primary's
  * turn, and its end isn't the end of the line's turn. The wait ends at one
  * of the primary's TURN_SETTLED_TRACES (state/turn-trace.ts). At
- * `inference:failed` it prints the error and keeps waiting, since the
+ * `inference:failed` it prints the error, unless it repeats the error the
+ * turn's last failure printed, and keeps waiting, since the
  * framework may retry the turn, or hold it and run it again, and either
  * answers the line. The wait's cap still bounds it: a turn held longer than
  * the cap lets the next line go in, with a line on stderr saying so, and
@@ -21,6 +22,7 @@
  */
 
 import { STREAM_END_TRACES, TURN_SETTLED_TRACES, traceError } from './state/turn-trace.js';
+import { createTurnFailures, turnEndedLine } from './state/turn-failures.js';
 
 export interface PipedOutput {
   /** Text to stdout as it comes: prose, and the line breaks around it. */
@@ -40,7 +42,11 @@ export interface PipedTurns {
 /** The longest a line waits for its turn. */
 export const PIPED_TURN_CAP_MS = 120_000;
 
-export function createPipedTurns(primaryAgentName: string, out: PipedOutput): PipedTurns {
+export function createPipedTurns(
+  primaryAgentName: string,
+  out: PipedOutput,
+  hint: (errorType: string | undefined) => string | undefined = () => undefined,
+): PipedTurns {
   /** Each agent's stream from its start until it settles: 'open' until its
    *  first end, 'failed' after a failure, while a retry or a held turn can
    *  still answer. An end that finds none comes after the stream settled, as
@@ -49,6 +55,7 @@ export function createPipedTurns(primaryAgentName: string, out: PipedOutput): Pi
    *  the agent, and starts no next turn of the agent until then
    *  (state/turn-trace.ts). */
   const streams = new Map<string, 'open' | 'failed'>();
+  const failures = createTurnFailures();
   let settle: (() => void) | null = null;
 
   function onTrace(event: { type: string; [key: string]: unknown }): void {
@@ -74,6 +81,7 @@ export function createPipedTurns(primaryAgentName: string, out: PipedOutput): Pi
       }
     }
     if (agent === undefined || !STREAM_END_TRACES.has(event.type)) return;
+    const step = failures.onTrace(event);
     const state = streams.get(agent);
     if (state === undefined) return;
     const primary = agent === primaryAgentName;
@@ -83,18 +91,20 @@ export function createPipedTurns(primaryAgentName: string, out: PipedOutput): Pi
     // any agent: `failed`, and a lone `exhausted`, which from agent-framework
     // 0.22.3 comes only from an abort whose reason isn't `user` (each of its
     // other `exhausted` emits follows a `failed`) and which the framework
-    // counts as a failure. The primary's lone `exhausted` reads
+    // counts as a failure. A `failed` whose error repeats the turn's last
+    // printed one adds only the newline. The primary's lone `exhausted` reads
     // `(turn ended: …)`, the line that says this line's own turn ended;
     // another agent's reads `Error:`, as any agent's `failed` does. Its
     // newline goes to stdout rather than leading its stderr line, so a
     // terminal showing both reads as before; where stdout's line had already
     // ended, as after a tool's line, stdout gets an empty line. The primary's
     // stop, `aborted`, goes to stdout, since it isn't one. An end after an
-    // end, such as `exhausted` after `failed`, prints nothing.
+    // end prints nothing, but for the primary's `exhausted` after its
+    // failures, which says how many attempts the turn made and what to check.
     if (state === 'open') {
       if (event.type === 'inference:failed') {
         out.write('\n');
-        out.error(`Error: ${traceError(event)}`);
+        if (step?.show === 'line') out.error(`Error: ${step.text}`);
       } else if (event.type === 'inference:exhausted') {
         out.write('\n');
         out.error(primary ? `(turn ended: ${traceError(event)})` : `Error: ${traceError(event)}`);
@@ -104,6 +114,8 @@ export function createPipedTurns(primaryAgentName: string, out: PipedOutput): Pi
       } else {
         out.write('\n');
       }
+    } else if (primary && step?.show === 'ended') {
+      out.error(turnEndedLine(step.attempts, hint(step.errorType)));
     }
     if (!TURN_SETTLED_TRACES.has(event.type)) {
       streams.set(agent, 'failed');

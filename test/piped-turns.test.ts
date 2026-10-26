@@ -157,7 +157,7 @@ describe('what piped mode prints', () => {
     emit('inference:started');
     emit('inference:tokens', { content: 'Partial answer' });
     emit('inference:exhausted', { error: 'Stream aborted: timeout' });
-    // A failure whose retries are spent: its exhausted, after failed, prints nothing more.
+    // A failure whose retries are spent: its exhausted, after failed, says how many attempts the turn made.
     emit('inference:started');
     emit('inference:tokens', { content: 'Another' });
     emit('inference:failed', { error: 'bad request' });
@@ -168,7 +168,7 @@ describe('what piped mode prints', () => {
     turns.onTrace({ type: 'inference:failed', agentName: 'spawn-c', error: 'overloaded' });
     expect(out).toEqual([
       'out:\n', 'out:Partial answer', 'out:\n', 'err:(turn ended: Stream aborted: timeout)',
-      'out:\n', 'out:Another', 'out:\n', 'err:Error: bad request',
+      'out:\n', 'out:Another', 'out:\n', 'err:Error: bad request', 'err:Turn ended after 1 attempt.',
       'out:\n', 'out:Half', 'out:\n', 'err:Error: overloaded',
     ]);
   });

@@ -39,6 +39,8 @@ import { FleetTreeAggregator } from './state/fleet-tree-aggregator.js';
 import type { AgentNode } from './state/agent-tree-reducer.js';
 import { emptyUsage, foldUsageSample, type UsageCounts, type UsageSample } from './state/stream-usage.js';
 import { STREAM_END_TRACES, TURN_RUNNING_TRACES, traceError } from './state/turn-trace.js';
+import { createTurnFailures, failureCountLine, turnEndedLine, type FailureStep } from './state/turn-failures.js';
+import { failureHint } from './failure-hint.js';
 import { TurnInterrupts, interruptSubagents } from './state/turn-interrupt.js';
 import { switchFollowing, traceFollower } from './piped-turns.js';
 import { type FleetModule } from './modules/fleet-module.js';
@@ -52,6 +54,7 @@ import { hostUpdate } from './update/update.js';
 import { effectiveContextBudgetTokens } from './framework-agent-config.js';
 import { storedInjectionMarkOf } from '@animalabs/agent-framework';
 import { storedInjectionLabel } from './stored-injection.js';
+import { speakerOf, type Speaker } from './speaker.js';
 
 /** Format a token count compactly: 1.2M / 3.5k / 42. */
 export function fmtTokens(n: number): string {
@@ -119,6 +122,14 @@ export function sliceViewport(len: number, cursor: number, avail: number): { sta
  *  share it. */
 function headerMessage(message: string): string {
   return message.length > 70 ? `${message.slice(0, 67).replace(/[\uD800-\uDBFF]$/, '')}…` : message;
+}
+
+export function historyUserLine(
+  msg: { participant: string; metadata?: unknown },
+  text: string,
+): { text: string; speaker: Speaker['kind'] } {
+  const speaker = speakerOf(msg.participant, msg.metadata);
+  return { text: `${speaker.kind === 'you' ? 'You' : speaker.label}: ${text}`, speaker: speaker.kind };
 }
 
 export function historyInjectionLine(
@@ -598,6 +609,8 @@ export async function runTui(app: AppContext): Promise<void> {
   type SubagentPhase = 'sending' | 'streaming' | 'invoking' | 'executing' | 'done' | 'failed';
   const subagentPhase = new Map<string, SubagentPhase>();
   const subagentFailureShown = new Set<string>();
+  let turnFailures = createTurnFailures();
+  const failureLines = new Map<string, { line: TextRenderable; lead: string }>();
   const PHASE_COLOR: Record<SubagentPhase, string> = {
     sending: YELLOW,
     streaming: CYAN,
@@ -824,22 +837,35 @@ export async function runTui(app: AppContext): Promise<void> {
     }
   }
 
-  function addLine(text: string, color: string = WHITE) {
-    if (stopping) return;
-    scrollBox.add(new TextRenderable(renderer, {
+  function addLine(text: string, color: string = WHITE): TextRenderable | undefined {
+    if (stopping) return undefined;
+    const line = new TextRenderable(renderer, {
       id: `msg-${++messageCounter}`,
       content: text,
       fg: color,
-    }));
+    });
+    scrollBox.add(line);
     pruneScrollback();
+    return line;
   }
 
   /** addLine with an HH:MM prefix — for *event* lines (alerts, tool batches,
    *  subagent results, branch switches…): scrollback read an hour later is
    *  useless without knowing WHEN things happened. Streamed prose and
    *  immediate-feedback hints stay unstamped. */
-  function addEvent(text: string, color: string = WHITE) {
-    addLine(`${hhmm()} ${text}`, color);
+  function addEvent(text: string, color: string = WHITE): TextRenderable | undefined {
+    return addLine(`${hhmm()} ${text}`, color);
+  }
+
+  function showFailure(agent: string, label: string, step: Exclude<FailureStep, { show: 'ended' }>, color: string): void {
+    const held = failureLines.get(agent);
+    if (step.show === 'count' && held && !held.line.isDestroyed) {
+      held.line.content = `${held.lead}${failureCountLine(step.text, step.count)}`;
+      return;
+    }
+    const lead = `${hhmm()} ${label}`;
+    const line = addLine(`${lead}${failureCountLine(step.text, step.show === 'count' ? step.count : 1)}`, color);
+    if (line) failureLines.set(agent, { line, lead });
   }
 
   /**
@@ -1018,7 +1044,8 @@ export async function runTui(app: AppContext): Promise<void> {
       for (const block of msg.content) {
         if (block.type === 'text' && (block as { text: string }).text.trim()) {
           if (msg.participant === 'user') {
-            addLine(`You: ${(block as { text: string }).text}`, GREEN);
+            const line = historyUserLine(msg, (block as { text: string }).text);
+            addLine(line.text, line.speaker === 'you' ? GREEN : line.speaker === 'host' ? DIM_GRAY : CYAN);
           } else {
             addLine((block as { text: string }).text, WHITE);
           }
@@ -2001,6 +2028,10 @@ export async function runTui(app: AppContext): Promise<void> {
       rootTurnShowing = step.showing;
       rootEnd = step.end;
     }
+    const failure = turnFailures.onTrace(event as { type: string; agentName?: unknown });
+    if (agent === rootAgentName && failure && failure.show !== 'ended' && rootEnd?.line) {
+      rootEnd = { status: rootEnd.status, background: rootEnd.background };
+    }
 
     switch (event.type) {
       case 'inference:started': {
@@ -2113,7 +2144,8 @@ export async function runTui(app: AppContext): Promise<void> {
             subagentPhase.set(short, 'failed');
             subagentFailureShown.add(agent);
           }
-          addEvent(`[${agent}] Error: ${traceError(event)}`, DIM_GRAY);
+          if (agent && failure && failure.show !== 'ended') showFailure(agent, `[${agent}] `, failure, DIM_GRAY);
+          else addEvent(`[${agent}] Error: ${traceError(event)}`, DIM_GRAY);
         }
         break;
       }
@@ -2271,9 +2303,13 @@ export async function runTui(app: AppContext): Promise<void> {
       }
     }
     if (rootEnd) showRootTurnEnd(rootEnd);
-    // An end after an end shows nothing, but it can settle the turn the
-    // follower held running, and the bar's Escape hint follows that.
+    // An end after an end shows nothing of its own, but it can settle the
+    // turn the follower held running, and the bar's Escape hint follows that.
     else if (agent === rootAgentName && STREAM_END_TRACES.has(event.type as string)) updateStatus();
+    if (agent === rootAgentName && failure) {
+      if (failure.show === 'ended') addEvent(turnEndedLine(failure.attempts, failureHint(app.recipe, process.env)(failure.errorType)), RED);
+      else showFailure(agent, '', failure, RED);
+    }
   }
 
   // The root trace subscription: one framework at a time, as piped mode
@@ -2934,6 +2970,8 @@ export async function runTui(app: AppContext): Promise<void> {
         // switch that succeeds, none of the old framework's traces come.
         interrupts.reset();
         rootTurnShowing = false;
+        turnFailures = createTurnFailures();
+        failureLines.clear();
 
         // Follow whichever framework the host holds once the switch ends,
         // as piped mode does: the new one, after the rebind, or after a

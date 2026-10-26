@@ -26,6 +26,7 @@ import type {
 } from '@animalabs/agent-framework';
 import { formatZonedDateTime, resolveTimeZone } from '@animalabs/agent-framework';
 import { unknownToolResult } from './unknown-tool.js';
+import { hostNoteMetadata } from '../speaker.js';
 import {
   SELF_RESTART_EXIT_CODE,
   selfRestart as processSelfRestart,
@@ -94,7 +95,7 @@ export class LifecycleModule implements Module {
 
   async start(ctx: ModuleContext): Promise<void> {
     const record = this.state.takeCompleted(this.dataDir, this.now());
-    if (record) ctx.addMessage('user', [{ type: 'text', text: this.backNote(record) }]);
+    if (record) ctx.addMessage('user', [{ type: 'text', text: this.backNote(record) }], hostNoteMetadata('restart'));
   }
 
   async stop(): Promise<void> {}

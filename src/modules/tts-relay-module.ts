@@ -47,6 +47,7 @@ import type {
   TraceEvent,
 } from '@animalabs/agent-framework';
 import { unknownToolResult } from './unknown-tool.js';
+import { hostNoteMetadata } from '../speaker.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -473,7 +474,7 @@ export class TtsRelayModule implements Module {
       const note = edited
         ? `[voice] Your message was interrupted by ${ev.reason.replace('_', ' ')} — only this much was voiced, and the posted message was trimmed to match: "${ev.spokenText}"`
         : `[voice] Your reply was interrupted by ${ev.reason.replace('_', ' ')} after: "${ev.spokenText}" (the posted message could not be trimmed)`;
-      this.ctx?.addMessage('user', [{ type: 'text', text: note }]);
+      this.ctx?.addMessage('user', [{ type: 'text', text: note }], hostNoteMetadata('voice-interruption'));
     }
   }
 

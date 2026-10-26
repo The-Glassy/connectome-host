@@ -40,6 +40,7 @@ import { emptyUsage, foldUsageSample, type UsageCounts, type UsageSample } from 
 import { traceError } from '../state/turn-trace.js';
 import { shown } from './shown.js';
 import { unknownToolResult } from './unknown-tool.js';
+import { hostNoteMetadata } from '../speaker.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -3121,8 +3122,9 @@ export class SubagentModule implements Module {
     const ctx = this.ctx!;
     const say = (forWhom: string, forAgent?: string): void => {
       const content = [{ type: 'text' as const, text: `[Subagent '${name}' ${outcome}${forWhom}]\n\n${body}` }];
-      if (forAgent !== undefined) ctx.addMessage('user', content, undefined, { forAgent });
-      else ctx.addMessage('user', content);
+      const note = hostNoteMetadata(`subagent-${outcome}`);
+      if (forAgent !== undefined) ctx.addMessage('user', content, note, { forAgent });
+      else ctx.addMessage('user', content, note);
     };
     // The empty name is none, as claimName reads it, and agent-framework
     // refuses it as a write's target even where an agent is registered under it.
