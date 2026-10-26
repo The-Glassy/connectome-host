@@ -1854,7 +1854,7 @@ describe("which fleet children an audit follows, and how", () => {
     await toldEnded;
     const loaded = join(root, 'loaded');
     const child = start(loaded);
-    child.stdin!.on('error', () => { /* a child that has ended */ });
+    child.stdin!.on('error', () => { });
     let stderr = '';
     child.stderr!.on('data', (chunk) => { stderr += chunk; });
     const ended = new Promise<string>((done) => child.on('exit', (code, signal) => done(signal ?? `status ${code}`)));

@@ -27,13 +27,7 @@ const options = JSON.parse(readFileSync(process.argv[2]!, 'utf8')) as {
   begun?: string;
   closeStdinAtGate?: boolean;
   stdinErrorAtGate?: boolean;
-  /** Append a line to this path, outside the data directory, for each chunk
-   *  that comes on its stdin as it waits, once that chunk's turn has run. */
   chunks?: string;
-  /** Once it has begun, resume stdin, so a stdin the gate left open is read
-   *  to its end, and write this path, outside the data directory, a turn
-   *  after its stdin can give it nothing more, having ended, closed or
-   *  failed. */
   stdinDone?: string;
 };
 if (options.closeStdinAtGate) {

@@ -1694,8 +1694,6 @@ describe('identity request: fromFile reads only what the mount allows', () => {
 
   it('refuses a path no mount holds, and one leading out of its mount, each with its own reason', async () => {
     const { bodies, upload, workspace } = await mounted();
-    // agent-framework's words for these refusals differ between releases, so
-    // the test pins the host's part of each line and what each reason names.
     const unmounted = (await upload('nope/grid.png')).error ?? '';
     expect(unmounted).toStartWith('Nothing was sent to "orrery": ');
     const reason = unmounted.slice('Nothing was sent to "orrery": '.length);
