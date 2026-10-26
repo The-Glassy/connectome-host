@@ -252,8 +252,9 @@ impressionistic with age and depth.
   placeholder *even while the surrounding words remain verbatim*. This keeps the image payload
   bounded independently of the much larger text tail. Your recipe may change
   all three limits under `agent.strategy` for autobiographical and frontdesk
-  strategies; zero disables that limit while the others still apply, and larger
-  limits can exceed the provider's request-size cap. If an image matters beyond
+  strategies. A depth of zero turns depth stripping off. A count or byte limit
+  of zero means up to context-manager's ceilings, 500 images and 24 MiB, and a
+  larger one is held to them. If an image matters beyond
   the moment, describe it in text or save it to your workspace.
 
 ## Finding your own settings
