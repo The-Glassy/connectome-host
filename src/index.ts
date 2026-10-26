@@ -899,7 +899,7 @@ async function runPiped(app: AppContext) {
     write: (text) => { process.stdout.write(text); },
     log: (line) => { console.log(line); },
     error: (line) => { console.error(line); },
-  }, (errorType) => failureHint(app.recipe, process.env)(errorType));
+  }, failureHint(app.recipe, process.env));
   const traces = traceFollower((event) => turns.onTrace(event as { type: string; [key: string]: unknown }));
   traces.follow(app.framework);
 

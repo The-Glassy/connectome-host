@@ -610,6 +610,7 @@ export async function runTui(app: AppContext): Promise<void> {
   const subagentPhase = new Map<string, SubagentPhase>();
   const subagentFailureShown = new Set<string>();
   let turnFailures = createTurnFailures();
+  const failedTurnHint = failureHint(app.recipe, process.env);
   const failureLines = new Map<string, { line: TextRenderable; lead: string }>();
   const PHASE_COLOR: Record<SubagentPhase, string> = {
     sending: YELLOW,
@@ -2307,7 +2308,7 @@ export async function runTui(app: AppContext): Promise<void> {
     // turn the follower held running, and the bar's Escape hint follows that.
     else if (agent === rootAgentName && STREAM_END_TRACES.has(event.type as string)) updateStatus();
     if (agent === rootAgentName && failure) {
-      if (failure.show === 'ended') addEvent(turnEndedLine(failure.attempts, failureHint(app.recipe, process.env)(failure.errorType)), RED);
+      if (failure.show === 'ended') addEvent(turnEndedLine(failure.attempts, failedTurnHint(failure.errorType)), RED);
       else showFailure(agent, '', failure, RED);
     }
   }
