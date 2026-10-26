@@ -1,10 +1,3 @@
-/**
- * TuiModule — handles external-message events from the TUI/CLI.
- *
- * Converts them to context messages and triggers inference.
- * Follows the same pattern as ApiModule's handleMessage().
- */
-
 import type {
   Module,
   ModuleContext,

@@ -27,7 +27,6 @@ describe("the web UI's /files/ route serves only what the mount's own read gives
   let root: string;
   let baseUrl: string;
   const asked: string[] = [];
-  // The workspace the route finds: the stand-in, a real one, or none.
   let workspace: unknown;
   let standIn: unknown;
 
@@ -150,8 +149,6 @@ describe("the web UI's /files/ route serves only what the mount's own read gives
     }
   });
 
-  // agent-framework's own read, on real mounts. Every link here leads to a
-  // file or directory inside its own mount.
   test("agent-framework's read: a file by its own path, a file that is itself a link, and a file through a linked directory, answered as the read answers", async () => {
     const dir = mkdtempSync(join(tmpdir(), 'webui-files-real-'));
     const plain = join(dir, 'plain');
@@ -186,10 +183,6 @@ describe("the web UI's /files/ route serves only what the mount's own read gives
       const link = await get('plain/latest.png');
       expect(link.status).toBe(403);
       expect(link.body).toBe('Symlinks are not allowed: plain/latest.png');
-      // A linked directory that stays inside the mount: agent-framework 0.22.3
-      // follows it on any mount, and its release with
-      // anima-research/agent-framework#468 refuses it on a mount that doesn't
-      // follow links (parent_symlink). The route answers as the read does.
       const read = await real.readFileFromDisk('plain/d/note.json').then(
         (r) => ({ status: 200, body: r.bytes.toString(), code: null as string | null }),
         (err: WorkspaceReadError) => ({ status: 403, body: err.message, code: err.code as string | null }),
@@ -198,11 +191,8 @@ describe("the web UI's /files/ route serves only what the mount's own read gives
       if (read.status === 200) expect(read.body).toBe('{"through":"a linked directory"}');
       else {
         expect(read.code).toBe(PARENT_SYMLINK);
-        // The upload's advice tells a link to a directory by these words, the
-        // only sign of it the refusal carries.
         expect(read.body).toContain("the mount's host can set followSymlinks");
       }
-      // On a mount that follows links, both follow it.
       expect(await get('follow/latest.png')).toMatchObject({ status: 200, body: 'the followed version' });
       expect(await get('follow/d/note.json')).toMatchObject({ status: 200, body: '{"through":"a followed directory"}' });
     } finally {
@@ -239,11 +229,6 @@ describe("the web UI's /files/ route serves only what the mount's own read gives
     }
   });
 
-  // agent-framework 0.22.3's read looks for the file before it resolves the
-  // mount's directory, so a directory already gone is no file there. From the
-  // release with anima-research/agent-framework#533, the read checks the
-  // mount's root, and a root that has gone is an unavailable mount. The route
-  // answers as the read does, in the read's words.
   test("agent-framework's read: a mount whose directory has gone answers as the read does", async () => {
     const dir = mkdtempSync(join(tmpdir(), 'webui-files-gone-'));
     const gone = join(dir, 'gone');

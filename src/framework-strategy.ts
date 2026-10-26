@@ -61,8 +61,6 @@ const PASSTHROUGH_KEYS: ReadonlyArray<keyof RecipeStrategy> = [
   'identityReminderSilent',
 ];
 
-/** Verbatim tail for a recipe that omits `strategy.recentWindowTokens`, as a
- *  share of the compile budget: 120k of the default 300k. */
 export const DEFAULT_RECENT_WINDOW_RATIO = 0.4;
 
 /**
@@ -128,9 +126,6 @@ export function buildFrameworkStrategy(
   const strategyConfig = recipe.agent.strategy;
   const strategyType = strategyConfig?.type ?? 'autobiographical';
 
-  // Non-built-in types resolve through the extension registry. Validation
-  // already required a strategy-kind extension to be declared; this catches
-  // the declared-but-didn't-register case with a precise error.
   if (!isBuiltinStrategyType(strategyType)) {
     const factory = extensions?.strategies.get(strategyType);
     if (!factory) {
@@ -164,13 +159,6 @@ export function buildFrameworkStrategy(
     if (value !== undefined) autobiographicalOpts[key] = value;
   }
 
-  // Autobiographical AND frontdesk agents default to adaptive resolution
-  // unless a recipe opts out. Frontdesk historically kept the hierarchical
-  // renderer; that geometry has no tail reservation and no way to shed
-  // summary mass, so a long-lived agent saturates a fixed budget into a
-  // terminal context refusal (2026-08-03 boter clerk outage). The adaptive
-  // picker solves a frontier to fit — recipes can still pin
-  // `adaptiveResolution: false` as a rollback lever.
   if (
     (strategyType === 'autobiographical' || strategyType === 'frontdesk') &&
     autobiographicalOpts.adaptiveResolution === undefined

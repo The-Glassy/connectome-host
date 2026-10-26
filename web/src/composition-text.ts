@@ -7,28 +7,16 @@
 import { healthEntry } from '@conhost/web/health-lookup';
 import type { ContextComposition, HealthSnapshot } from './Health';
 
-/** What an agent with no composition shows, by whether its strategy keeps
- *  render stats at all. */
 export function noComposition(statsKept: boolean): string {
   return statsKept ? 'No live compile since its context was loaded.' : "This agent's strategy keeps no composition.";
 }
 
-/** An agent's composition as either view shows it: its stats as a block,
- *  or, where there are none, the line saying why. */
 export type CompositionView<S> = { stats: S } | { line: string };
 
-/** The composition's stats where there are any, else the line for an agent
- *  whose strategy keeps them or one whose strategy keeps none. */
 export function compositionView<S>(stats: S | null | undefined, statsKept: boolean): CompositionView<S> {
   return stats ? { stats } : { line: noComposition(statsKept) };
 }
 
-/** What the Health view shows for an agent's composition, from `/healthz`:
- *  nothing where the `contextComposition` section is absent from the
- *  snapshot; nothing either where the agent's own read of it failed, which
- *  the view's failure line names; else
- *  its entry's stats, or the line, by whether `contextCompositionNotKept`
- *  names the agent. Each map is read by own key (healthEntry). */
 export function healthComposition(
   health: Pick<HealthSnapshot, 'contextComposition' | 'contextCompositionNotKept' | 'readFailures'> | null | undefined,
   name: string,
@@ -38,7 +26,6 @@ export function healthComposition(
   return compositionView(healthEntry(health.contextComposition, name), !(health.contextCompositionNotKept ?? []).includes(name));
 }
 
-/** The fields of `/debug/context/makeup` the Context page chooses by. */
 export interface MakeupFigures<S> {
   stats: S | null;
   statsKept?: boolean;
@@ -47,10 +34,6 @@ export interface MakeupFigures<S> {
   countSource: string;
 }
 
-/** What the Context page shows from a makeup response: the next request's
- *  exact count and the model it was counted for, or why it wasn't counted;
- *  and the composition, its stats or the line. A response without
- *  `statsKept` is taken as a strategy that keeps them. */
 export function contextPageView<S>(makeup: MakeupFigures<S>): {
   count: { tokens: number; model: string } | { reason: string };
   composition: CompositionView<S>;
@@ -83,8 +66,6 @@ export function lastInferenceState(last: LastInference | null | undefined): { wo
   return { word: 'ended', at: endedAt };
 }
 
-/** The Health view's last-inference line, with `ago` saying how long ago a
- *  time was, or null where the framework reports none. */
 export function lastInferenceLine(last: LastInference | null | undefined, ago: (at: number) => string): string | null {
   const state = lastInferenceState(last);
   return state ? `last inference: ${state.word} ${ago(state.at)}` : null;
@@ -96,8 +77,6 @@ export function latestInferenceError(last: (LastInference & { lastError?: string
   return lastInferenceState(last)?.word === 'failed' && last?.lastError ? last.lastError : undefined;
 }
 
-/** Why the Context page has no exact count of the next request, from the
- *  makeup endpoint's `countSource`. */
 export function notCounted(countSource: string): string {
   if (countSource === 'count_tokens_unsupported_model') return "not counted: count_tokens doesn't take this agent's model";
   const failed = /^count_tokens_failed_(\d+)$/.exec(countSource);

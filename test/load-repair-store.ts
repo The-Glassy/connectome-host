@@ -1,12 +1,5 @@
-/**
- * A store that needs a load repair, for the tests of the alert
- * (load-repair-alert.test.ts) and of the store audit
- * (update-audit-stores.test.ts): one place for the summary state it seeds,
- * which reaches into the strategy's private `store` and `summariesStateId`.
- */
 import { AutobiographicalStrategy, ContextManager } from '@animalabs/context-manager';
 
-/** Answers any model call a strategy's open makes, as no seed needs one. */
 const MODEL = { complete: async () => ({ stopReason: 'end_turn', content: [{ type: 'text', text: 'x' }] }) } as never;
 
 /** A store whose level-2 summary holds text and names an L1 that isn't

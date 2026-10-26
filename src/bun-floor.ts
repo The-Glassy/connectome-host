@@ -13,9 +13,6 @@ export function bunFloorWarning(engines: unknown, bun: string | undefined, hostV
   return bunBelowFloor(declared, bun) === true ? warning((declared as string).trim(), bun!, hostVersion) : null;
 }
 
-/** Whether `bun` is below the floor `declared` (an `engines.bun`), by the
- *  rule above: null when either can't be read in that form. Update reads a
- *  release's floor this way before installing it (src/update/update.ts). */
 export function bunBelowFloor(declared: unknown, bun: string | undefined): boolean | null {
   const floor = typeof declared === 'string' ? FLOOR.exec(declared) : null;
   const running = VERSION.exec(bun ?? '');

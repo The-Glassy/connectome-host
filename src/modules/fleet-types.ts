@@ -4,10 +4,6 @@
  * See docs/fleet-protocol.md for the protocol reference.
  */
 
-// ---------------------------------------------------------------------------
-// Parent → Child: commands
-// ---------------------------------------------------------------------------
-
 export type IncomingCommand =
   /** Set which event types the child emits.  Supports glob: ["tool:*", "lifecycle"]. */
   | { type: 'subscribe'; events: string[] }
@@ -46,10 +42,6 @@ export type IncomingCommand =
    *  whether it drained and who holds a turn; or end the switch's quiesce.
    *  Response is `update-response`. */
   | { type: 'update-request'; request: import('../update/quiesce.js').SwitchRequest; corrId: string };
-
-// ---------------------------------------------------------------------------
-// Child → Parent: events
-// ---------------------------------------------------------------------------
 
 /** Lifecycle events added by the headless runtime (not framework TraceEvents). */
 export type LifecycleEvent =
@@ -204,10 +196,6 @@ export type WireEvent =
   // the underlying TraceEvent doesn't declare it.
   | (Record<string, unknown> & { type: string; ts?: number });
 
-// ---------------------------------------------------------------------------
-// Subscription matching (used by both ends)
-// ---------------------------------------------------------------------------
-
 /**
  * Match an event type against a subscription set.  Supports:
  *   - exact match: "inference:completed"
@@ -222,10 +210,6 @@ export function matchesSubscription(eventType: string, subscription: Set<string>
   }
   return false;
 }
-
-// ---------------------------------------------------------------------------
-// Direct-routing helper for TUI input
-// ---------------------------------------------------------------------------
 
 export interface FleetRoute {
   /** Target child's name as parsed from the prefix. */

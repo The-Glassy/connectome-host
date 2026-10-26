@@ -137,8 +137,6 @@ export function projectItem(item: NativeItem): ContentBlock[] {
         content: typeof item.output === 'string' ? item.output : JSON.stringify(item.output ?? null),
       })];
     default:
-      // Custom tool calls/outputs and future item types stay opaque. The
-      // zero-width projection avoids injecting synthetic text into the model.
       return [carrier({ type: 'text', text: '' })];
   }
 }

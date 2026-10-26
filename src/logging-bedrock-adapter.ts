@@ -80,18 +80,9 @@ export class LoggingBedrockAdapter extends BedrockAdapter {
     try {
       appendFileSync(this.logPath, serializeRecord(record));
     } catch {
-      // Logging must never break inference.
     }
   }
 
-  /**
-   * Record one call's outcome. A call failed exactly when `outcome` carries
-   * `error`, whatever its value: a rejection with undefined is a failure too.
-   * A record whose request or response can't be summarized is written
-   * minimal instead (`summaryUnavailable: true`), with its timing and, for a
-   * failure, the bounded error, so the call still has a record. Nothing here
-   * can replace the provider's response or its error.
-   */
   private recordCall(
     kind: 'complete' | 'stream',
     request: ProviderRequest,
@@ -116,7 +107,6 @@ export class LoggingBedrockAdapter extends BedrockAdapter {
       }
       this.log(record);
     } catch {
-      // Logging must never break inference, nor change what it returns or throws.
     }
   }
 
@@ -137,7 +127,6 @@ export class LoggingBedrockAdapter extends BedrockAdapter {
       this.recordCall('complete', request, started, rawRequest, { error });
       throw error;
     }
-    // Outside the try: a logging failure can't be taken for the provider's.
     this.recordCall('complete', request, started, rawRequest, { response });
     return response;
   }
@@ -160,7 +149,6 @@ export class LoggingBedrockAdapter extends BedrockAdapter {
       this.recordCall('stream', request, started, rawRequest, { error });
       throw error;
     }
-    // Outside the try: a logging failure can't be taken for the provider's.
     this.recordCall('stream', request, started, rawRequest, { response });
     return response;
   }

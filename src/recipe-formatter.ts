@@ -2,12 +2,6 @@ import { AnthropicXmlFormatter, NativeFormatter, OpenAIResponsesFormatter } from
 import type { Recipe } from './recipe.js';
 import { resolvePromptCaching } from './framework-agent-config.js';
 
-/**
- * The membrane formatter a recipe's agent runs through, given the model the
- * host resolved for it. The host builds one Membrane, so every agent it runs,
- * subagents included, sends through this formatter, decided from the recipe's
- * agent.
- */
 export function recipeFormatter(
   recipe: Recipe,
   provider: string,

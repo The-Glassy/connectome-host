@@ -22,8 +22,6 @@ afterAll(() => {
 
 const UNRELEASED = "# Changelog\n\n## Unreleased\n\n## 0.22.1 — 2026-10-14\n\n### Breaking\n\n- An old breaking entry, already released.\n";
 
-/** A throwaway project: package.json at `version`, a CHANGELOG.md, and
- *  changelog.d/ holding `fragments` (name to body). */
 function project(version: string, fragments: Record<string, string> = {}, changelog = UNRELEASED): string {
   const dir = mkdtempSync(join(tmpdir(), "release-bump-"));
   made.push(dir);
@@ -38,7 +36,6 @@ function project(version: string, fragments: Record<string, string> = {}, change
   return dir;
 }
 
-/** A changelog whose Unreleased section holds `title` with `body` under it. */
 const filed = (title: string, body: string) =>
   `# Changelog\n\n## Unreleased\n\n### ${title}\n\n${body}\n## 0.22.1 — 2026-10-14\n\n### Fixed\n\n- A fix.\n`;
 
@@ -55,7 +52,6 @@ function exec(
   });
 }
 
-/** The script as preversion runs it, going from `from` to `to`. */
 const bump = (dir: string, from: string, to: string) =>
   exec("node", [SCRIPT], dir, { npm_old_version: from, npm_new_version: to });
 
@@ -150,11 +146,9 @@ test("a prerelease counts as the release it leads to: a prepatch can't carry a b
 
 test("finishing a prerelease: a new line's goes ahead, a patch's is refused as a patch", async () => {
   const dir = project("0.23.0-1", BREAKING);
-  // 0.23 and 2.x have no release yet, so no dependent's range holds them.
   assert.deepEqual(await bump(dir, "0.23.0-1", "0.23.0"), goesAhead);
   assert.deepEqual(await bump(dir, "0.23.0-1", "0.23.1"), goesAhead);
   assert.deepEqual(await bump(dir, "2.0.0-0", "2.0.0"), goesAhead);
-  // 0.22.2-0 leads to a patch of 0.22, and 1.4.0-1 to a minor of 1.x.
   const patch = await bump(dir, "0.22.2-0", "0.22.2");
   assert.equal(patch.code, 1);
   assert.match(patch.stderr, /0\.22\.2-0 to 0\.22\.2 stays in 0\.22\.x, which a dependent's caret range on 0\.22\.x takes\./);
@@ -173,12 +167,10 @@ test("a version below the current line is refused too, since a dependent's range
   const older = await bump(dir, "0.22.1", "0.21.9");
   assert.equal(older.code, 1);
   assert.match(older.stderr, /0\.22\.1 to 0\.21\.9 goes back to 0\.21\.x, which a dependent's caret range may still hold\./);
-  // From a prerelease that opens 0.23: 0.22.2 is above every 0.22 release so far.
   const back = await bump(dir, "0.23.0-0", "0.22.2");
   assert.equal(back.code, 1);
   assert.match(back.stderr, /0\.23\.0-0 to 0\.22\.2 goes back to 0\.22\.x/);
   assert.match(back.stderr, /Run npm version minor \(0\.23\.0-0 to 0\.23\.0\)\./);
-  // Lower but in the current line: still the line a dependent's range takes.
   const lower = await bump(dir, "0.22.5", "0.22.3");
   assert.equal(lower.code, 1);
   assert.match(lower.stderr, /0\.22\.5 to 0\.22\.3 stays in 0\.22\.x, which a dependent's caret range on 0\.22\.x takes\./);
@@ -214,8 +206,6 @@ test("run outside npm version, it goes ahead with nothing pending, and refuses, 
   assert.match(half.stderr, /\(npm_old_version=0\.22\.1, npm_new_version=unset\)/);
 });
 
-/** A local stand-in for GitHub's issues endpoint with no hold open, for the
- *  hold check that preversion also runs. */
 async function noHolds(): Promise<{ url: string; close: () => Promise<void> }> {
   const server = createServer((_req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
@@ -226,10 +216,6 @@ async function noHolds(): Promise<{ url: string; close: () => Promise<void> }> {
   return { url: `http://127.0.0.1:${port}`, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
 }
 
-/** A throwaway project whose preversion is this repository's own, and whose
- *  version hook is its changelog fold, with the scripts beside them. (The
- *  repository's version hook also stages the fold with git, which this
- *  project, with no repository, leaves out.) */
 function wiredProject(fragments: Record<string, string>): string {
   const scripts = (JSON.parse(readFileSync(PACKAGE_JSON, "utf8")) as { scripts: Record<string, string> }).scripts;
   const dir = project("0.22.1", fragments);
@@ -246,7 +232,6 @@ function wiredProject(fragments: Record<string, string>): string {
   return dir;
 }
 
-/** npm, kept to the throwaway directory and the stand-in for GitHub. */
 function npm(dir: string, args: string[], api: string) {
   return exec("npm", args, dir, {
     HOME: dir,

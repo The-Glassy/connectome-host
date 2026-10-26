@@ -21,8 +21,6 @@ if (!API_KEY) {
 const MODEL = process.env.MODEL ?? 'claude-sonnet-4-5-20250929';
 const ENDPOINT = 'https://api.anthropic.com/v1/messages';
 
-// A fabricated past turn: user asked something, assistant thought, then spoke.
-// This mirrors the shape of an exported claude.ai assistant message.
 const FAKE_PAST_THINKING =
   'The user is asking about prime numbers. The smallest prime is 2 — sometimes ' +
   'people forget 1 is not prime by convention. I should give the answer plainly.';

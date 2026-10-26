@@ -54,8 +54,6 @@ function summarizeRequest(request: ProviderRequest): Record<string, unknown> {
 }
 
 function summarizeResponse(response: ProviderResponse, convention: ProviderAdapter['usageCacheConvention']): Record<string, unknown> {
-  // Read defensively: a null block or tool costs only its own entry. What
-  // can't be read at all makes record() fall back to a minimal record.
   const content = (response.content ?? []) as Array<{ type?: string; text?: string; name?: string } | null>;
   return {
     stopReason: response.stopReason
@@ -73,7 +71,6 @@ function summarizeResponse(response: ProviderResponse, convention: ProviderAdapt
 export class LoggingProviderAdapter implements ProviderAdapter {
   readonly name: string;
 
-  /** Credential-monitor taps (see LoggingAnthropicAdapter). */
   onProviderError?: (error: unknown, kind: 'complete' | 'stream') => void;
   onProviderSuccess?: (kind: 'complete' | 'stream') => void;
 
@@ -92,8 +89,6 @@ export class LoggingProviderAdapter implements ProviderAdapter {
     return this.inner.requiresNativeResponsesInput;
   }
 
-  // Optional in newer membrane releases; preserve the inner provider's media
-  // policy without imposing it on older adapters that do not advertise one.
   get toolResultImageMediaTypes(): ReadonlySet<string> | undefined {
     return (this.inner as ProviderAdapter & {
       readonly toolResultImageMediaTypes?: ReadonlySet<string>;
@@ -104,29 +99,13 @@ export class LoggingProviderAdapter implements ProviderAdapter {
     return this.inner.supportsModel(modelId);
   }
 
-  /**
-   * Append one record, serialized by the shared size guard
-   * (logging-record.ts): when it can't be serialized whole (a cycle or a
-   * BigInt in a raw body), or it's over the guard, it drops the raw request,
-   * keeping the raw response if the line then fits, then both raw bodies,
-   * then all but the head's values and the error's name and message, until
-   * the line fits, so the error text survives either way.
-   */
   private log(record: Record<string, unknown>): void {
     try {
       appendFileSync(this.logPath, serializeRecord(record));
     } catch {
-      // Logging must never break inference.
     }
   }
 
-  /**
-   * Record one call's outcome. A call failed exactly when `outcome` carries
-   * `error`, whatever its value: a rejection with undefined is a failure too.
-   * If the request or response can't be summarized (a value the summaries
-   * can't read), a minimal record is written instead, so a call is never
-   * silent: its provider, kind, timing and, for a failure, the bounded error.
-   */
   private record(
     kind: 'complete' | 'stream',
     request: ProviderRequest,
@@ -134,13 +113,10 @@ export class LoggingProviderAdapter implements ProviderAdapter {
     outcome: { response: ProviderResponse } | { error: unknown },
   ): void {
     const failed = 'error' in outcome;
-    // The credential monitor's taps (main's 8ed0a18). They follow the
-    // explicit outcome, so a rejection with undefined is reported as the
-    // failure it is.
     try {
       if (failed) this.onProviderError?.(outcome.error, kind);
       else this.onProviderSuccess?.(kind);
-    } catch { /* observers never affect provider traffic */ }
+    } catch { }
     const head = {
       type: failed ? 'error' : 'call',
       provider: this.name,
@@ -165,7 +141,6 @@ export class LoggingProviderAdapter implements ProviderAdapter {
     this.log(record);
   }
 
-  /** Record a call; nothing here may replace the provider's response or its error. */
   private recordSafely(
     kind: 'complete' | 'stream',
     request: ProviderRequest,
@@ -175,7 +150,6 @@ export class LoggingProviderAdapter implements ProviderAdapter {
     try {
       this.record(kind, request, started, outcome);
     } catch {
-      // Logging must never break inference, nor change what it returns or throws.
     }
   }
 
@@ -191,7 +165,6 @@ export class LoggingProviderAdapter implements ProviderAdapter {
       this.recordSafely('complete', request, started, { error });
       throw error;
     }
-    // Outside the try: a logging failure can't be taken for the provider's.
     this.recordSafely('complete', request, started, { response });
     return response;
   }

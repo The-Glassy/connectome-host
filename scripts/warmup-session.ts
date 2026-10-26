@@ -39,15 +39,6 @@ import { Membrane, AnthropicAdapter, BedrockAdapter, type NormalizedResponse } f
 import { SessionManager } from '../src/session-manager.js';
 import { resolveAgentName } from '../src/agent-name.js';
 
-// ---------------------------------------------------------------------------
-// Pricing (approximate, USD per 1M tokens). Used for the --max-spend gate
-// and the on-screen running cost.
-// Keep in sync with any canonical billing source if/when one is consolidated
-// (per memory: project_billing_tracker.md). Stale entries here only affect
-// the cost displayed during warmup; the actual spend is whatever Anthropic
-// charges.
-// ---------------------------------------------------------------------------
-
 const PRICING: Record<string, { input: number; output: number }> = {
   'claude-sonnet-4-5-20250929': { input: 3.0, output: 15.0 },
   'claude-opus-4-7': { input: 15.0, output: 75.0 },
@@ -58,21 +49,10 @@ function priceOf(model: string): { input: number; output: number } {
   return PRICING[model] ?? { input: 3.0, output: 15.0 };
 }
 
-// ---------------------------------------------------------------------------
-// CLI
-// ---------------------------------------------------------------------------
-
 interface Opts {
   sessionRef: string;
   dataDir: string;
   model: string;
-  /**
-   * Explicit `--agent <name>` from the CLI. When absent (undefined), the
-   * runner falls back to the session's import-source sidecar, then to
-   * "Claude". Distinguishing "not given" from "given as 'agent'" lets the
-   * sidecar (the durable record of what the importer wrote) override a
-   * stale default without overriding a deliberate operator choice.
-   */
   agentName?: string;
   maxSpend: number | null;
   l1Budget?: number;
@@ -113,10 +93,6 @@ function parseArgs(argv: string[]): Opts {
   return opts;
 }
 
-// ---------------------------------------------------------------------------
-// Progress renderer
-// ---------------------------------------------------------------------------
-
 interface Spend {
   inputTokens: number;
   outputTokens: number;
@@ -134,7 +110,6 @@ function renderProgress(
   const elapsedMs = Date.now() - startedAt;
   const elapsedSec = elapsedMs / 1000;
 
-  // Throughput: L1 chunks processed per second since start
   const l1Done = initialL1Queue - s.l1QueueLength;
   const l1Pct = initialL1Queue > 0 ? (l1Done / initialL1Queue) * 100 : 100;
   const throughput = l1Done > 0 ? l1Done / elapsedSec : 0;
@@ -167,10 +142,6 @@ function formatDuration(sec: number): string {
   if (m > 0) return `${m}m${s.toString().padStart(2, '0')}s`;
   return `${s}s`;
 }
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
 
 async function main() {
   const opts = parseArgs(process.argv);
@@ -214,13 +185,8 @@ async function main() {
   console.error(`Model: ${opts.model}`);
   if (opts.maxSpend !== null) console.error(`Max spend: $${opts.maxSpend.toFixed(2)}`);
 
-  // -- Membrane with token-spend hook --
   const price = priceOf(opts.model);
   const spend: Spend = { inputTokens: 0, outputTokens: 0, cost: 0 };
-  // Bedrock model ids (anthropic.* / <region>.anthropic.*) route through the
-  // BedrockAdapter with AWS_* env creds — legacy Claude models (revival
-  // sessions) exist nowhere else. Caching off: legacy models reject
-  // cache_control outright.
   const isBedrock = /^([a-z]{2,6}\.)?anthropic\./.test(opts.model);
   const adapter = isBedrock
     ? new BedrockAdapter()
@@ -245,15 +211,11 @@ async function main() {
     },
   });
 
-  // -- Store + strategy + context manager --
   const store = JsStore.openOrCreate({ path: storePath });
   const strategy = new AutobiographicalStrategy({
     compressionModel: opts.model,
-    // Autobio uses summaryParticipant for the synthetic summary messages it
-    // writes back; aligning with the imported agent name keeps the whole
-    // conversation under a single participant.
     summaryParticipant: agentName,
-    autoTickOnNewMessage: false, // we drive ticks manually
+    autoTickOnNewMessage: false,
     ...(opts.l1Budget !== undefined && { l1BudgetTokens: opts.l1Budget }),
     ...(opts.l2Budget !== undefined && { l2BudgetTokens: opts.l2Budget }),
     ...(opts.l3Budget !== undefined && { l3BudgetTokens: opts.l3Budget }),
@@ -269,7 +231,6 @@ async function main() {
     namespace: `agents/${agentName}`,
   });
 
-  // -- Inspect initial state --
   const initialStats = strategy.getProgressSnapshot();
   const totalMessages = cm.getAllMessages().length;
   console.error(
@@ -284,13 +245,10 @@ async function main() {
   }
   console.error('');
 
-  // -- Drive to convergence --
   const isTty = process.stderr.isTTY ?? false;
   const startedAt = Date.now();
   const initialL1Queue = initialStats.l1QueueLength;
 
-  // Periodic progress refresh (handles long Sonnet calls so the bar doesn't
-  // freeze between ticks).
   const renderTimer = setInterval(
     () => renderProgress(strategy, startedAt, initialL1Queue, spend, isTty),
     isTty ? 1000 : 30_000,

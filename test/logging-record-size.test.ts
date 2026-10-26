@@ -70,13 +70,11 @@ for (const [name, make] of Object.entries(factories)) {
   });
 }
 
-/** The line serializeRecord gives, its byte length and its parsed record. */
 function line(record: Record<string, unknown>) {
   const text = serializeRecord(record);
   expect(text.endsWith('\n')).toBe(true);
   return { bytes: Buffer.byteLength(text, 'utf8'), parsed: JSON.parse(text) as Record<string, any> };
 }
-/** A successful call's raw response: what the call ledger and the doctor read. */
 const response = { stop_reason: 'end_turn', usage: { input_tokens: 12, output_tokens: 34, cache_read_input_tokens: 5_000, cache_creation_input_tokens: 0 } };
 const call = { type: 'call', provider: 'unit-test', kind: 'stream', timestamp: '2026-10-19T00:00:00.000Z', durationMs: 3, requestSummary: { model: 'unit-test', messages: 2 } };
 const BIG = 'x'.repeat(CAP + 1);
@@ -101,8 +99,6 @@ describe('serializeRecord drops parts in order, each step checked against the ca
   });
 
   test('a multi-byte record under the cap is counted by its bytes and written whole', () => {
-    // 6,000,000 two-byte characters: 12 MB of UTF-8, over what a count of
-    // UTF-16 units alone could clear, under the cap.
     const record = { ...call, rawRequest: 'é'.repeat(6_000_000) };
     const { bytes, parsed } = line(record);
     expect(bytes).toBeLessThan(CAP);

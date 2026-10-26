@@ -59,7 +59,6 @@ describe("the _config mount's include", () => {
     writeFileSync(join(cfg, 'gate.js'), 'export default () => true;\n');
     writeFileSync(join(cfg, 'gate.recipe.json'), '{}\n');
     for (const name of LEFT_OUT) writeFileSync(join(cfg, name), `${name}\n`);
-    // An include's name covers that name in a directory beneath too.
     mkdirSync(join(cfg, 'old'));
     writeFileSync(join(cfg, 'old', 'gate.json'), '{}\n');
     writeFileSync(join(cfg, 'old', 'notes.txt'), 'old notes\n');
@@ -118,9 +117,6 @@ describe("the _config mount's include", () => {
     expect(existsSync(join(cfg, 'notes.txt'))).toBe(false);
   }, 30_000);
 
-  // A recipe's tool catalogue (agent.toolPresentation.cataloguePath) may sit
-  // in `_config`: agent-framework serves a registered generated file whatever
-  // the include says.
   test('a generated file registered under _config is read whatever the include covers', async () => {
     const { root, storePath } = setUp();
     const { workspace } = await started(root, configMount(storePath));

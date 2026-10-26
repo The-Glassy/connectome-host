@@ -22,12 +22,7 @@ type Classifier = { isTransientError(err: Error): boolean };
 async function harness(fail: () => Error) {
   const tmpDir = mkdtempSync(join(tmpdir(), 'sub-wait-'));
   const membrane = new Membrane(new MockAdapter({ defaultResponse: 'ok' }), { formatter: new NativeFormatter() });
-  // One retry, so a restart shows as a second run after a 5 s delay, well
-  // inside the test's bound.
   const subagent = new SubagentModule({ parentAgentName: 'parent', defaultModel: 'mock', defaultMaxTokens: 256, maxRetries: 1 });
-  // The rate-limit cooldown is 30 s. A run ended over a wait the framework
-  // won't sleep never reaches it; at 0, a run that did would show as a halved
-  // concurrency (throttle()) rather than as a test out of time.
   (subagent as unknown as { rateLimitCooldownMs: number }).rateLimitCooldownMs = 0;
   const framework = await AgentFramework.create({
     storePath: join(tmpDir, 'store'),
@@ -51,10 +46,9 @@ async function harness(fail: () => Error) {
     framework,
     subagent,
     runs: () => runs,
-    /** Whether the module throttled its subagents, as a rate limit does. */
     throttle: () => ({ halved: limits.effectiveConcurrent < concurrency, throttled: limits.throttled }),
     cleanup: async () => {
-      try { await framework.stop(); } catch { /* noop */ }
+      try { await framework.stop(); } catch { }
       rmSync(tmpDir, { recursive: true, force: true });
     },
   };
@@ -115,8 +109,6 @@ describe("a provider's stated wait that the framework won't sleep", () => {
   });
 
   test('a rate-limit error without that class throttles the subagents and is tried again, as before', async () => {
-    // The control for the throttle() checks above: a plain rate-limit error
-    // halves the concurrency, throttles, and restarts the run.
     const h = await harness(() => new Error('429 rate_limit_error: try again later'));
     try {
       const res = await h.subagent.handleToolCall(call('spawn', 'plain-limited'));
@@ -139,15 +131,10 @@ describe("a provider's stated wait that the framework won't sleep", () => {
     let next: Error = new Error('unset');
     const h = await harness(() => next);
     try {
-      // The framework's own words and wait, from the installed package, as
-      // its settle passes them to ProviderWaitNotSleptError
-      // (runEphemeralToCompletion's reject).
       const fw = h.framework as unknown as { statedWaitNotSlept(error: Error): { error: string; statedWaitMs: number } };
       const stated = (retryAfterMs: number) => Object.assign(new Error('429 rate_limit_error: try again later'), {
         name: 'MembraneError', type: 'rate_limit', retryable: true, retryAfterMs,
       });
-      // Each case's own words, so a framework that stopped reading the stand-in
-      // as a MembraneError, and gave every case one ending, fails here.
       const cases = [
         [7_200_000, 'the provider asked to wait 7200 s'],
         [Number.POSITIVE_INFINITY, 'the provider asked to wait longer than can be represented'],

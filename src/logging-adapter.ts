@@ -61,9 +61,6 @@ import { parseLoggedCall, summarizeCacheControls, type ProviderCallRecord } from
 import { describeErrorObject } from './logging-error-fields.js';
 import { serializeRecordOutcome, type RecordKept } from './logging-record.js';
 
-/** Live read of the current reasoning setting. The host wires this to
- *  `SettingsModule.getReasoning()` so toggles via the `agent_settings` tool's
- *  reasoning_enabled field take effect on the next call without restart. */
 export type ReasoningGetter = () => {
   enabled: boolean;
   budgetTokens: number;
@@ -119,16 +116,11 @@ export type ProviderCallObserver = (record: ProviderCallRecord) => void;
  *  accepted (the mechanism the Agent SDK's system-prompt-append uses). */
 const OAUTH_SYSTEM_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 
-/** Calls `get`, giving undefined where it throws. */
 function guarded<T>(get: () => T): T | undefined {
   try { return get(); } catch { return undefined; }
 }
 
-/** Truthy env-flag parse: unset/''/'0'/'false' (any case) are off. */
 function envFlag(value: string | undefined, name = 'LLM_CALLS_FULL_PAYLOADS'): boolean {
-  // Fail-closed allowlist, same posture as gate-telemetry's flag (#119):
-  // only an explicit 1/true (trimmed, case-insensitive) enables full
-  // payloads in the local ledger; 'off', 'no' and typos must not.
   if (value === undefined) return false;
   const normalized = value.trim().toLowerCase();
   if (normalized === '1' || normalized === 'true') return true;
@@ -244,15 +236,10 @@ export function errorRequestId(error: unknown): string | undefined {
   });
 }
 
-/** What became of a row's write, as `log()` reports it: written, and which
- *  step of the size guard its line came from (logging-record.ts), or not
- *  written, and why. */
 export type LogOutcome =
   | { written: true; kept: RecordKept; truncated?: string }
   | { written: false; error: string };
 
-/** What the anomaly alert says of the row's request: kept only when the row
- *  that holds it was written whole. */
 function requestFate(saved: LogOutcome | undefined, requestCaptured: boolean): string {
   if (!requestCaptured) return 'no request was captured for this call';
   if (!saved) return 'full request kept in this call\'s llm-calls row';
@@ -261,11 +248,6 @@ function requestFate(saved: LogOutcome | undefined, requestCaptured: boolean): s
   return `request not kept: ${saved.truncated ?? saved.kept}`;
 }
 
-/** The one stderr line an anomalous call prints, timestamped so it can be
- *  placed in an append-mode log that stamps nothing itself. It names the
- *  provider's response this adapter received, says what membrane does with
- *  such calls, and says whether the request was saved (`saved`: the row's
- *  write outcome; `requestCaptured`: whether there was a request to save). */
 export function anomalyLogLine(
   timestamp: string,
   kind: 'complete' | 'stream',
@@ -288,21 +270,14 @@ export function anomalyLogLine(
     + ` — provider response; ${fate} — ${requestFate(saved, requestCaptured)}`;
 }
 
-/** What the off-path refusal dragnet hears of one refused call. */
 export interface OffPathRefusal {
   kind: 'complete';
   category?: string;
   model: string;
   messages: number;
-  /** The whole prompt the call sent: uncached input, cache reads and cache writes. */
   inputTokens: number;
 }
 
-/**
- * The ops alert for an off-path refusal: its kind, its message, and its data.
- * The data names the call's kind `call`, since failures.log spreads the data
- * after the alert's own `kind`, which must stay 'refusal-offpath'.
- */
 export function offPathRefusalAlert(info: OffPathRefusal): {
   kind: 'refusal-offpath';
   message: string;
@@ -320,8 +295,6 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
   private readonly logPath: string;
   private readonly getReasoning?: ReasoningGetter;
   private readonly onCall?: ProviderCallObserver;
-  /** True when authenticated with an OAuth/Bearer token instead of an API
-   *  key; requests then need the identity block prepended (see above). */
   private readonly oauthMode: boolean;
   /** LLM_CALLS_FULL_PAYLOADS=1 (or true, in any case): retain the full raw
    *  request on EVERY call, not just refusals/errors, within the 16 MiB a log
@@ -343,9 +316,7 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
       cacheKeepalive: {
         ...config?.cacheKeepalive,
         onCall(call) {
-          // Log before calling the caller's observer, which owns its copy and
-          // may mutate it. Failure in either observer must not suppress the other.
-          try { observeKeepalive?.(call); } catch { /* observability is isolated */ }
+          try { observeKeepalive?.(call); } catch { }
           // Membrane isolates sync errors and returned promise rejections. The
           // caller's observer runs with the `this` membrane gives this one, as
           // it did when membrane called it directly.
@@ -360,10 +331,6 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
     this.oauthMode = Boolean(config?.authToken);
   }
 
-  /** Under OAuth subscription auth, prepend the required identity block to the
-   *  system prompt (converting a string system to blocks). No-op under API-key
-   *  auth or when the identity block is already first. The block is plain
-   *  (no cache_control) and a stable prefix, so caching is unaffected. */
   private withOAuthIdentity(request: ProviderRequest): ProviderRequest {
     if (!this.oauthMode) return request;
     const sys = request.system;
@@ -432,12 +399,6 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
     };
   }
 
-  /** Apply the agent's reasoning_effort setting as `output_config.effort`.
-   *  Called for stream() only: agent turns stream, while compression and
-   *  maintenance calls go through complete() — a resident turning effort down
-   *  for conversation must not silently thin the summaries its memory is made
-   *  of. 'default'/unset sends nothing. Merges into any `output_config`
-   *  already in `extra` (structured-output format) rather than replacing it. */
   private withEffort(request: ProviderRequest): ProviderRequest {
     const effort = this.getReasoning?.()?.effort;
     if (!effort || effort === 'default') return request;
@@ -465,15 +426,12 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
   private readonly warnedEffort = new Set<string>();
   private readonly warnedThinking = new Set<string>();
 
-  /** Append the record's line; never throws. Says whether the line was
-   *  written and, if it was, which step of the size guard it came from. */
   private log(record: Record<string, unknown>): LogOutcome {
     try {
       const { line, kept, truncated } = serializeRecordOutcome(record);
       appendFileSync(this.logPath, line);
       return truncated === undefined ? { written: true, kept } : { written: true, kept, truncated };
     } catch (err) {
-      // never throw from logging
       const message = guarded(() => (err instanceof Error ? err.message : String(err)));
       return { written: false, error: typeof message === 'string' && message ? message.slice(0, 200) : 'unknown error' };
     }
@@ -484,8 +442,6 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
     const raw = call.request;
     const cache = summarizeCacheControls(raw);
     const response = call.outcome === 'success' ? call.response : undefined;
-    // A failed poke's error takes the shape complete and stream rows give
-    // theirs: bounded text, with the classification a membrane error carries.
     const errorFields = call.outcome === 'error' ? describeErrorObject(call.error, true) : undefined;
     const effort = (raw.output_config as { effort?: unknown } | undefined)?.effort;
     const record: Record<string, unknown> = {
@@ -504,10 +460,6 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
         cacheTtls: cache.ttls,
         lineage: call.key,
       },
-      // A poke replays its lineage's latest real request every refresh
-      // interval, so a row keeps it only with full payloads on, failed and
-      // refused pokes' rows included, where a turn's failed or refused row
-      // keeps its own.
       rawRequest: this.fullPayloads ? raw : undefined,
       ...(response ? { rawResponse: response } : {}),
       ...errorFields,
@@ -518,18 +470,11 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
     try {
       if (call.outcome === 'error') this.onProviderError?.(call.error, 'keepalive');
       else this.onProviderSuccess?.('keepalive');
-    } catch { /* observers never affect provider traffic */ }
-    // Share the log decoder so live and rehydrated spend use identical vendor
-    // fields (including cache-write buckets, geography, and service tier).
-    // The ledger comes last, so a throwing ledger observer skips nothing here,
-    // and the guard in the constructor's onCall keeps it from the caller's.
+    } catch { }
     const observed = parseLoggedCall(record);
     if (observed) this.onCall?.(observed);
   }
 
-  /** The request's summary, each part read on its own: a part that can't be
-   *  read is undefined, which the record leaves out, and costs only itself.
-   *  Built once per call, for the record and the ledger's live row alike. */
   private requestSummary(request: ProviderRequest, rawRequest: unknown): Record<string, unknown> {
     const cache = rawRequest ? guarded(() => summarizeCacheControls(rawRequest)) : undefined;
     const effort = guarded(() => (rawRequest as { output_config?: { effort?: unknown } } | null | undefined)?.output_config?.effort);
@@ -556,28 +501,9 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
    */
   onRefusal?: (info: OffPathRefusal) => void;
 
-  /** Credential-monitor taps: every failed call (auth verdicts are what the
-   *  monitor keys on) and every successful one (clears a standing auth
-   *  alarm). Observers never affect provider traffic. */
   onProviderError?: (error: unknown, kind: 'complete' | 'stream' | 'keepalive') => void;
   onProviderSuccess?: (kind: 'complete' | 'stream' | 'keepalive') => void;
 
-  /**
-   * Tell the observers about one call. A call failed exactly when `outcome`
-   * carries `error`, whatever its value: a rejection with undefined is a
-   * failure, and so is an error whose text is empty. The ledger row's error
-   * text is the record's own, bounded (`errorText`), and its model, message
-   * count, cache summary and lineage are the record's request summary's
-   * (`summary`), so a row restored from the record after a restart reads
-   * the same. A part the summary couldn't read leaves the model empty or
-   * the count 0, in both. Without a raw request it could read, the live row's cache
-   * summary is unknown, and so is the restored row's, unless the raw request
-   * the record keeps (a failure's, a refusal's, or any call's with full
-   * payloads) can be summarized there: one that reads differently from how
-   * it serializes (a toJSON, a throwing getter that isn't an own enumerable
-   * property), which membrane's built request never does. The tokens, stop
-   * reason and cache-write fields come from membrane's own response.
-   */
   private observeCall(
     kind: 'complete' | 'stream',
     timestamp: string,
@@ -590,7 +516,7 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
     try {
       if ('error' in outcome) this.onProviderError?.(outcome.error, kind);
       else this.onProviderSuccess?.(kind);
-    } catch { /* observers never affect provider traffic */ }
+    } catch { }
     const response = 'response' in outcome ? outcome.response : undefined;
     const raw0 = (response as { raw?: { stop_reason?: string; stop_details?: { category?: string } } } | undefined)?.raw;
     if (kind === 'complete' && raw0?.stop_reason === 'refusal' && this.onRefusal) {
@@ -600,12 +526,10 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
           category: raw0.stop_details?.category,
           model: request.model,
           messages: request.messages.length,
-          // The whole prompt the call sent: most of a compression call's is
-          // often read from cache.
           inputTokens: (response?.usage.inputTokens ?? 0) + (response?.usage.cacheReadTokens ?? 0)
             + (response?.usage.cacheCreationTokens ?? 0),
         });
-      } catch { /* observers never affect provider traffic */ }
+      } catch { }
     }
     if (!this.onCall) return;
     const raw = (response as { raw?: Record<string, unknown> } | undefined)?.raw;
@@ -620,7 +544,6 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
         timestamp,
         kind,
         durationMs,
-        // As the ledger's restore reads them from the record.
         model: typeof summary.model === 'string' ? summary.model : '',
         messages: typeof summary.messages === 'number' ? summary.messages : 0,
         inputTokens: response?.usage.inputTokens ?? 0,
@@ -639,13 +562,9 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
         lineage: text(summary.lineage),
       });
     } catch {
-      // A dashboard observer is never allowed to affect provider traffic.
     }
   }
 
-  /** The raw request a successful call's row keeps: every call's with full
-   *  payloads on, otherwise a refusal's or an anomalous response's (see
-   *  responseAnomaly), the calls someone will need to replay or report. */
   private retainedRawRequest(
     response: ProviderResponse,
     rawRequest: unknown,
@@ -656,8 +575,6 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
     return raw?.stop_reason === 'refusal' || anomaly ? rawRequest : undefined;
   }
 
-  /** Wrap options to capture the raw provider request via the membrane
-   *  onRequest hook, then chain to any caller-supplied onRequest. */
   private captureRawRequest(
     options: ProviderRequestOptions | undefined,
     sink: { rawRequest: unknown },
@@ -667,22 +584,11 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
       ...options,
       onRequest: (req: unknown) => {
         sink.rawRequest = req;
-        try { callerOnRequest?.(req as never); } catch { /* never block on caller hook */ }
+        try { callerOnRequest?.(req as never); } catch { }
       },
     } as ProviderRequestOptions;
   }
 
-  /**
-   * Record one call's outcome and tell the observers. A call failed exactly
-   * when `outcome` carries `error`, whatever its value. Nothing here can
-   * replace the provider's response or its error. The error's fields and the
-   * request's summary are each read once, part by part, for the record and
-   * the ledger alike, so a part that can't be read costs only itself. A
-   * record that can't be built even so (a response that can't be read) is
-   * written minimal instead (`summaryUnavailable: true`), with its kind and
-   * timing, so the call still has a record. The credential taps hear of the
-   * call whatever became of its record.
-   */
   private recordCall(
     kind: 'complete' | 'stream',
     request: ProviderRequest,
@@ -693,11 +599,9 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
     try {
       const timestamp = new Date().toISOString();
       const durationMs = Date.now() - t0;
-      // Read once, for the record and the ledger alike; reading never throws.
       const errorFields = 'error' in outcome ? describeErrorObject(outcome.error, true) : undefined;
       const summary = this.requestSummary(request, rawRequest);
       const head = { type: errorFields ? 'error' : 'call', kind, timestamp, durationMs };
-      // Read once each; reading never throws.
       const anomaly = 'response' in outcome ? responseAnomaly(outcome.response) : undefined;
       const errorId = 'error' in outcome ? errorRequestId(outcome.error) : undefined;
       const ids = 'response' in outcome ? responseIds(outcome.response) : errorId ? { requestId: errorId } : {};
@@ -721,16 +625,15 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
         try {
           const captured = rawRequest !== null && rawRequest !== undefined;
           console.error(anomalyLogLine(timestamp, kind, summary.model, anomaly, ids, saved, captured));
-        } catch { /* never throw from logging */ }
+        } catch { }
       }
       try {
         const error = errorFields?.error;
         const errorText = error === undefined ? undefined
           : typeof error === 'string' ? error : (error as { message: string }).message;
         this.observeCall(kind, timestamp, durationMs, request, summary, outcome, errorText);
-      } catch { /* observers never affect provider traffic */ }
+      } catch { }
     } catch {
-      // Logging must never break inference, nor change what it returns or throws.
     }
   }
 
@@ -749,7 +652,6 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
       this.recordCall('complete', request, t0, sink.rawRequest, { error: err });
       throw err;
     }
-    // Outside the try: a logging failure can't be taken for the provider's.
     this.recordCall('complete', request, t0, sink.rawRequest, { response });
     return response;
   }
@@ -770,7 +672,6 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
       this.recordCall('stream', request, t0, sink.rawRequest, { error: err });
       throw err;
     }
-    // Outside the try: a logging failure can't be taken for the provider's.
     this.recordCall('stream', request, t0, sink.rawRequest, { response });
     return response;
   }

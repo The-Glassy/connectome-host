@@ -251,7 +251,6 @@ describe('reasoning follows branch state without restarting the module', () => {
       const sourceState = store.getStateJson(stateId);
       store.switchBranch('earlier');
       expect(store.getStateJson(stateId)).toBeNull();
-      // Write first, with no read of the settings before it.
       expect(ext.update('a', { reasoning_display: 'omitted' }).reasoning_effort).toBe('medium');
       expect(store.getStateJson(stateId)).toEqual({ reasoning: { enabled: false, budgetTokens: 8192, display: 'omitted' }, externalIdMap: {} });
       store.switchBranch(originalBranch);

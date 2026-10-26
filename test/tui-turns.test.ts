@@ -1,11 +1,3 @@
-/**
- * The TUI's Escape and its session switch, run through runTui itself
- * (test/mock-tui-turns-child.ts): when Escape acts, the lines it shows and
- * the aborts it asks for in each state of the root's turn and with a
- * subagent running, where the status bar offers it, which framework the
- * status line follows once a switch ends, and the error lines and phase a
- * subagent's failed and exhausted streams show.
- */
 import { describe, expect, test } from 'bun:test';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
@@ -26,7 +18,6 @@ async function play(scenario: string): Promise<Map<string, Step>> {
     child.once('error', reject);
     child.once('close', code => resolve(code));
   });
-  // Only a hang reaches this: the child's own watchdog fires first.
   let killed = false;
   const timer = setTimeout(() => { killed = true; child.kill('SIGKILL'); }, 30000);
   try {
@@ -36,8 +27,6 @@ async function play(scenario: string): Promise<Map<string, Step>> {
     if (failure) throw new Error(`${scenario}: ${failure[1]}`);
     expect(code).toBe(0);
     expect(stdout).toContain('TUI_DONE');
-    // A step's line can follow other output on the same line of stdout, so
-    // it's found wherever it is.
     const steps = new Map<string, Step>();
     for (const [, json] of stdout.matchAll(/TUI_STEP (\{[^\n]*\})/g)) {
       const { step, frame, aborts } = JSON.parse(json);
@@ -65,55 +54,40 @@ describe("the TUI's Escape, through runTui", () => {
       return step;
     };
 
-    // Idle: Escape does nothing, and the bar doesn't offer it.
     expect(at('idle').aborts).toEqual([]);
     expect(at('idle').frame).toContain('[✓ idle]');
 
-    // A message sent, before its turn starts: the bar offers Escape, which
-    // finds nothing to abort or keep, says so, and shows the status idle.
     expect(at('sent, before its turn starts').frame).toContain('Ctrl+B:bg Esc:stop]');
     expect(at('sent, before its turn starts, Escape').aborts).toEqual(['first:agent']);
     expect(times(at('sent, before its turn starts, Escape').frame, '(no turn interrupted)')).toBe(1);
     expect(at('sent, before its turn starts, Escape').frame).toContain('[✓ idle]');
 
-    // A model call in flight is aborted at once, and its abort ends the turn.
     expect(at('in flight').aborts).toHaveLength(2);
     expect(times(at('in flight').frame, ABORTED)).toBe(1);
     expect(at('in flight').frame).toContain('[✓ idle]');
 
-    // A turn still compiling is kept: Escape says so, and the bar still
-    // offers Escape and Ctrl+B ...
     expect(at('compiling').aborts).toHaveLength(3);
     expect(times(at('compiling').frame, INTERRUPTING)).toBe(1);
     expect(at('compiling').frame).toContain('Ctrl+B:bg Esc:stop]');
-    // ... until its first trace once it can be aborted.
     expect(at('compiled').aborts).toHaveLength(4);
     expect(times(at('compiled').frame, ABORTED)).toBe(2);
     expect(at('compiled').frame).toContain('[✓ idle]');
 
-    // A turn in the background: the bar offers Escape alone, and Escape
-    // aborts the turn.
     expect(at('background').frame).toContain('[↓ background | search Esc:stop]');
     expect(at('background').frame).not.toContain('Ctrl+B:bg');
     expect(at('background, Escape').aborts).toHaveLength(5);
     expect(times(at('background, Escape').frame, ABORTED)).toBe(3);
     expect(at('background, Escape').frame).toContain('[✓ idle]');
 
-    // A failed attempt waiting to be tried again: the error shows, once, and
-    // Escape is offered, since the turn is still running.
     expect(times(at('retry wait').frame, 'overloaded')).toBe(1);
     expect(at('retry wait').frame).toContain('Error: overloaded');
     expect(at('retry wait').frame).toContain('[✗ error Esc:stop]');
     expect(at('retry wait, Escape').aborts).toHaveLength(6);
     expect(times(at('retry wait, Escape').frame, INTERRUPTING)).toBe(2);
-    // The retry's start can't be aborted yet; its first trace once it can be is.
     expect(at('retried').aborts).toHaveLength(8);
     expect(times(at('retried').frame, ABORTED)).toBe(4);
     expect(at('retried').frame).toContain('[✓ idle]');
 
-    // A turn the framework gave up on: its failure's error stands for it,
-    // once, with no line for the end after it; Escape isn't offered, and it
-    // does nothing.
     expect(times(at('ended error').frame, 'gave up')).toBe(1);
     expect(at('ended error').frame).toContain('Error: gave up');
     expect(at('ended error').frame).toContain('[✗ error]');
@@ -132,8 +106,6 @@ describe("the TUI's status line, through runTui", () => {
       return step;
     };
     expect(at('no start, then tools').frame).toContain('[… tools');
-    // Running tools, its start missed: Escape keeps the interrupt rather
-    // than taking the turn for none.
     expect(at('no start, Escape').aborts).toEqual(['first:agent']);
     expect(at('no start, Escape').frame).toContain(INTERRUPTING);
     expect(at('no start, Escape').frame).not.toContain('(no turn interrupted)');
@@ -154,18 +126,13 @@ describe("the TUI's session switch, through runTui", () => {
       expect(switching.frame).not.toContain('Esc:stop');
       expect(switching.frame).not.toContain('(interrupted');
 
-      // The turn that ran when the switch started is gone with its framework:
-      // a failed switch's error stands, and Escape isn't offered for it.
       const ended = steps.get('switch ended')!;
       const status = scenario === 'switch' ? '[✓ idle]' : '[✗ error]';
       expect(ended.frame).toContain(status);
 
-      // A late end, with no start since the switch, shows nothing and leaves
-      // the status line as the switch's end set it.
       const late = steps.get('late end')!;
       expect(late.frame).not.toContain('from before the switch');
       expect(late.frame).toContain(status);
-      // A late failure shows, as every failure does.
       const lateFailure = steps.get('late failure')!;
       expect(lateFailure.frame).toContain('Error: a late failure');
       expect(lateFailure.frame).toContain('[✗ error');
@@ -186,8 +153,6 @@ describe("the TUI's Escape with a subagent running, through runTui", () => {
       if (!step) throw new Error(`no step ${name}`);
       return step;
     };
-    // spawn-1 is compiling, so its interrupt is kept; then its run is stopped,
-    // then the root's call, in flight, is aborted.
     expect(at('subagents, Escape').aborts).toEqual(['first:spawn-1', 'cancelAll', 'first:agent']);
     expect(at('subagents, Escape').frame).toContain('1 subagent stopped');
     expect(at('subagent compiled').aborts).toEqual(['first:spawn-1', 'cancelAll', 'first:agent', 'first:spawn-1']);

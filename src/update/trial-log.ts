@@ -28,15 +28,11 @@ import {
 } from './contract.js';
 import type { ReleaseHere } from './host.js';
 
-/** How many of its last lines a trial keeps, from at most its last
- *  TRIAL_LOG_CHARS characters written. */
 export const TRIAL_LOG_LINES = 40;
 export const TRIAL_LOG_CHARS = 64 * 1024;
 
-/** The trial log: the lines a trial kept, and which trial kept them. */
 export interface TrialLog {
   v: 1;
-  /** The release on trial, and the mark its trial-start line names. */
   release: string;
   mark: string;
   lines: string[];
@@ -44,19 +40,12 @@ export interface TrialLog {
 
 const CONSOLE_METHODS = ['log', 'info', 'warn', 'error', 'debug'] as const;
 
-/** The trial this host is, and the end of what it has written, while armed. */
 let armed: { root: string; release: string; mark: string; tail: string } | null = null;
 
 function keep(text: string): void {
   if (armed !== null) armed.tail = (armed.tail + text).slice(-TRIAL_LOG_CHARS);
 }
 
-/**
- * Start keeping what this host writes, if it's the release on trial: the
- * journal's trial under way (unfinishedTrial) names it and `current` names
- * another. Any other start, and one whose journal or `current` can't be read,
- * keeps nothing, and the start's own reads report what couldn't be read.
- */
 export function armTrialLog(here: ReleaseHere): void {
   let trial: JournalLine | null;
   try {
@@ -66,14 +55,9 @@ export function armTrialLog(here: ReleaseHere): void {
   }
   if (trial === null || trial.to !== here.release || typeof trial.mark !== 'string') return;
   armed = { root: here.root, release: here.release, mark: trial.mark, tail: '' };
-  // The wraps stay once disarmed, passing everything on: putting the
-  // originals back would undo any wrap made over these since.
   for (const method of CONSOLE_METHODS) {
     const original = console[method];
     console[method] = function (this: unknown, ...args: unknown[]): void {
-      // A console line starts a line of its own, even after a write that left
-      // one open; the empty lines this leaves are dropped at the exit. Once
-      // disarmed, nothing is formatted.
       if (armed !== null) {
         const onItsOwnLine = `\n${format(...args)}\n`;
         keep(onItsOwnLine);
@@ -95,14 +79,10 @@ export function armTrialLog(here: ReleaseHere): void {
   process.on('exit', writeTrialLog);
 }
 
-/** Stop keeping what this host writes: the commit calls it once `current`
- *  names this release. */
 export function disarmTrialLog(): void {
   armed = null;
 }
 
-/** The exit handler: write the trial's last lines, if it's still armed, so
- *  only before the commit. */
 function writeTrialLog(): void {
   const state = armed;
   if (state === null) return;
@@ -111,15 +91,11 @@ function writeTrialLog(): void {
   try {
     writeJsonAtomic(installPaths(state.root).trialLog, log, 0o600);
   } catch (error) {
-    // The exit goes on: this line reaches the service's log, which has the rest.
     writeSync(2, `[update] ${state.release}'s last lines couldn't be kept for the release that falls back from it ` +
       `(${installPaths(state.root).trialLog}): ${error instanceof Error ? error.message : String(error)}\n`);
   }
 }
 
-/** The lines the trial `fallback` fell back from kept, or null when the
- *  trial log isn't that trial's: there is none, or a later or earlier
- *  trial's. A trial log that can't be read throws, naming the file. */
 export function readTrialLog(root: string, fallback: JournalLine): string[] | null {
   const log = readRecord<TrialLog>(installPaths(root).trialLog, 'trial log');
   if (log === null || log.mark !== fallback.mark || log.release !== fallback.from) return null;

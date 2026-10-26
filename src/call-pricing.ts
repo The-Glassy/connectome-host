@@ -18,14 +18,11 @@ import type { CallCostBreakdown } from './web/protocol.js';
 
 export const ANTHROPIC_PRICING_VERSION = 'anthropic-public-2026-10-19';
 
-/** Cache reads bill at this multiple of base input on every model that does
- *  not override it. */
 const DEFAULT_CACHE_READ_MULTIPLIER = 0.1;
 
 interface BaseRate {
   inputPerMillion: number;
   outputPerMillion: number;
-  /** Defaults to {@link DEFAULT_CACHE_READ_MULTIPLIER}. */
   cacheReadMultiplier: number;
 }
 
@@ -35,8 +32,6 @@ export interface PriceableCallUsage {
   cacheReadTokens: number;
   cacheWrite5mTokens: number;
   cacheWrite1hTokens: number;
-  /** Non-zero means the provider reported creation tokens we could not place
-   *  in an authoritative TTL bucket. Such a call is deliberately unpriced. */
   unclassifiedCacheWriteTokens: number;
   inferenceGeo?: string;
   serviceTier?: string;
@@ -44,8 +39,6 @@ export interface PriceableCallUsage {
 
 export function priceAnthropicCall(
   model: string,
-  // No rate in the current table is date-bounded; kept so a future dated
-  // price change does not have to re-plumb every caller.
   _timestamp: string,
   usage: PriceableCallUsage,
 ): CallCostBreakdown | undefined {
@@ -93,8 +86,6 @@ export function priceAnthropicCall(
   };
 }
 
-/** A model's rates, for a request whose prompt is `promptTokens` long. Only
- *  Claude Haiku 5.5's depend on it. */
 function anthropicBaseRate(model: string, promptTokens: number): BaseRate | undefined {
   // The 5.1 pair first: their prefixes also match the Fable 5 / Mythos 5 test
   // below, and they read from cache at 0.025x.
@@ -147,14 +138,6 @@ function anthropicBaseRate(model: string, promptTokens: number): BaseRate | unde
   return undefined;
 }
 
-/**
- * Cache-read price as a multiple of the model's base input price, for a
- * Claude model id as a recipe names it: a Bedrock region prefix
- * (`global.anthropic.`) or a gateway prefix (`anthropic/`) is stripped first.
- * Models this table doesn't know get the standard 0.1x. Claude Haiku 5.5's two
- * prompt-length tiers both read at 0.1x, so the multiple doesn't depend on a
- * prompt's length.
- */
 export function anthropicCacheReadMultiplier(model: string): number {
   const bare = model.replace(/^(?:[a-z]+\.)?anthropic[./]/, '');
   return anthropicBaseRate(bare, 0)?.cacheReadMultiplier ?? DEFAULT_CACHE_READ_MULTIPLIER;

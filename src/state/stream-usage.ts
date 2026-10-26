@@ -25,7 +25,6 @@ export interface UsageSample {
   cacheCreation?: number;
 }
 
-/** A sample's four counts, each present. */
 export interface UsageCounts {
   input: number;
   output: number;
@@ -33,31 +32,18 @@ export interface UsageCounts {
   cacheCreation: number;
 }
 
-/** One sample folded against the previous sample of its stream. */
 export interface UsageStep {
-  /** The sample's counts: the stream's `previous` for its next sample. */
   total: UsageCounts;
-  /** What the provider calls since the previous sample added. */
   added: UsageCounts;
-  /** The prompt of the call this sample reports (fresh input plus cache reads
-   *  and writes), which is the agent's context size at that call. Absent when
-   *  the sample doesn't isolate one call: it added nothing (a completion
-   *  repeating the last sample), or it had no baseline from its own stream
-   *  (a reader that joined mid-stream, or a new stream whose
-   *  `inference:started` was missed, told apart by a count that went back).
-   *  A stream whose start was seen begins from `emptyUsage()`, so its first
-   *  sample names its prompt. */
   prompt?: number;
 }
 
-/** The baseline of a stream that has just started. */
 export function emptyUsage(): UsageCounts {
   return { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
 }
 
 const count = (v: unknown): number => (typeof v === 'number' && v > 0 ? v : 0);
 
-/** A sample's four counts, each a positive number or 0. */
 function counts(sample: UsageSample): UsageCounts {
   return {
     input: count(sample.input),
@@ -67,17 +53,6 @@ function counts(sample: UsageSample): UsageCounts {
   };
 }
 
-/**
- * Fold one sample against `previous`, the stream's last sample: `emptyUsage()`
- * from its `inference:started`, or undefined when the reader joined the stream
- * after it began (a reducer seeded without one, say). Then the whole sample is
- * counted, since none of it was. The counts only grow within a stream, so a
- * sample below `previous` in any count is a new stream's, and counts whole.
- * agent-framework's `cumulativeDelta` also reads a counter that went back as a
- * restart, but one counter at a time; here the whole sample counts, since a
- * stream's counts restart together. `previous` is read like a sample, since it
- * can arrive in a snapshot from another process.
- */
 export function foldUsageSample(previous: UsageCounts | undefined, sample: UsageSample): UsageStep {
   const total = counts(sample);
   previous = previous && counts(previous);

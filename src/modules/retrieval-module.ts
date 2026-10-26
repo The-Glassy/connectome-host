@@ -1,15 +1,3 @@
-/**
- * RetrievalModule — LLM-as-retriever for semantic memory.
- *
- * Three-step retrieval pipeline running in gatherContext():
- *   1. Flag concepts: identify concepts being discussed that might benefit
- *      from background knowledge
- *   2. Mechanical query: keyword-match against LessonsModule
- *   3. Validate relevance: filter to actually relevant lessons
- *
- * Steps 1 and 3 use the configured retrieval model and optional reasoning.
- */
-
 import type {
   Module,
   ModuleContext,
@@ -30,10 +18,6 @@ import {
   type RetrievalTraceListOptions,
   type RetrievalTraceRun,
 } from './retrieval-trace.js';
-
-// ---------------------------------------------------------------------------
-// Configuration
-// ---------------------------------------------------------------------------
 
 export type RetrievalReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
@@ -66,22 +50,13 @@ const TURN_BLOCKS_MAX = 64;
 const EXCERPT_CHARS = 60;
 
 export interface RetrievalModuleConfig {
-  /** Membrane instance for retrieval calls */
   membrane: Membrane;
-  /** Model to use for retrieval calls (default: claude-haiku-4-5-20251001) */
   retrievalModel?: string;
-  /** Optional OpenAI reasoning effort, applied to both retrieval LLM stages. */
   retrievalReasoning?: RetrievalReasoningConfig;
-  /** Max lessons to inject (default: 5) */
   maxInjectedLessons?: number;
   maxMessageTokens?: number;
-  /** Minimum lesson confidence for injection (default: 0.3) */
   minConfidence?: number;
 }
-
-// ---------------------------------------------------------------------------
-// Prompts
-// ---------------------------------------------------------------------------
 
 const CONCEPT_FLAG_PROMPT = `You are a knowledge retrieval assistant. Given the recent conversation below, identify concepts, entities, topics, or themes that might benefit from background knowledge or lessons learned from previous research.
 
@@ -190,10 +165,6 @@ function excerptOf(text: string): string | undefined {
   return chars.length <= EXCERPT_CHARS ? line : `${chars.slice(0, EXCERPT_CHARS).join('').trimEnd()}…`;
 }
 
-// ---------------------------------------------------------------------------
-// Module
-// ---------------------------------------------------------------------------
-
 export class RetrievalModule implements Module {
   readonly name = 'retrieval';
 
@@ -217,7 +188,6 @@ export class RetrievalModule implements Module {
   }
 
   getTools(): ToolDefinition[] {
-    // RetrievalModule is passive — no tools, only gatherContext
     return [];
   }
 
@@ -229,7 +199,6 @@ export class RetrievalModule implements Module {
     return {};
   }
 
-  /** Recent retrieval runs, newest first. Exact conversation inputs are opt-in. */
   getRetrievalTraces(options?: RetrievalTraceListOptions) {
     return this.traceStore.list(options);
   }
@@ -274,17 +243,12 @@ export class RetrievalModule implements Module {
     let recentMessages: string;
     let opening: OpeningMessage | undefined;
     try {
-      // These lookups, eligibility checks, context rendering, and hashing are
-      // pre-existing throwing paths. Record their failure, then preserve the
-      // upstream rejection rather than applying the provider-stage fail-open.
       const lessonsModule = this.ctx.getModule<LessonsModule>('lessons');
       if (!lessonsModule) {
         trace?.finish('no-lessons-module');
         return [];
       }
 
-      // A lesson with no content has nothing to inject, though its tags
-      // could still match: it would be injected as a blank entry.
       lessons = lessonsModule.getLessons().filter(
         l => !l.deprecated && l.confidence >= (this.config.minConfidence ?? 0.3) && l.content.trim() !== ''
       );
@@ -316,7 +280,6 @@ export class RetrievalModule implements Module {
     }
 
     try {
-      // Step 1: Flag concepts
       const concepts = await this.flagConcepts(recentMessages, trace);
       if (concepts === null || concepts.length === 0) {
         if (concepts !== null) this.keepTurnBlock(agentName, start, opening, [], []);
@@ -324,7 +287,6 @@ export class RetrievalModule implements Module {
         return [];
       }
 
-      // Step 2: Mechanical query (keyword matching)
       const candidates = this.queryCandidates(concepts, lessons);
       trace?.recordCandidates(concepts, candidates);
       if (candidates.length === 0) {
@@ -333,11 +295,9 @@ export class RetrievalModule implements Module {
         return [];
       }
 
-      // Step 3: Validate relevance
       const { lessons: relevant, validated } = await this.validateRelevance(recentMessages, candidates, trace);
       trace?.recordRelevant(relevant);
 
-      // Build injection
       const maxLessons = this.config.maxInjectedLessons ?? 5;
       const injected = relevant.slice(0, maxLessons);
 
@@ -370,27 +330,18 @@ export class RetrievalModule implements Module {
       trace?.finish('injected');
       return injections;
     } catch (err) {
-      // Fail open — don't block inference if retrieval fails
       trace?.finish('error', err);
       console.error('RetrievalModule: retrieval failed:', err);
       return [];
     }
   }
 
-  // =========================================================================
-  // Pipeline Steps
-  // =========================================================================
-
-  /** Build OpenAI request parameters for configured retrieval reasoning effort. */
   private retrievalProviderParams(): Record<string, unknown> | undefined {
     const reasoning = this.config.retrievalReasoning;
     if (!reasoning) return undefined;
     return { reasoning: { effort: reasoning.effort } };
   }
 
-  /**
-   * Step 1: Use the configured retrieval model to identify concepts that might benefit from background knowledge.
-   */
   private async flagConcepts(
     recentContext: string,
     trace?: RetrievalTraceRun,
@@ -433,7 +384,6 @@ export class RetrievalModule implements Module {
       }
       trace?.finishConceptExtraction(text, [], 'invalid', response.content);
     } catch {
-      // Try to extract an array from a prose/markdown wrapper.
       const match = text.match(/\[([^\]]*)\]/);
       if (match) {
         try {
@@ -441,21 +391,15 @@ export class RetrievalModule implements Module {
           if (Array.isArray(parsed)) {
             const traceValues = parsed.filter((value): value is string => typeof value === 'string');
             trace?.finishConceptExtraction(text, traceValues, 'array-extraction', response.content);
-            // Preserve the historical malformed-wrapper behavior exactly: mixed
-            // arrays proceed to queryCandidates(), which then fails open rather
-            // than silently becoming a different, partially valid concept set.
             return parsed as string[];
           }
-        } catch { /* fall through */ }
+        } catch { }
       }
       trace?.finishConceptExtraction(text, [], 'invalid', response.content);
     }
     return null;
   }
 
-  /**
-   * Step 2: Mechanical keyword matching against lessons.
-   */
   private queryCandidates(concepts: string[], lessons: Lesson[]): Lesson[] {
     const seen = new Set<string>();
     const candidates: Lesson[] = [];
@@ -469,7 +413,6 @@ export class RetrievalModule implements Module {
         const text = lesson.content.toLowerCase();
         const tags = lesson.tags.map(t => t.toLowerCase());
 
-        // Match if any keyword appears in content or tags
         const matches = keywords.some(kw =>
           text.includes(kw) || tags.some(tag => tag.includes(kw))
         );
@@ -481,21 +424,16 @@ export class RetrievalModule implements Module {
       }
     }
 
-    // Sort by confidence
     candidates.sort((a, b) => b.confidence - a.confidence);
-    return candidates.slice(0, 20); // Cap at 20 candidates for validation
+    return candidates.slice(0, 20);
   }
 
-  /**
-   * Step 3: Use the configured retrieval model to validate which candidates are actually relevant.
-   */
   private async validateRelevance(
     recentContext: string,
     candidates: Lesson[],
     trace?: RetrievalTraceRun,
   ): Promise<{ lessons: Lesson[]; validated: boolean }> {
     if (candidates.length <= 3) {
-      // If only a few candidates, skip validation — they're probably all relevant.
       trace?.recordRelevanceSkipped('three-or-fewer-candidates');
       return { lessons: candidates, validated: true };
     }
@@ -542,17 +480,12 @@ export class RetrievalModule implements Module {
         return { lessons: candidates.filter(l => relevantIds.has(l.id)), validated: true };
       }
     } catch {
-      // Fall through to confidence-ordered fallback.
     }
 
     const fallback = candidates.slice(0, 5);
     trace?.finishRelevance(text, [], 'fallback', response.content);
     return { lessons: fallback, validated: false };
   }
-
-  // =========================================================================
-  // Helpers
-  // =========================================================================
 
   private keepTurnBlock(
     agentName: string,
@@ -589,7 +522,6 @@ export class RetrievalModule implements Module {
       && storedInjectionMarkOf(m.metadata) === undefined);
     if (shown.length === 0) return null;
 
-    // Take the last 10 of them for context.
     const recent = shown.slice(-10);
     const text = recent
       .map(m => {
@@ -607,7 +539,6 @@ export class RetrievalModule implements Module {
           ? [String(candidate)]
           : [];
       } catch {
-        // Trace-only metadata must never alter retrieval behavior.
         return [];
       }
     });
@@ -621,7 +552,6 @@ export class RetrievalModule implements Module {
       try {
         if (typeof lesson.id === 'string') ids.push(lesson.id);
       } catch {
-        // Cache provenance is observability metadata; omit unreadable IDs.
       }
     }
     return ids;
@@ -645,7 +575,6 @@ export class RetrievalModule implements Module {
             : {}),
         });
       } catch {
-        // Trace-only lesson snapshots must not alter retrieval behavior.
       }
     }
     return snapshots;

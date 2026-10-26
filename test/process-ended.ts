@@ -1,10 +1,3 @@
-/**
- * Whether a process a test started, or one a process it started left
- * behind, has ended, as /proc shows it: shared by the tests that ask so. A
- * test whose code reads a process's end through kill(pid, 0), as the fleet
- * does, waits for that instead, since kill(pid, 0) counts a zombie as
- * running until it's reaped.
- */
 import { readFileSync } from 'node:fs';
 
 /**
@@ -30,8 +23,6 @@ export function processEnded(pid: number, read: (path: string) => string = (path
   }
 }
 
-/** Wait up to `ms` for the process `pid` to end, reading every 50 ms, and
- *  answer with the last read, so two reads can't disagree. */
 export async function waitForEnd(pid: number, ms: number): Promise<boolean> {
   const deadline = Date.now() + ms;
   let ended = processEnded(pid);

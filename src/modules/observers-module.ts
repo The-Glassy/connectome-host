@@ -1,26 +1,3 @@
-/**
- * ObserversModule — the agent holds the pen on who may observe its interior.
- *
- * Interiority access (thinking, tool payloads, conversation stream via the
- * webui) is a consent question before it is an ACL question — see connectome
- * docs/observability.md §4. These tools let the agent read and edit its own
- * data/observers.json grant file. The webui's ObserverRegistry checks the
- * file every ~3s, so without a restart a grant applies to the next hello, and
- * a revocation ends the grant's sessions and open connections. Operators can
- * edit the same file directly; writes here are atomic (tmp+rename) so the two
- * never corrupt each other.
- * A file these tools can't read, or that isn't a grants file, is never
- * written over. In one they can read, a change touches only the entries it
- * matches: every other entry, an unusable one included, and every other
- * field stays as found. The host uses a file's usable grants and names the
- * rest, so a bad entry never stops the agent's own changes.
- *
- * Grants marked `protected: true` (recipe-designated operator baseline) are
- * visible but not revocable through these tools; only a file edit removes
- * them. Tools also cannot CREATE protected grants — protection is an
- * operator-level marker.
- */
-
 import type {
   Module,
   ModuleContext,
@@ -46,17 +23,10 @@ import { shown } from './shown.js';
 import { unknownToolResult } from './unknown-tool.js';
 
 export interface ObserversModuleConfig {
-  /** Absolute path to the grant file (same one the webui watches). */
   path: string;
-  /** 'tools' (default) or 'utilities' — grant edits are rare; behind the
-   *  `utils` meta-tool they stop costing three schemas per inference. The
-   *  consent semantics are unchanged either way: the agent holds the pen. */
   surface?: 'tools' | 'utilities';
 }
 
-/** The form an expiry is given in: a full date, YYYY-MM-DD, with an optional
- *  time (group 4) and zone (group 5): T, t or a space before the time; Z, z,
- *  or an offset as +HH:MM or +HHMM. */
 const EXPIRY_FORM = /^(\d{4})-(\d{2})-(\d{2})(?:[Tt ](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)([Zz]|[+-]\d{2}:?\d{2})?)?$/;
 
 /** Bun's Date.parse reads a date with a space before the time leniently:
@@ -82,7 +52,6 @@ function ecmaExpiry(typed: string): { text: string; year: number; month: number;
 
 const EXPIRY_WORDS = 'YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ (an offset such as +02:00 can stand for Z)';
 
-/** How many days month `month` (1 to 12) of `year` has. */
 function daysIn(year: number, month: number): number {
   const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
   return [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1] ?? 0;
@@ -175,10 +144,7 @@ export class ObserversModule implements Module {
       }
 
       case 'grant': {
-        // Every problem with the call is named at once, each with what to
-        // give, before the file is read.
         const problems: string[] = [];
-        // Written in canonical form, whichever base64 spelling was given.
         const keyText = typeof input.key === 'string' ? input.key.trim() : '';
         const key = canonicalKey(keyText);
         if (!key) {
@@ -238,20 +204,16 @@ export class ObserversModule implements Module {
 
         const read = this.read();
         if ('problem' in read) return err(`Nothing was granted: ${read.problem}. ${read.own ? canPass('grant') : leftAlone('grant')}`);
-        // Every entry for the key becomes this one, as a revoke by key takes
-        // them all: a repeat left behind would stay in the file, unused.
         const sameKey = read.doc.observers.filter((g): g is ObserverGrant => isEntry(g) && canonicalKey(g.key) === key);
         if (sameKey.some((g) => g.protected)) return err(`Nothing was granted: ${protectedKey(key!, 'change')}`);
         const grant: ObserverGrant = { key: key!, label, scopes: scopes as ObserverScope[], expires };
         const existing = sameKey[0];
         if (existing) {
-          Object.assign(existing, grant); // update label/scopes/expiry in place
+          Object.assign(existing, grant);
           read.doc.observers = read.doc.observers.filter((g) => g === existing || !sameKey.includes(g as ObserverGrant));
         } else {
           read.doc.observers.push(grant);
         }
-        // A date alone or a time without a zone doesn't say its zone, so the
-        // answer names the instant this host reads it as.
         const readAs = expiry && !expiry.zoned ? `, which this host reads as ${instant}` : '';
         return this.saved(
           read.doc,
@@ -264,8 +226,6 @@ export class ObserversModule implements Module {
         const key = typeof input.key === 'string' ? input.key.trim() : '';
         const label = typeof input.label === 'string' ? input.label.trim() : '';
         if (!key && !label) {
-          // A value that isn't text is read as not given, as on main, so a
-          // call naming a label beside it still revokes; alone, it's named.
           const notText = (['key', 'label'] as const)
             .filter((name) => typeof input[name] !== 'string' && given(input[name]))
             .map((name) => `${name} must be text, not ${shown(input[name])}`);
@@ -275,8 +235,6 @@ export class ObserversModule implements Module {
         if ('problem' in read) return err(`Nothing was revoked: ${read.problem}. ${read.own ? canPass('revoke') : leftAlone('revoke')}`);
         const entries = (match: (g: ObserverGrant) => boolean) =>
           read.doc.observers.filter((g): g is ObserverGrant => isEntry(g) && match(g));
-        // A key matches every spelling of itself. One that doesn't decode can
-        // still name an entry spelled exactly so.
         const keyed = (k: string) => (g: ObserverGrant) => (canonicalKey(g.key) ?? g.key) === k;
         let matches = entries(key ? keyed(canonicalKey(key) ?? key) : (g) => g.label === label);
         if (matches.length === 0) {
@@ -285,16 +243,11 @@ export class ObserversModule implements Module {
             'observers--get lists the grants and their keys.',
           );
         }
-        // A label has to name one entry. The key is the observer, though, so
-        // a revoke takes every entry for it: a repeat left behind would be
-        // used in place of the one revoked.
         if (!key && matches.length > 1) {
           const keys = [...new Set(matches.map((g) => shown(g.key)))];
           return err(`Nothing was revoked: ${matches.length} grants are labelled ${shown(label)}. Revoke by key instead: ${keys.join(' or ')}.`);
         }
         const named = matches[0]!;
-        // As a revoke by key does: one that doesn't decode matches entries
-        // spelled exactly as it is.
         if (!key && typeof named.key === 'string') matches = entries(keyed(canonicalKey(named.key) ?? named.key));
         const guarded = matches.find((g) => g.protected);
         if (guarded) {
@@ -314,12 +267,6 @@ export class ObserversModule implements Module {
     return {};
   }
 
-  /** The file as found, its usable grants and what's wrong with the rest; or
-   *  why it can't be changed. A missing file is no grants yet. A file that
-   *  can't be read, isn't valid JSON or isn't a grants file is never written
-   *  over. `unparsed` marks one that isn't valid JSON, which the viewer reads
-   *  differently, and `own` a read that failed for the host's own reason
-   *  (OWN_FAILURES), which can pass. */
   private read():
     | { doc: GrantsDocument; usable: ObserverGrant[]; problems: string[] }
     | { problem: string; unparsed: boolean; own: boolean } {
@@ -333,12 +280,6 @@ export class ObserversModule implements Module {
     };
   }
 
-  /** Save the changed document, and answer with `message` and the grants the
-   *  file now gives, naming any entry it holds that isn't used. A write that
-   *  fails leaves the file as it was, since it replaces the file whole
-   *  (saveObserversFile), and says so, with the repair by whose failure it
-   *  is: the host's own (OWN_FAILURES) can pass, and anything else is the
-   *  operator's to fix. */
   private saved(doc: GrantsDocument, verb: 'grant' | 'revoke', message: string): ToolResult {
     try {
       saveObserversFile(this.config.path, doc as unknown as ObserversFile);
@@ -359,13 +300,10 @@ export class ObserversModule implements Module {
   }
 }
 
-/** The entries a read found but the host doesn't use, each with its reason,
- *  for an answer that lists the grants. */
 function notUsed(problems: string[]): { notUsed?: string[] } {
   return problems.length > 0 ? { notUsed: problems } : {};
 }
 
-/** An entry of the grants list that can be read as a grant's fields. */
 function isEntry(g: unknown): g is ObserverGrant {
   return typeof g === 'object' && g !== null;
 }
@@ -374,13 +312,10 @@ function isEntry(g: unknown): g is ObserverGrant {
  *  system. */
 const OWN_FAILURES = new Set(['EMFILE', 'ENFILE']);
 
-/** What to do after a failure of the host's own (OWN_FAILURES): call the
- *  same tool again shortly. */
 function canPass(tool: 'grant' | 'revoke' | 'get'): string {
   return `This host has too many files open, which can pass: call observers--${tool} again shortly, and if it fails the same way, ask whoever runs this host.`;
 }
 
-/** Why grant and revoke refuse a file they can't read, and what fixes it. */
 function leftAlone(verb: 'grant' | 'revoke'): string {
   return (
     "These tools don't write over a file they can't read as grants, so they leave it alone until it's repaired. " +
@@ -389,7 +324,7 @@ function leftAlone(verb: 'grant' | 'revoke'): string {
 }
 
 function redactNothing(g: ObserverGrant): ObserverGrant {
-  return g; // grants hold public keys + labels only — nothing secret to redact
+  return g;
 }
 
 function ok(data: Record<string, unknown>): ToolResult {
@@ -400,14 +335,10 @@ function err(message: string): ToolResult {
   return { success: false, error: message, isError: true };
 }
 
-/** Whether a call gave an input at all: null counts as not given, as JSON
- *  callers send it for "none". */
 function given(value: unknown): boolean {
   return value !== undefined && value !== null;
 }
 
-/** Why a key's protected grant can't be changed or removed here, and that
- *  asking again won't help. */
 function protectedKey(key: unknown, verb: 'change' | 'remove'): string {
   return (
     `the key ${shown(key)} holds a protected grant, part of this host's baseline, ` +

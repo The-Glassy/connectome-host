@@ -1,17 +1,3 @@
-/**
- * Device observer identity (docs/observability.md §3, browser side).
- *
- * On first use the SPA generates a NON-EXTRACTABLE Ed25519 keypair via
- * WebCrypto and persists the CryptoKey objects in IndexedDB — the private
- * key never exists as bytes the page (or an XSS) could read. The public
- * fingerprint (`ed25519:<base64url raw>`) is what a human shows to the
- * agent/operator to be granted (`observers--grant`).
- *
- * Requires a secure context (https or localhost) — WebCrypto is absent on
- * plain-http non-localhost origins. Callers get `null` and should offer
- * password sign-in instead.
- */
-
 const DB_NAME = 'fkm-observer';
 const STORE = 'keys';
 const KEY_ID = 'device-key';
@@ -19,7 +5,6 @@ const PRIVATE_KEY_EXTRACTABLE = false;
 
 interface DeviceKey {
   keyPair: CryptoKeyPair;
-  /** `ed25519:<base64url raw 32-byte public key>` */
   id: string;
 }
 
@@ -64,8 +49,6 @@ export function observerCryptoAvailable(): boolean {
   return typeof crypto !== 'undefined' && !!crypto.subtle && typeof indexedDB !== 'undefined';
 }
 
-/** Load (or create on first use) this device's observer key. Null when the
- *  environment can't do WebCrypto Ed25519. */
 export async function ensureDeviceKey(): Promise<DeviceKey | null> {
   if (!observerCryptoAvailable()) return null;
   try {
@@ -87,8 +70,6 @@ export async function ensureDeviceKey(): Promise<DeviceKey | null> {
   }
 }
 
-/** Build the signed observer-hello identity envelope for `host` (the value
- *  the server sent in observer-auth-required — its own Host header). */
 export async function buildHelloIdentity(host: string): Promise<{
   scheme: 'ed25519'; id: string; proof: string; timestamp: string;
 } | null> {
@@ -104,7 +85,6 @@ export async function buildHelloIdentity(host: string): Promise<{
   return { scheme: 'ed25519', id: key.id, proof: b64url(sig), timestamp };
 }
 
-/** Current device fingerprint for display (creates the key if absent). */
 export async function deviceFingerprint(): Promise<string | null> {
   const key = await ensureDeviceKey();
   return key?.id ?? null;

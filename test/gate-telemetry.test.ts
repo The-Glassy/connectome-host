@@ -1,10 +1,3 @@
-/**
- * The x-gate-* stamp must be impossible to send to a vendor: attachment is
- * double-gated on the operator's explicit GATE_TELEMETRY declaration AND a
- * configured base URL. Review finding on the first wiring: the stamp was
- * attached unconditionally, so with ANTHROPIC_BASE_URL unset the household
- * value went to the vendor's default endpoint.
- */
 import { describe, expect, it } from 'bun:test';
 import { gateTelemetryHeaders, originClass, stampedTrigger } from '../src/gate-telemetry.js';
 
@@ -70,7 +63,7 @@ describe('gateTelemetryHeaders', () => {
     expect(originClass({ reason: 'heartbeat', source: 'heartbeat' })).toBe('heartbeat');
     expect(originClass({ reason: 'mail:incoming', source: 'fenmail' })).toBe('mail');
     expect(originClass({ reason: 'mcpl:push-event', source: 'discord' })).toBe('event');
-    expect(originClass({ reason: 'gate:debounce', source: 'gate' })).toBe('event');   // first live stamps came back raw
+    expect(originClass({ reason: 'gate:debounce', source: 'gate' })).toBe('event');
     expect(originClass({ reason: 'admin-nudge (someone)', source: 'framework' })).toBe('operator');
     expect(originClass({ reason: 'external-message', source: 'headless' })).toBe('operator');
     expect(originClass({ reason: 'external-message', source: 'tui' })).toBe('operator');
@@ -145,7 +138,7 @@ describe('GATE_TELEMETRY parses fail-closed (#119)', () => {
       console.error = orig;
     }
     const warned = errs.filter((e) => e.includes('not a recognized value'));
-    expect(warned.length).toBe(2); // once per distinct value, never per call
+    expect(warned.length).toBe(2);
     expect(warned[0]).toContain('"flase"');
   });
 

@@ -368,8 +368,6 @@ describe('RetrievalModule observability', () => {
       content: [{ type: 'text', text }],
       ...(held === undefined ? {} : { held }),
     });
-    // A stored row carries no `held`. A row with `held: false` counts as
-    // stored too, so only `held: true` leaves the window.
     const stored = Array.from({ length: 11 }, (_, i) => row(`m${i + 1}`, `stored message ${i + 1}.`, i % 2 === 0 ? undefined : false));
     (mod as unknown as { ctx: unknown }).ctx = {
       getModule: (name: string) => name === 'lessons' ? { getLessons: () => [lesson('l1', 'memory detail')] } : null,
@@ -390,9 +388,6 @@ describe('RetrievalModule observability', () => {
     expect(context?.messageIds).toEqual(Array.from({ length: 10 }, (_, i) => `m${i + 2}`));
   });
 
-  // A row a tune-out holds from the residents (`heldFromResidents`) is stored,
-  // but no resident is shown it, so it isn't conversation to choose lessons
-  // from, whether it's stored or still held.
   test('leaves out rows a tune-out holds from the residents, whether stored or still held', async () => {
     const h = harness(['[]'], [lesson('l1', 'memory detail')]);
     const mod = new RetrievalModule({ membrane: h.membrane });

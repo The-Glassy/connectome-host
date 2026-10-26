@@ -21,10 +21,6 @@ export const WEB_PROTOCOL_VERSION = 2;
  *  included, its counters and its token counts. */
 export const AGENT_TREE_SCOPES = ['messages', 'thinking', 'tools', 'health', 'ops'] as const;
 
-// ---------------------------------------------------------------------------
-// Server → Client
-// ---------------------------------------------------------------------------
-
 /**
  * Cold-start payload, sent once a client connects (an observer, once its
  * `observer-hello` verifies). Contains everything needed to render a usable
@@ -654,10 +650,6 @@ export interface InboundTriggerMessage {
   timestamp: number;
 }
 
-// ---------------------------------------------------------------------------
-// Live operator surgery (rollback / suppress), host quiesce, operator log.
-// ---------------------------------------------------------------------------
-
 /** Host serving state, projected from the framework's host-mode status. */
 export interface HostModeSnapshot {
   /** 'serving' | 'quiescing' | 'quiesced' — or whatever the framework reports. */
@@ -750,12 +742,6 @@ export type WebUiServerMessage =
   | OperatorLogMessage
   | ErrorMessage;
 
-// ---------------------------------------------------------------------------
-// Observer identity (docs/observability.md M2) — additive to protocol v1.
-// Basic-auth clients never see these frames; key-authenticated observers
-// authenticate in-band over the WS before any data flows.
-// ---------------------------------------------------------------------------
-
 /** Sent to a connection that upgraded without full authority (basic auth or
  *  a full session cookie), which is allowed only when observer grants exist:
  *  the client must reply with observer-hello before anything else is sent.
@@ -775,10 +761,6 @@ export interface ObserverAckMessage {
   sessionToken: string;
   label: string;
 }
-
-// ---------------------------------------------------------------------------
-// Client → Server
-// ---------------------------------------------------------------------------
 
 /** Plain user message; equivalent to typing in the TUI. Triggers inference. */
 export interface UserMessageMessage {
@@ -1175,17 +1157,6 @@ export type WebUiClientMessage =
   | RequestWorkspaceFileMessage
   | PingMessage;
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Type guard for narrowing parsed JSON to a known client message. Per-variant
- * payload validation lives here so handlers downstream can trust field
- * shapes — without this, a malformed payload like `{type:'mcpl-add', id: 42,
- * command: null}` would slip through and propagate into disk writes / file
- * paths / spawn() args, where the eventual failure is far from the cause.
- */
 export function isClientMessage(value: unknown): value is WebUiClientMessage {
   if (!value || typeof value !== 'object') return false;
   const v = value as Record<string, unknown>;
@@ -1262,14 +1233,11 @@ export function isClientMessage(value: unknown): value is WebUiClientMessage {
       if (v.lastMessageId !== undefined && !isNonEmptyString(v.lastMessageId)) return false;
       if (v.kind !== undefined && v.kind !== 'pin' && v.kind !== 'document') return false;
       if (v.name !== undefined && !isNonEmptyString(v.name)) return false;
-      // Fold levels are small non-negative integers (0 = raw). Reject strings
-      // and fractions before they reach the strategy's pin normalizer.
       for (const k of ['level', 'maxLevel']) {
         const x = v[k];
         if (x === undefined) continue;
         if (typeof x !== 'number' || !Number.isSafeInteger(x) || x < 0 || x > 32) return false;
       }
-      // level and maxLevel are different semantics; asking for both is ambiguous.
       if (v.level !== undefined && v.maxLevel !== undefined) return false;
       return true;
     }
@@ -1281,14 +1249,9 @@ export function isClientMessage(value: unknown): value is WebUiClientMessage {
       if (!isOptionalScope(v.scope)) return false;
       if (!isOptionalNonEmptyString(v.agent)) return false;
       if (!isOptionalBool(v.persist) || !isOptionalBool(v.notify) || !isOptionalBool(v.immediate)) return false;
-      // Positive-integer-or-absent for each knob. The semantic gate (budget must
-      // exceed max response tokens; tail/pace need a hot-configurable strategy)
-      // lives in Agent.validateRuntimeSettingsPatch — this only guarantees the
-      // shape so that gate gets numbers instead of strings.
       for (const k of ['contextBudgetTokens', 'tailTokens', 'transitionPaceTokens']) {
         if (!isOptionalPositiveInt(v[k])) return false;
       }
-      // Require at least one actual knob: an empty patch would throw downstream.
       return v.contextBudgetTokens !== undefined
         || v.tailTokens !== undefined
         || v.transitionPaceTokens !== undefined;
@@ -1306,8 +1269,6 @@ export function isClientMessage(value: unknown): value is WebUiClientMessage {
     case 'credential-action': {
       if (!isOptionalScope(v.scope)) return false;
       if (v.action !== 'refresh' && v.action !== 'login' && v.action !== 'set-token' && v.action !== 'recheck') return false;
-      // A token is meaningful only for set-token, where it is mandatory. Bound
-      // its size: a bearer is a few hundred bytes, not a payload.
       if (v.action === 'set-token') {
         return typeof v.token === 'string' && v.token.trim().length > 0 && v.token.length <= 8192;
       }
@@ -1335,14 +1296,9 @@ function isNonEmptyString(v: unknown): v is string {
   return typeof v === 'string' && v.length > 0;
 }
 
-/** MCPL config keys end up as filesystem-adjacent identifiers (the spec
- *  treats them as opaque strings, but they're surfaced in error paths and
- *  may flow into other tooling). Reject path separators, control bytes, and
- *  anything that looks like it would escape JSON-key territory. */
 function isValidMcplId(v: unknown): v is string {
   if (typeof v !== 'string' || v.length === 0 || v.length > 128) return false;
   if (v.includes('/') || v.includes('\\') || v.includes('\0')) return false;
-  // Control chars are a robustness hole — reject 0x00-0x1f and 0x7f.
   for (let i = 0; i < v.length; i++) {
     const c = v.charCodeAt(i);
     if (c < 0x20 || c === 0x7f) return false;
@@ -1372,9 +1328,6 @@ function isOptionalNonEmptyString(v: unknown): v is string | undefined {
   return v === undefined || isNonEmptyString(v);
 }
 
-/** Scope fields: 'local' or a fleet-child name. Same lax shape the existing
- *  lessons/workspace requests use — the server resolves unknown children to
- *  a clean error rather than the validator guessing the fleet roster. */
 function isOptionalScope(v: unknown): v is string | undefined {
   return v === undefined || typeof v === 'string';
 }
@@ -1383,8 +1336,6 @@ function isOptionalBool(v: unknown): v is boolean | undefined {
   return v === undefined || typeof v === 'boolean';
 }
 
-/** Token counts: safe positive integers only. Rejects strings, NaN, Infinity,
- *  fractions and negatives before they reach the settings validator. */
 function isOptionalPositiveInt(v: unknown): v is number | undefined {
   return v === undefined || (typeof v === 'number' && Number.isSafeInteger(v) && v > 0);
 }

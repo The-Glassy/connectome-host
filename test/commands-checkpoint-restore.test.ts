@@ -65,7 +65,7 @@ describe('/checkpoint + /restore position semantics', () => {
     const cpMsg = addMessage('agent');
     handleCommand('/checkpoint cp', app);
     addMessage();
-    addMessage('agent'); // work after the checkpoint that must be rolled back
+    addMessage('agent');
 
     const result = handleCommand('/restore cp', app);
     const outcome = await result.asyncWork!;
@@ -86,10 +86,6 @@ describe('/checkpoint + /restore position semantics', () => {
     await handleCommand('/restore cp', app).asyncWork!;
     const branchesAfterFirst = branchCount();
 
-    // Second restore at the same position: the guard must hold even though
-    // we're now on restore-cp-… rather than the original branch (the guard
-    // used to compare branch names and died after the first restore,
-    // minting a sibling branch per repeat).
     const second = handleCommand('/restore cp', app);
     expect(second.asyncWork).toBeUndefined();
     expect(second.lines[0]!.text).toContain('Already at checkpoint');
@@ -102,8 +98,6 @@ describe('/checkpoint + /restore position semantics', () => {
     addMessage('agent');
     handleCommand('/checkpoint cp', app);
 
-    // Simulate /undo: branch truncated BEFORE the checkpoint message, so the
-    // checkpoint id is unreachable from the current branch's view.
     const undoBranch = cm.branchAt(early.id, 'undo-1');
     await cm.switchBranch(undoBranch);
 

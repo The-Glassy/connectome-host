@@ -13,7 +13,6 @@ export interface WorkspaceReadFields {
   content?: string;
 }
 
-/** A `read` result as the viewers receive it from `handleToolCall`. */
 export interface WorkspaceReadResult {
   data?: unknown;
   structured?: unknown;

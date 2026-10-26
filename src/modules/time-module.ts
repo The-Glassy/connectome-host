@@ -1,10 +1,3 @@
-/**
- * TimeModule — provides the agent with wall-clock awareness.
- *
- * On fresh session start, injects a message stating the session's start time.
- * Exposes `time:now` tool so the agent can check the current time on demand.
- */
-
 import type {
   Module,
   ModuleContext,

@@ -8,8 +8,6 @@ import { TtsRelayModule } from '../src/modules/tts-relay-module.js';
 
 type Interruption = { channelId: string; spokenText: string; reason: 'user_speech' | 'manual' | 'timeout'; timestamp: number };
 
-/** The module on a context whose callTool answers `answer`, with one published
- *  message posted to Discord channel 42, and the notes it gives the agent. */
 function relayWith(answer: Record<string, unknown>) {
   const notes: string[] = [];
   const calls: Array<{ name: string; input: unknown }> = [];
@@ -44,11 +42,6 @@ describe('an interruption\'s edit of the posted message', () => {
   });
 });
 
-// The edit target is a message the agent's prose published, as
-// agent-framework's `inference:published` reports it. agent-framework 0.24's
-// notes say `mcpl:speech-routed` also reports the `sleep` tool's announcement
-// and a subconscious's `speak_in_channel`, which an interruption must never
-// edit.
 describe('what an interruption may edit', () => {
   function relayOnTraces() {
     const calls: Array<{ name: string; input: unknown }> = [];

@@ -3,9 +3,7 @@
  * can hold several.
  */
 export interface QuarantineCounts {
-  /** Quarantine records. */
   count?: number;
-  /** The quarantined spans, when context-manager lists them. */
   spans?: readonly unknown[];
 }
 
@@ -16,12 +14,6 @@ export interface QuarantineStatus {
   spans?: readonly unknown[];
 }
 
-/** How many spans a status lists: the list's length when it can fit the
- *  records, and otherwise undefined, as for a status that lists none. A list
- *  fits when it could be the spans among `count` records: 1 to `count` of
- *  them while records are held, and none (so 0) when none are. The spans' own
- *  record counts aren't added up: the words take context-manager's list as
- *  given. */
 export function quarantineSpans(q: QuarantineCounts): number | undefined {
   if (!Array.isArray(q.spans)) return undefined;
   const records = q.count ?? 0;
@@ -30,7 +22,6 @@ export function quarantineSpans(q: QuarantineCounts): number | undefined {
   return fits ? spans : undefined;
 }
 
-/** "N span(s) in compression quarantine (M record(s))", or how many records are. */
 export function quarantineHeld(q: QuarantineCounts): string {
   const records = q.count ?? 0;
   const spans = quarantineSpans(q);

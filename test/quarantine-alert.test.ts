@@ -1,15 +1,6 @@
-/**
- * The compression quarantine's count, in the words the ops alert, the Web
- * UI's alert row and its Health tab use: spans when context-manager lists
- * them, and otherwise records, never records called spans or chunks. And
- * what the host's ops alert sends for each call of context-manager's alarm.
- */
 import { describe, expect, test } from 'bun:test';
 import { quarantineAlarm, quarantineHeld, quarantineSpans, type QuarantineStatus } from '../src/web/quarantine-alert.js';
 
-/** A span as context-manager#138, unreleased, lists it in its status (its
- *  CompressionQuarantineSpan); the installed context-manager lists none.
- *  The module reads only the list's length. */
 function span(n: number, records: number) {
   return {
     chunkSourceHash: `hash-${n}`,
@@ -41,7 +32,6 @@ describe('quarantineHeld', () => {
     }
   });
 
-  // A list fits when its length could be the spans among the records.
   test("a list whose length can't fit the records is ignored, so the records are named", () => {
     for (const spans of [[], [span(1, 1), span(2, 1), span(3, 1), span(4, 1)]]) {
       expect(quarantineSpans({ count: 3, spans })).toBeUndefined();

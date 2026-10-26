@@ -1,10 +1,3 @@
-/**
- * A fleet child's start, on a host that keeps the children file
- * (src/modules/fleet-module.ts): the child begins only once that file lists
- * it. Kept apart from the fleet module, with no imports, so a test's stand-in
- * child waits as a host does.
- */
-
 /** Set by a fleet that keeps the children file in the environment of each
  *  child it launches: the child begins only once a line comes on its
  *  stdin, which the fleet writes once the child is recorded and listed. So
@@ -35,7 +28,6 @@ export async function waitToBeListed(): Promise<void> {
       process.stdin.destroy();
       begin();
     };
-    // A pipe that fails says no more than one that ends.
     const onEnd = (): void => process.exit(1);
     process.stdin.on('data', onData);
     process.stdin.on('end', onEnd);

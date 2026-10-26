@@ -41,10 +41,6 @@ import { pathToFileURL } from 'node:url';
 import type { ContextStrategy, Module } from '@animalabs/agent-framework';
 import type { Recipe, RecipeExtension, RecipeStrategy } from './recipe.js';
 
-// ---------------------------------------------------------------------------
-// Factory contexts
-// ---------------------------------------------------------------------------
-
 export interface StrategyFactoryContext {
   /** The recipe's `agent.strategy` block verbatim — including keys the
    *  built-in schema doesn't know about. */
@@ -68,10 +64,6 @@ export interface ModuleFactoryContext {
 }
 
 export type ModuleFactory = (ctx: ModuleFactoryContext) => Module;
-
-// ---------------------------------------------------------------------------
-// Registry
-// ---------------------------------------------------------------------------
 
 export interface ExtensionApi {
   /** Register a context-strategy factory under a `agent.strategy.type` name.
@@ -103,23 +95,10 @@ export function isBuiltinStrategyType(type: string): boolean {
   return (BUILTIN_STRATEGY_TYPES as readonly string[]).includes(type);
 }
 
-/** An empty registry — used when a recipe declares no extensions. */
 export function emptyExtensionRegistry(): ExtensionRegistry {
   return { strategies: new Map(), modules: [] };
 }
 
-// ---------------------------------------------------------------------------
-// Loader
-// ---------------------------------------------------------------------------
-
-/**
- * Import every extension declared by the recipe and collect registrations.
- *
- * Paths must be absolute by the time this runs — `loadRecipe` resolves
- * relative extension paths against the recipe file's directory. Errors are
- * wrapped with the extension name + path so a broken deployment names the
- * component instead of surfacing a bare import stack.
- */
 export async function loadExtensions(recipe: Recipe): Promise<ExtensionRegistry> {
   const registry = emptyExtensionRegistry();
   for (const [name, ext] of Object.entries(recipe.extensions ?? {})) {

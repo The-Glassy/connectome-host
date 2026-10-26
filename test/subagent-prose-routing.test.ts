@@ -36,7 +36,6 @@ async function makeHarness(parentProseRouting?: 'locus' | 'explicit' | 'hybrid' 
   });
   subagent.setFramework(framework);
 
-  // Capture the ephemeral Agent handed to the run loop; resolve immediately.
   let captured: { proseRouting?: string; name?: string } | null = null;
   const fw = framework as unknown as {
     runEphemeralToCompletion: (agent: unknown, ctxMgr: unknown) => Promise<{ speech: string; toolCallsCount: number }>;
@@ -87,9 +86,6 @@ describe('subagent prose-routing inheritance', () => {
       const result = await h.subagent.handleToolCall(spawnCall());
       if (!result.success) console.error('SPAWN ERROR:', result.error);
       expect(result.success).toBe(true);
-      // Parent's resolved mode is AF's default 'locus'; inheritance passes it
-      // through explicitly — same value the child would default to, asserted
-      // so a future AF default change keeps parent and child in lockstep.
       expect(h.getCaptured()!.proseRouting).toBe('locus');
     } finally {
       await h.cleanup();

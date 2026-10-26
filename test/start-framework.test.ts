@@ -8,9 +8,6 @@ import { installPaths, moveCurrent, readCurrent, readJournal, switchQuiesceReaso
 
 type Servers = Array<{ id: string; connected: boolean }>;
 
-/** A framework as startFramework uses one: `order` records what it starts,
- *  when its stop or its resume, which each take a moment, has finished, how
- *  either fails, and what it tells the operator. */
 function framework(order: string[], options: {
   fleet?: FleetModule; servers?: Servers; atStart?: () => void; stopFails?: true; quiesceReason?: string; resumeFails?: true;
 } = {}) {
@@ -31,7 +28,6 @@ function framework(order: string[], options: {
       if (options.stopFails) throw new Error('the stop failed');
       order.push('framework stopped');
     },
-    // The framework finds a module by its own name, so the fake answers to the fleet's.
     getModule: (name: string) => (options.fleet && name === options.fleet.name ? options.fleet : null),
     listMcplServers: () => options.servers ?? [],
   } as unknown as Parameters<typeof startFramework>[0];

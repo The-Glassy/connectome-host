@@ -4,22 +4,15 @@ import { DEFAULT_RECIPE_CLOCK } from './recipe.js';
 
 type AgentConfig = Parameters<typeof AgentFramework.create>[0]['agents'][number];
 
-/** Compile budget for a recipe that omits `agent.contextBudgetTokens`. Sized
- *  for the 1M-window models; a recipe on a smaller window must set its own
- *  (budget + maxTokens has to fit under the window). */
 export const DEFAULT_CONTEXT_BUDGET_TOKENS = 300_000;
 const STREAM_HEADROOM_TOKENS = 20_000;
 const FRAMEWORK_DEFAULT_MAX_STREAM_TOKENS = 150_000;
 
-/** The model a recipe's agent runs: `envModel`, the environment's `MODEL`,
- *  when it's set, else the recipe's own, else its provider's default. */
 export function recipeModel(recipe: Recipe, envModel: string | undefined): string {
   return envModel || recipe.agent.model ||
     (recipe.agent.provider === 'openai-codex' ? 'gpt-5.4' : 'claude-opus-4-6');
 }
 
-/** The compile budget the recipe configures: its own, else the default. A
- *  runtime override (agent settings) can still move the live budget. */
 export function effectiveContextBudgetTokens(recipe: Recipe): number {
   return recipe.agent.contextBudgetTokens ?? DEFAULT_CONTEXT_BUDGET_TOKENS;
 }
@@ -38,8 +31,6 @@ export function autoContinueSupportWarning(recipe: Recipe, agent: object | undef
 }
 
 export type FrameworkAgentConfig = AgentConfig & {
-  // Forward recipe fields that newer Agent Framework releases understand
-  // while remaining structurally compatible with older installs.
   refusalHandling?: Recipe['agent']['refusalHandling'];
   sameRoundThinkTextPolicy?: 'public' | 'private';
   autoContinue?: Recipe['agent']['autoContinue'];
@@ -54,8 +45,6 @@ export type FrameworkAgentConfig = AgentConfig & {
 export function bedrockModelSupportsPromptCaching(model: string): boolean {
   const id = model.toLowerCase();
   if (!id.includes('claude')) return false;
-  // (?![a-z0-9]) = family boundary: end of id, or a separator (-, ., :)
-  // before a date/qualifier — matches the whole family, not one spelling.
   return !/claude-(v2|instant|3-(opus|sonnet|haiku)|3-5-sonnet)(?![a-z0-9])/.test(id);
 }
 
@@ -101,10 +90,6 @@ export function buildFrameworkAgentConfig(
       ? { allowedTools: recipe.agent.allowedTools }
       : {}),
     maxTokens: recipe.agent.maxTokens ?? 16384,
-    // An omitted maxStreamTokens follows the budget (+20k) only when the
-    // budget is the host default too. A recipe that sets its own budget may be
-    // on a 200k-window model, where budget + 20k would let a stream grow past
-    // the window; it keeps the framework's historical 150k.
     maxStreamTokens: recipe.agent.maxStreamTokens
       ?? (recipe.agent.contextBudgetTokens === undefined
         ? DEFAULT_CONTEXT_BUDGET_TOKENS + STREAM_HEADROOM_TOKENS
@@ -115,8 +100,6 @@ export function buildFrameworkAgentConfig(
     ...(recipe.agent.cacheTtl && recipe.agent.provider !== 'bedrock'
       && { cacheTtl: recipe.agent.cacheTtl }),
     ...(promptCaching !== undefined && { promptCaching }),
-    // Prefill scaffold (anthropic-xml formatter), e.g. chapterx CLI-sim's
-    // '<cmd>cat untitled.txt</cmd>' — part of migrating prefill-era bots.
     ...(recipe.agent.prefillUserMessage && { prefillUserMessage: recipe.agent.prefillUserMessage }),
     ...((recipe.agent.provider === 'openai-responses' || recipe.agent.provider === 'openai-codex') && {
       providerParams: {
@@ -152,7 +135,6 @@ export function buildFrameworkAgentConfig(
     ...(recipe.agent.autoContinue !== undefined
       ? { autoContinue: recipe.agent.autoContinue }
       : {}),
-    // Ten-minute clock rows unless the recipe names its own or turns them off (false).
     ...(recipe.agent.clock === false ? {} : { clock: recipe.agent.clock ?? { ...DEFAULT_RECIPE_CLOCK } }),
   };
 }

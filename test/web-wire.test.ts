@@ -1,11 +1,3 @@
-/**
- * The page's wire (web/src/wire.ts): what it takes the page's observer
- * sign-in to be, connection by connection. The host acks an observer before
- * its welcome, so a welcome on a socket that got no observer-ack is a full
- * client's, a refused connection holds no grant, and a sign-in that finishes
- * after its connection closed leaves the next connection's state alone. A
- * scripted host stands in for the real one, as the page's own browser runs do.
- */
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { createWireClient, type WireClient } from '../web/src/wire.js';
 
@@ -20,11 +12,6 @@ afterEach(() => { while (cleanups.length > 0) cleanups.pop()!(); });
 
 type Host = { ack: { scopes: string[] } | null; signIn: string | null; sockets: Set<Socket> };
 
-/** A page's wire to a host that asks each connection to sign in as an
- *  observer for `host.signIn` while that's set, and sends it nothing more, as
- *  the real host does until a hello. Otherwise the host acks each connection
- *  as an observer granted `host.ack.scopes` while `host.ack` is set, and
- *  welcomes it either way. */
 function connect(ack: { scopes: string[] } | null, signIn: string | null = null): { host: Host; wire: WireClient } {
   const host: Host = { ack, signIn, sockets: new Set<Socket>() };
   const server = Bun.serve({
@@ -70,8 +57,6 @@ describe("the page's wire", () => {
   });
 
   test("an observer's session cookie is written before the page is told it's an observer", async () => {
-    // What reacts to the observer state reads /healthz at once (App.tsx), so
-    // the cookie it sends has to be there by then.
     const doc = (globalThis as { document: { cookie: string } }).document;
     const kept = Object.getOwnPropertyDescriptor(doc, 'cookie')!;
     const statesAtWrite: string[] = [];

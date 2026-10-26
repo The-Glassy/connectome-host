@@ -41,14 +41,8 @@ const declared = (meta = {}) =>
   );
 
 const VERSION = /^\d+\.\d+\.\d+(?:[-+][\w.+-]*)?$/;
-// The registry the stack's packages are published on.
 const REGISTRY = "https://registry.npmjs.org/";
 
-/** What a lockfile pins the package `name` to, from how it writes it: a
- *  registry version, a GitHub repository and commit, a tarball URL, or a
- *  source this check can't compare. The registry's own tarball of the
- *  package, on registry.npmjs.org, is its version; a tarball anywhere else,
- *  a mirror's included, is a URL. */
 function pinOf(text, name) {
   const git = /^(?:github:|git\+(?:https|ssh):\/\/(?:git@)?github\.com[/:])([\w.-]+\/[\w.-]+?)(?:\.git)?#([0-9a-f]{7,40})$/i.exec(text);
   if (git) return { kind: "git", repo: git[1].toLowerCase(), commit: git[2].toLowerCase(), text };
@@ -95,7 +89,6 @@ function npmTree(lock) {
   return { tree, root: declared({ ...root, dependencies: { ...root.dependencies, ...root.devDependencies } }) };
 }
 
-/** An install path's packages: 'a/@s/b' is ['a', '@s/b']. */
 function packagesOf(path) {
   const parts = path.split("/");
   const names = [];
@@ -114,21 +107,11 @@ function lookup(tree, from, name) {
   return undefined;
 }
 
-/** The stack packages one lockfile's copy at `at` declares: the root's at
- *  '', and none where that lockfile has no copy. */
 function declaredAt({ tree, root }, at) {
   if (at === undefined) return [];
   return at === "" ? root : tree.get(at).deps;
 }
 
-/** Each chain of stack imports from the root, to the pins it resolves to:
- *  bun.lock's, then package-lock.json's. The two trees are walked together,
- *  each import looked up from where each lockfile places its importer, and
- *  only where that importer declares it. A chain that comes back to the
- *  copies it already holds, the same one in each tree, closes a cycle: that
- *  edge is compared, and not followed, since what those copies import is
- *  compared where the chain first reached them. A copy that either lockfile
- *  places elsewhere makes another pair, so it's followed. */
 function resolutions(bun, npm) {
   const sides = [bun, npm];
   const out = new Map();
@@ -144,10 +127,6 @@ function resolutions(bun, npm) {
   return out;
 }
 
-/** Whether two pins agree: neither lockfile installs the package, or both
- *  pin the same package at the same registry version, the same tarball URL,
- *  or the same GitHub repository at the same commit, one hash a prefix of
- *  the other. */
 function samePin(a, b) {
   if (!a && !b) return true;
   if (!a || !b || a.kind !== b.kind) return false;
@@ -172,13 +151,9 @@ function main() {
     );
     return 1;
   }
-  // A registry version shows as the version, or as package@version where
-  // the chain reaches it under another name, as an alias does.
   const shown = (pin, chain) =>
     !pin ? "none" : pin.kind === "version" && !chain.endsWith(` > ${pin.name}`) ? `${pin.name}@${pin.text}` : pin.text;
   const both = (chain) => `bun.lock ${shown(pins.get(chain)[0], chain)}, package-lock.json ${shown(pins.get(chain)[1], chain)}`;
-  // Both of a kind it can't read: a pin of a known kind on either side
-  // differs from it, so that pair is reported as differing.
   const unknown = chains.filter((chain) => pins.get(chain).every((pin) => pin?.kind === "other"));
   const differ = chains.filter((chain) => !unknown.includes(chain) && !samePin(...pins.get(chain)));
   if (differ.length === 0 && unknown.length === 0) {

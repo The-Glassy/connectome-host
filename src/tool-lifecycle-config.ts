@@ -18,9 +18,7 @@ const CLASS_SET: ReadonlySet<string> = new Set(TOOL_CLASSES);
  * which agent-framework handles as the most restrictive class (RFC-008 §5.2).
  */
 export const HOST_TOOL_CLASSES: Readonly<Record<string, readonly ToolClass[]>> = {
-  // Presence: the typing/composition indicator policy.
   'activity--*': ['body'],
-  // Routing and settings.
   'channel-mode--*': ['control'],
   'observers--*': ['control'],
   'time--*': ['control'],
@@ -28,13 +26,10 @@ export const HOST_TOOL_CLASSES: Readonly<Record<string, readonly ToolClass[]>> =
   'subagent--*': ['control'],
   'identity--status': ['control'],
   'identity--accept_invite': ['control'],
-  // Fleet: messages to and from other agents are other parties' words;
-  // the rest is process control.
   'fleet--send': ['comms'],
   'fleet--relay': ['comms'],
   'fleet--peek': ['comms'],
   'fleet--*': ['control'],
-  // The agent's own learned notes, recalled into context.
   'lessons--*': ['memory'],
 };
 
@@ -94,7 +89,6 @@ export function validateToolLifecycle(value: unknown, where: string): void {
   }
 }
 
-/** Validate a pattern → classes table (recipe `toolClassOverrides`). */
 export function validateToolClassTable(value: unknown, where: string): void {
   if (!isPlainObject(value)) throw new Error(`${where} must be an object of pattern → classes`);
   for (const [pattern, classes] of Object.entries(value)) {
@@ -107,11 +101,6 @@ export function validateToolClassTable(value: unknown, where: string): void {
   }
 }
 
-/**
- * The FrameworkConfig fields for tool classes: this host's module table
- * (as `hostToolClasses`, consulted before the framework's built-ins) and the
- * recipe's `toolClassOverrides`. Returned as a plain object for spreading.
- */
 export function toolClassConfig(recipe: { toolClassOverrides?: Record<string, string[]> }): {
   hostToolClasses: Record<string, string[]>;
   toolClassOverrides?: Record<string, string[]>;
@@ -124,18 +113,8 @@ export function toolClassConfig(recipe: { toolClassOverrides?: Record<string, st
   };
 }
 
-// ---------------------------------------------------------------------------
-// Read side: the effective class of every tool, for operator surfaces
-// ---------------------------------------------------------------------------
-
-/** Where a tool's effective class came from (RFC-008 §5.1), as the framework
- *  reports it: the recipe's `toolClassOverrides`, the host's own table
- *  (HOST_TOOL_CLASSES or the framework's built-ins), the MCPL server's
- *  `_meta["mcpl/class"]`, or nowhere (unclassed). */
 export type ToolClassSource = 'override' | 'host' | 'server' | 'none';
 
-/** One row of AgentFramework.listToolClasses(). `class` is empty for an
- *  unclassed tool; `serverId` is set for tools an MCPL server provides. */
 export interface ToolClassRow {
   tool: string;
   class: string[];
@@ -150,13 +129,6 @@ export const TOOL_CLASS_SOURCE_LABELS: Readonly<Record<ToolClassSource, string>>
   none: 'unclassed',
 };
 
-/**
- * The framework's effective-class listing, sorted by tool name. With
- * `agentName`, exactly the tools that agent is shown; without, every tool
- * the framework offers to anyone. Returns null when the framework build has
- * no listing (one older than tool classes). An unknown agent throws the
- * framework's own error.
- */
 export function readToolClasses(framework: unknown, agentName?: string): ToolClassRow[] | null {
   const fw = framework as { listToolClasses?: (agent?: string) => ToolClassRow[] } | null;
   if (typeof fw?.listToolClasses !== 'function') return null;
@@ -171,18 +143,12 @@ export function readToolClasses(framework: unknown, agentName?: string): ToolCla
     .sort((a, b) => (a.tool < b.tool ? -1 : a.tool > b.tool ? 1 : 0));
 }
 
-/** Rows per source, every source present (zero when none). */
 export function countToolClassSources(rows: readonly ToolClassRow[]): Record<ToolClassSource, number> {
   const counts: Record<ToolClassSource, number> = { override: 0, host: 0, server: 0, none: 0 };
   for (const r of rows) counts[r.source] = (counts[r.source] ?? 0) + 1;
   return counts;
 }
 
-/**
- * Plain-text listing for line-oriented surfaces: a per-source summary, then
- * one aligned row per tool (`tool  classes  source`, with the providing
- * MCPL server in parentheses).
- */
 export function formatToolClassRows(rows: readonly ToolClassRow[]): string[] {
   const counts = countToolClassSources(rows);
   const summary = (Object.keys(TOOL_CLASS_SOURCE_LABELS) as ToolClassSource[])

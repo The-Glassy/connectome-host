@@ -8,18 +8,9 @@
 // marker. Lengths here, the omission marker's included, are JavaScript string
 // lengths (UTF-16 code units).
 
-/** Longest error text a record keeps (head and tail, the omission stated). */
 const MAX_ERROR_CHARS = 4_000;
-/** Longest provider error code or type kept; real ones are short tokens. */
 const MAX_CODE_CHARS = 128;
 
-/**
- * `text` when it fits; otherwise its head and tail around a marker stating
- * how many of how many characters were omitted. The whole stays within `max`
- * whenever `max` fits the marker itself (at most 49 characters), as both
- * bounds here do; a smaller `max` gets the marker alone, longer than `max`.
- * Cuts move only toward omission, so no surrogate pair is split.
- */
 export function boundText(text: string, max: number): string {
   if (text.length <= max) return text;
   const isLow = (index: number): boolean => {
@@ -36,21 +27,16 @@ export function boundText(text: string, max: number): string {
   return `${text.slice(0, headEnd)} …[${tailStart - headEnd} of ${text.length} characters omitted]… ${text.slice(tailStart)}`;
 }
 
-/** Calls `get`, giving undefined where it throws. */
 function read<T>(get: () => T): T | undefined {
   try { return get(); } catch { return undefined; }
 }
 
 interface ReadError {
-  /** True when the thrown value is an Error (the test itself guarded). */
   isError: boolean;
   name: string;
-  /** The message, or undefined where it couldn't be read. */
   message?: string;
   stack?: string;
-  /** The text of a thrown value that isn't an Error. */
   text?: string;
-  /** The classification a membrane error carries, each field read on its own. */
   classification: Record<string, unknown>;
 }
 

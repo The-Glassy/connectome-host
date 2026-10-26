@@ -57,8 +57,6 @@ describe('kv-unified recipe plumbing', () => {
   });
 
   test('takes kv-unified with its kvUnified block left out, and rejects a block written incomplete', () => {
-    // An omitted block is allowed (the host supplies its standard one); a
-    // written block must be complete, with no per-field merging.
     const missing = recipe() as ReturnType<typeof recipe>;
     delete (missing.agent.strategy as { kvUnified?: unknown }).kvUnified;
     expect(() => validateRecipe(missing)).not.toThrow();

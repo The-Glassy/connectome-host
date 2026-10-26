@@ -1,5 +1,3 @@
-// endHeadlessLog before runHeadless has opened a log: a fatal error that
-// comes that early still exits, rather than waiting on a log that isn't there.
 import { test, expect } from 'bun:test';
 import { endHeadlessLog } from '../src/headless.ts';
 

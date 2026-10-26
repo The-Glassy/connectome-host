@@ -1,7 +1,3 @@
-/**
- * The host's MockAdapter config from a recipe's `agent.mock` block (validated
- * in recipe.ts; see RecipeMockConfig for what each knob does).
- */
 import type { MockAdapterConfig } from '@animalabs/membrane';
 import type { RecipeMockConfig } from './recipe.js';
 

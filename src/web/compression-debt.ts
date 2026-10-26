@@ -20,12 +20,8 @@ export interface CompressionDebt {
   compressionQuarantineCount?: number | null;
 }
 
-/** How the Health tab tones a debt line: `alarm` for critical, `unread` for a
- *  report that couldn't read something, as it tones a read that failed,
- *  `warn` for degraded, and `quiet` for anything else. */
 export type DebtTone = 'alarm' | 'unread' | 'warn' | 'quiet';
 
-/** The read the report says failed, when it names one of the two. */
 function failedRead(debt: CompressionDebt): 'quarantine-ledger' | 'report' | undefined {
   return debt.failure === 'quarantine-ledger' || debt.failure === 'report' ? debt.failure : undefined;
 }
@@ -36,13 +32,6 @@ export function debtTone(debt: CompressionDebt): DebtTone {
   return debt.state === 'degraded' ? 'warn' : 'quiet';
 }
 
-/** The line's head, then "N chunk(s) pending · oldest A · merge queue K":
- *  the oldest chunk's age only while some are pending, and the merge queue
- *  only when it holds any. A count or age the report didn't give as a number
- *  isn't shown as one. The head says what a person most needs: that
- *  compression has stalled, when the ledger it needs can't be read; that the
- *  debt can't be checked, when the report itself failed; and otherwise the
- *  state. */
 export function debtSummary(debt: CompressionDebt): string {
   const failed = failedRead(debt);
   const head = failed === 'quarantine-ledger'
@@ -64,18 +53,11 @@ export function debtSummary(debt: CompressionDebt): string {
   return parts.join(' · ');
 }
 
-/** An age as a person reads it, rounded: minutes under two hours, hours from there. */
 export function debtAge(ms: number): string {
   const minutes = Math.round(ms / 60_000);
   return minutes < 120 ? `${minutes}m` : `${Math.round(minutes / 60)}h`;
 }
 
-/** The host's own next step, under the report's message, which it refers to:
- *  for a report that failed, how this host reports a problem; for the
- *  ledger, the same when the store's data is damaged, since nothing in
- *  context-manager repairs that. The reporter describes the message in their
- *  own words, as /bug's rule keeps error text and paths out of its public
- *  issues (src/bug-report.ts). None without a message. */
 export function debtNextStep(debt: CompressionDebt): string | undefined {
   if (!debt.error) return undefined;
   const failed = failedRead(debt);

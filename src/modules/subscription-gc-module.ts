@@ -1,36 +1,3 @@
-/**
- * SubscriptionGcModule — auto-close noisy ordinary channel traffic.
- *
- * Problem: a subscribed channel delivers ambient (non-mention, non-DM) messages
- * into the agent's context whether or not the agent ever acts on them. A busy
- * channel the agent isn't engaging is pure context cost.
- *
- * Mechanic (host-side, because only the host sees activations):
- *   - Per subscribed channel, count ambient CHARACTERS as they arrive
- *     (`onProcess` over `mcpl:push-event` / `mcpl:channel-incoming`).
- *   - Every agent ACTIVATION (`inference:started` trace) zeroes ALL counters —
- *     the agent saw every subscribed channel in that context (compressed if
- *     large; nothing is dropped), so the slate is clean.
- *   - The instant a channel's since-last-activation count crosses its limit, it
- *     is auto-closed via the host's generic `channel_close` tool. This
- *     bounds any one channel's context pollution to ~limit characters.
- *   - A refusal of the close as stated intent stands: the close of a
- *     channel opened explicitly, where no configured budget gives a lease,
- *     or of one tuned out, which only its tune-out's cancel ends. The
- *     janitor stands down, and its next try is a full budget of traffic
- *     away.
- *
- * Everything is durable across restarts: counters + per-channel overrides
- * persist to chronicle (a restart is NOT an activation, so counters must carry
- * across downtime — they only reset when the agent actually runs).
- *
- * Config (recipe `modules.subscriptionGc`): `defaultLimitChars` (20000),
- * `serverId` (`discord`), `toolPrefix` (`mcpl--<serverId>`). The agent can
- * override per channel at runtime through `agent_settings` (field
- * `channel_idle_limits`); other modules pin channels open through the
- * internal `pin_channel_idle_limit` tool.
- */
-
 import type {
   Module,
   ModuleContext,
@@ -51,28 +18,17 @@ const OTHER_SETTINGS =
   'Other settings given in the same call may not all have been applied: agent_settings with action "get" shows each as it stands.';
 
 export interface SubscriptionGcConfig {
-  /** Default ambient-character budget per channel before auto-close. */
   defaultLimitChars?: number;
-  /** MCPL server id that owns subscriptions (default 'discord'). */
   serverId?: string;
   /** @deprecated Lifecycle tools are host-generic; retained for config compatibility. */
   toolPrefix?: string;
 }
 
-/** `'off'` pins a channel (never auto-close); a number overrides the
- *  default limit; absence falls back to the default. */
 type LimitOverride = number | 'off';
 
 interface GcState {
-  /** Agent-set per-channel limits. Cleared by agent_settings reset. */
   overrides: Record<string, LimitOverride>;
-  /** System pins (never auto-close), set by other modules via
-   *  pin_channel_idle_limit — e.g. ChannelModeModule's debounced mode.
-   *  These encode mode invariants, not agent preferences, so
-   *  agent_settings reset leaves them alone; only unpinning (a mode
-   *  change) clears them. A pin wins over any override. */
   pins: Record<string, true>;
-  /** Ambient chars accrued per channel since the last activation. */
   counters: Record<string, number>;
 }
 
@@ -103,18 +59,12 @@ export class SubscriptionGcModule implements Module {
     this.ctx = ctx;
     const saved = ctx.getState<Partial<GcState>>();
     if (saved) {
-      // Pre-pins state stored ChannelMode's programmatic 'off' pins in
-      // `overrides`; they stay there as agent-level overrides and get
-      // re-asserted as pins on the next mode change.
       this.state = {
         overrides: saved.overrides ?? {},
         pins: saved.pins ?? {},
         counters: saved.counters ?? {},
       };
     }
-    // Reset all counters on every activation: the agent just saw the full
-    // context, so every subscribed channel is "seen". This is the ONLY reset —
-    // never on restart.
     this.unsubscribeTrace = ctx.onTrace((e) => {
       if (e.type === 'inference:started') {
         if (Object.keys(this.state.counters).length > 0) {
@@ -134,7 +84,7 @@ export class SubscriptionGcModule implements Module {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
-    this.persistNow(); // flush any pending counter changes before teardown
+    this.persistNow();
     this.ctx = null;
   }
 
@@ -152,7 +102,6 @@ export class SubscriptionGcModule implements Module {
         if (typeof channelId !== 'string' || channelId.length === 0) {
           return { success: false, error: 'channelId is required', isError: true };
         }
-        // `limit` accepts "default", "off", a number, or a numeric string.
         const limit = input.limit;
         const numeric =
           typeof limit === 'number'
@@ -181,8 +130,6 @@ export class SubscriptionGcModule implements Module {
         return ok(`Idle limit for ${channelId} set to ${desc}.`);
       }
       case 'pin_channel_idle_limit': {
-        // Internal (module-to-module) verb: hold a channel open regardless of
-        // agent-level overrides. Not part of the agent settings surface.
         const channelId = input.channelId;
         if (typeof channelId !== 'string' || channelId.length === 0) {
           return { success: false, error: 'channelId is required', isError: true };
@@ -255,11 +202,6 @@ export class SubscriptionGcModule implements Module {
             `positive number, "off", or "default"/null, not ${shown(raw)}. ${OTHER_SETTINGS}`,
           );
         }
-        // All-or-nothing: validate the full patch into a staging copy and
-        // swap only if every entry passes. Mutating live state per-entry
-        // would leave earlier entries active (limitFor reads the map
-        // directly, and any later flush persists them) after a failure the
-        // agent was told was rejected. Every bad entry is named at once.
         const staged = { ...this.state.overrides };
         const bad: string[] = [];
         let emptyId = false;
@@ -301,10 +243,6 @@ export class SubscriptionGcModule implements Module {
         return this.settingsSnapshot();
       },
       reset: (_agentName, keys) => {
-        // Clears agent overrides only. Pins are mode invariants owned by
-        // other modules (ChannelMode's debounced mode), not agent
-        // preferences — a blanket `agent_settings reset` must not silently
-        // reopen a debounced channel to auto-close.
         const all = !keys || keys.length === 0;
         if (all || keys?.includes('channel_idle_limits')) {
           this.state.overrides = {};
@@ -315,7 +253,6 @@ export class SubscriptionGcModule implements Module {
     };
   }
 
-  /** agent_settings view: the writable overrides plus read-only status. */
   private settingsSnapshot(): Record<string, unknown> {
     return {
       channel_idle_limits: { ...this.state.overrides },
@@ -334,7 +271,6 @@ export class SubscriptionGcModule implements Module {
     const next = (this.state.counters[channelId] ?? 0) + chars;
 
     if (limit !== Infinity && next > limit) {
-      // Cross the threshold → close and clear the counter.
       delete this.state.counters[channelId];
       this.persistNow();
       // agent-framework refuses a machine close of an explicitly opened channel
@@ -374,9 +310,6 @@ export class SubscriptionGcModule implements Module {
             channelId,
             limitChars: limit,
             decisionSource: 'subscription-gc',
-            // 'configured-budget' deliberately does NOT claim an actor: the
-            // override state records no provenance (agent, operator, or
-            // imported are all possible).
             lease: hasConfiguredLease ? 'configured-budget' : 'default',
             restore: `channel_open ${channelId}`,
           },
@@ -400,19 +333,11 @@ export class SubscriptionGcModule implements Module {
         };
       }
 
-      // The registry refused because the channel was explicitly opened and
-      // we hold no lease, or because it's tuned out, which a close can't
-      // end (only the tune-out's cancel does): stand down quietly — the
-      // janitor doesn't argue with stated intent. The counter stays cleared,
-      // so the next refusal is at least a full budget away; if the channel's
-      // provenance later changes (reopened by policy), GC self-heals.
       const refusal = (result as { data?: { refusal?: string } } | undefined)?.data?.refusal;
       if (refusal === 'explicit-open' || refusal === 'tuned-out') {
         return {};
       }
 
-      // Close failed — keep the channel counted so we retry on the next
-      // ambient message rather than silently giving up.
       this.state.counters[channelId] = next;
       this.persistNow();
       return {};
@@ -423,8 +348,6 @@ export class SubscriptionGcModule implements Module {
     return {};
   }
 
-  // ── internals ──
-
   private limitFor(channelId: string): number {
     if (this.state.pins[channelId]) return Infinity;
     const o = this.state.overrides[channelId];
@@ -433,8 +356,6 @@ export class SubscriptionGcModule implements Module {
     return this.defaultLimitChars;
   }
 
-  /** Pull (channelId, ambient char count) out of an MCPL message event for our
-   *  target server, or null if it isn't ambient traffic we should count. */
   private extractAmbient(event: ProcessEvent): { channelId: string; chars: number } | null {
     if (event.type === 'mcpl:push-event') {
       if (event.serverId !== this.serverId) return null;
@@ -462,9 +383,6 @@ export class SubscriptionGcModule implements Module {
     this.ctx?.setState(this.state);
   }
 
-  /** Debounced persistence so a firehose channel doesn't drive a chronicle
-   *  write per message. Durability target: a clean restart flushes via stop();
-   *  a hard crash loses at most the debounce window of counter increments. */
   private scheduleFlush(): void {
     if (this.flushTimer) return;
     this.flushTimer = setTimeout(() => {
@@ -474,7 +392,6 @@ export class SubscriptionGcModule implements Module {
   }
 }
 
-/** Total length of text content blocks (non-text blocks count as 0). */
 function textLen(content: unknown): number {
   if (!Array.isArray(content)) return 0;
   let n = 0;

@@ -50,8 +50,6 @@
  * withdrawn.
  */
 
-/** Every trace that ends a stream: the turn has stopped running, for now or
- *  for good. A surface that shows a turn as running stops showing it here. */
 export const STREAM_END_TRACES: ReadonlySet<string> = new Set([
   'inference:completed',
   'inference:turn_ended',
@@ -69,11 +67,6 @@ export const TURN_SETTLED_TRACES: ReadonlySet<string> = new Set([
   'inference:exhausted',
 ]);
 
-/** The traces besides `inference:started` that only a running turn sends,
- *  each setting the TUI's status line to a running turn's: a tool call
- *  yielded, and the stream resumed after tool results. A surface that
- *  missed a turn's start, as at startup or around a session switch, follows
- *  the turn from these. */
 export const TURN_RUNNING_TRACES: ReadonlySet<string> = new Set([
   'inference:tool_calls_yielded',
   'inference:stream_resumed',

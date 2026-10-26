@@ -18,10 +18,6 @@ export type QuiesceFramework = {
   getHostModeStatus(): HostModeStatus;
 };
 
-/** The fleet as the switch reaches it: every child that may be running,
- *  which is each one starting or ready, whether or not this host has a
- *  connection to it; and a request to one, answered or failed within
- *  `timeoutMs`, never rejected. */
 export interface SwitchFleet {
   runningChildren(): Array<{ name: string }>;
   requestSwitch(name: string, request: SwitchRequest, timeoutMs: number): Promise<{ ok: boolean; data?: unknown; error?: string }>;
@@ -31,15 +27,11 @@ export interface SwitchFleet {
  *  switch's reason for `to`, or end the switch's quiesce. */
 export type SwitchRequest = { op: 'quiesce'; to: string; waitMs: number } | { op: 'resume' };
 
-/** What quiesceForSwitch found: drained when every host answered drained. */
 export interface SwitchQuiet {
   drained: boolean;
   hosts: HostQuiet[];
 }
 
-/** What resumeAfterSwitchQuiesce did on each host: `resumed` is false, with
- *  why, when the host didn't end the switch's quiesce or didn't say so in
- *  time. */
 export interface SwitchResumed {
   hosts: Array<{ host: string; resumed: boolean; why?: string }>;
 }
@@ -47,10 +39,7 @@ export interface SwitchResumed {
 export const SERVING = 'it was serving';
 export const NOT_THE_SWITCHS = 'its quiesce isn\'t the switch\'s';
 const THIS_HOST = 'this host';
-/** How often the wait on a host that was quiesced already reads whether it has drained. */
 const DRAIN_POLL_MS = 200;
-/** How long a child's answer may take beyond the wait it was asked for, so
- *  one sent as its own wait ends still arrives. */
 const ANSWER_MARGIN_MS = 10_000;
 const SERVING_AGAIN = "its quiesce was ended during the switch's quiesce, so it was serving";
 const said = (error: unknown): string => error instanceof Error ? error.message : String(error);
@@ -60,9 +49,6 @@ const isCount = (value: unknown): value is number => typeof value === 'number' &
 const MAX_WAIT_MS = 2 ** 31 - 1 - ANSWER_MARGIN_MS;
 const isWait = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= MAX_WAIT_MS;
 
-/** A host's state after its quiesce: who holds a turn, and the scripts left
- *  running outside any turn, which a quiesce doesn't stop and a stop does. A
- *  host no longer quiesced can't be counted as drained. */
 function quiet(host: string, status: HostModeStatus): HostQuiet {
   if (!status.quiesced) return { host, answered: false, why: SERVING_AGAIN };
   return { host, answered: true, drained: status.drained, activeTurnAgents: status.activeTurnAgents, backgroundScripts: status.backgroundScripts };
@@ -81,7 +67,6 @@ async function quiesceAndWait(framework: QuiesceFramework, reason: string, waitM
   return status;
 }
 
-/** A child's answer to a quiesce, read as the child sent it. */
 function childQuiet(name: string, answer: { ok: boolean; data?: unknown; error?: string }): HostQuiet {
   if (!answer.ok) return { host: name, answered: false, why: answer.error ?? 'it gave no reason' };
   const data = answer.data as Record<string, unknown> | undefined;
@@ -94,34 +79,11 @@ function childQuiet(name: string, answer: { ok: boolean; data?: unknown; error?:
   return { host: name, answered: true, drained: data.drained, activeTurnAgents: holders as string[], backgroundScripts: data.backgroundScripts };
 }
 
-/** Ask each child that may be running to quiesce for the switch to `to`,
- *  waiting up to `waitMs`, at once, and read each answer. */
 async function askChildren(fleet: SwitchFleet | null, to: string, waitMs: number): Promise<HostQuiet[]> {
   return Promise.all((fleet?.runningChildren() ?? []).map(async ({ name }) =>
     childQuiet(name, await fleet!.requestSwitch(name, { op: 'quiesce', to, waitMs }, waitMs + ANSWER_MARGIN_MS))));
 }
 
-/**
- * Quiesce this host and each fleet child that may be running under the
- * switch's reason, at once, and wait up to `timeoutMs` for each to drain.
- * Then look again at every host, which is what's returned. The look
- * quiesces each child again, since a child answers only a quiesce, so a child
- * launched, connected or resumed during the wait, as a turn this host was
- * ending can launch one, is quiesced then and counted as it is; one not yet
- * connected can't be counted. This host is read as the look starts and again
- * once its children have answered, and counts as drained only when it was
- * quiesced and drained at the start and is still quiesced at the end. One
- * serving at the end, or at the start, can't be counted. One not drained at
- * the start is counted as it was then, with the agents that held a turn then,
- * since a turn alive then could launch a child the look doesn't list. What
- * changes between the look and the caller's stop isn't seen. A child that
- * doesn't answer holds the call for its margin past the wait, and again at
- * the look. A host that doesn't drain stays quiesced, as does one the
- * operator had quiesced, under its own reason. A second call is "wait
- * longer". A quiesce this host refuses, such as a QuiesceBlockedError where
- * its deferred writes can't reach disk, is thrown once the children have
- * answered, with this host's mode as it was.
- */
 export async function quiesceForSwitch(
   framework: QuiesceFramework, fleet: SwitchFleet | null, opts: { to: string; timeoutMs: number },
 ): Promise<SwitchQuiet> {
@@ -134,8 +96,6 @@ export async function quiesceForSwitch(
   ]);
   if (own.status === 'rejected') throw own.reason;
   if (waited.status === 'rejected') throw waited.reason;
-  // A child quiesced already answers at once, so the look takes a round trip
-  // for each, and up to a second for a child it quiesces now.
   const before = framework.getHostModeStatus();
   const children = await askChildren(fleet, opts.to, 0);
   const after = framework.getHostModeStatus();
@@ -143,11 +103,6 @@ export async function quiesceForSwitch(
   return { drained: hosts.every((h) => h.answered && h.drained), hosts };
 }
 
-/** Try later: end the switch's quiesce on each child that may be running and
- *  on this host, leaving any other quiesce. A child that isn't running ends
- *  it at its next start. A child that sends no answer within ten seconds, as
- *  one whose resume waits for its context maintenance can, is reported not
- *  resumed, with the fleet's reason; the resume it received goes on. */
 export async function resumeAfterSwitchQuiesce(framework: QuiesceFramework, fleet: SwitchFleet | null): Promise<SwitchResumed> {
   const children = await Promise.all((fleet?.runningChildren() ?? []).map(async ({ name }) =>
     ({ name, answer: await fleet!.requestSwitch(name, { op: 'resume' }, ANSWER_MARGIN_MS) })));
@@ -164,8 +119,6 @@ export async function resumeAfterSwitchQuiesce(framework: QuiesceFramework, flee
   };
 }
 
-/** A fleet child's answer to its parent's switch request, which comes over
- *  its socket. A request it can't read is refused, saying so. */
 export async function answerSwitchRequest(framework: QuiesceFramework, request: unknown): Promise<Record<string, unknown>> {
   const asked = request as Record<string, unknown> | null;
   if (asked?.op === 'resume') return resumeIfSwitch(framework);
@@ -176,9 +129,6 @@ export async function answerSwitchRequest(framework: QuiesceFramework, request: 
     "nothing. It may run another release than the install's host does: fleet--restart of it starts it on the host's release.");
 }
 
-/** End a quiesce that is the switch's own, and leave any other. A resume
- *  agent-framework refuses leaves the host quiesced, says why and logs it,
- *  with `refused` set; one that fails after the host serves again says so. */
 export async function resumeIfSwitch(framework: QuiesceFramework): Promise<{ resumed: boolean; why?: string; refused?: true }> {
   const status = framework.getHostModeStatus();
   if (!status.quiesced) return { resumed: false, why: SERVING };

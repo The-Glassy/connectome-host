@@ -1,4 +1,3 @@
-/** Real headless protocol/command dispatcher with an offline, controlled tool. */
 import { existsSync, writeFileSync } from 'node:fs';
 import { runHeadless } from '../src/headless.js';
 import type { AppContext } from '../src/index.js';

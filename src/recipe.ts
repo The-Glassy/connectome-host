@@ -21,15 +21,10 @@ import { isLoopbackOrTailnetHost } from './history-semantic.js';
 import { REASONING_EFFORTS, type ReasoningEffort } from './modules/settings-module.js';
 import { DEFAULT_INSTRUCTIONS_PATH } from './modules/instructions-module.js';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 export interface RecipeStrategy {
   /** Built-in strategy name, or a custom type registered by a
    *  `kind: "strategy"` extension (see `Recipe.extensions`). */
   type: 'autobiographical' | 'passthrough' | 'frontdesk' | (string & {});
-  // Core window/compression sizing
   headWindowTokens?: number;
   /** Verbatim tail. When unset, 40% of the compile budget (120k of 300k). */
   recentWindowTokens?: number;
@@ -50,13 +45,6 @@ export interface RecipeStrategy {
    * value is held to it. Count and depth limits still apply. */
   maxLiveImageBytes?: number;
   overBudgetGraceRatio?: number;
-  // Compression/merge tuning passed through to the underlying
-  // autobiographical strategy (and frontdesk, which extends it).
-  // Declared here so a typo in a recipe (e.g. `l1BudgetTokes`) fails
-  // at recipe validation rather than silently defaulting at strategy
-  // construction. Keep in sync with `AutobiographicalConfig` in
-  // @animalabs/context-manager; this interface is the source of truth
-  // for what the recipe loader accepts under `agent.strategy`.
   enforceBudget?: boolean;
   maxSpeculativeL1s?: number;
   /** Number of coverage-equivalent recall curves to try after the canonical
@@ -1296,8 +1284,6 @@ const RETIRED_CODE_EXECUTION_KEYS: Readonly<Record<string, string>> = {
   backgroundMaxLifetimeMs: 'every script now has one limit: set scriptLifetimeMs',
   maxBackgroundScripts: 'set maxRunningScripts, how many scripts an agent may have running at once, yielded ones included',
 };
-/** The runner's numeric settings, each a whole number of 0 or more; the
- *  framework checks their ranges when it builds the runner. */
 const CODE_EXECUTION_NUMBER_KEYS = [
   'yieldMs', 'maxYieldMs', 'scriptLifetimeMs', 'maxRunningScripts', 'maxScriptChildren',
   'toolCallTimeoutMs', 'wakeMinIntervalMs', 'maxWakesPerScript', 'memoryMaxBytes',
@@ -1372,11 +1358,6 @@ export interface RecipeConversations {
   agentPrefix?: string;
 }
 
-/**
- * Deprecation notices for a recipe's `conversations` block, one
- * human-readable line each (empty when it is absent). Pure — the host prints
- * these at startup with a `[deprecated]` prefix.
- */
 export function deprecatedConversationsNotices(conversations: RecipeConversations | undefined): string[] {
   if (!conversations) return [];
   return [
@@ -1425,16 +1406,9 @@ export interface Recipe {
 
 export type RecipeProvider = NonNullable<RecipeAgent['provider']>;
 
-/** The provider transport the host actually builds for this recipe. One
- *  adapter serves every stream in the process (resident, subconscious,
- *  forks), so this is also what any subagent stream runs on. */
 export function resolveProvider(recipe: Recipe): RecipeProvider {
   return recipe.agent.provider ?? 'anthropic';
 }
-
-// ---------------------------------------------------------------------------
-// Default recipe
-// ---------------------------------------------------------------------------
 
 export const DEFAULT_RECIPE: Recipe = {
   name: 'Agent',
@@ -1442,31 +1416,16 @@ export const DEFAULT_RECIPE: Recipe = {
   agent: {
     name: 'agent',
     cacheTtl: '1h',
-    // Empty on purpose: identity comes from what the agent lives through,
-    // and the tools describe themselves (docs/AGENT-ONBOARDING.md §5).
     systemPrompt: '',
-    // No strategy: the host defaults (buildFrameworkStrategy) give
-    // autobiographical + adaptive resolution + kv-unified with the standard
-    // block, a 300k budget and a 120k verbatim tail.
   },
   modules: {
-    // subagents + lessons + retrieval deliberately omitted — all opt-in only
-    // (retrieval additionally adds per-turn context churn + retrieval-model costs);
-    // see the RecipeModules field docs.
     wake: true,
     workspace: true,
   },
 };
 
-// ---------------------------------------------------------------------------
-// Environment variable substitution
-// ---------------------------------------------------------------------------
-
-/** A `${VAR}` or `${VAR:-default}` reference, as substituteEnvVars reads one. */
 const ENV_REFERENCE = String.raw`\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}`;
 
-/** Whether text holds a `${VAR}` reference: the form a recipe substitutes
- *  from the environment. An agent overlay entry passes it on as written. */
 export function namesEnvReference(text: string): boolean {
   return new RegExp(ENV_REFERENCE).test(text);
 }
@@ -1499,10 +1458,8 @@ export function substituteEnvVars(value: unknown, source: string): unknown {
       (_match, name: string, defaultValue: string | undefined) => {
         const v = process.env[name];
         if (defaultValue !== undefined) {
-          // ${VAR:-default} — use VAR if set + non-empty, else default.
           return v !== undefined && v !== '' ? v : defaultValue;
         }
-        // ${VAR} — required; empty string is allowed if explicitly set.
         if (v === undefined) {
           throw new Error(
             `Recipe "${source}" references environment variable \${${name}} which is not set. ` +
@@ -1528,58 +1485,17 @@ export function substituteEnvVars(value: unknown, source: string): unknown {
   return value;
 }
 
-// ---------------------------------------------------------------------------
-// Loading
-// ---------------------------------------------------------------------------
-
-/**
- * Base for resolving recipe-relative paths (currently: `children[].recipe`).
- * `file` sources use the recipe file's directory; `url` sources use the URL
- * base so a child like `"child.json"` on an `https://example.com/parent.json`
- * load resolves to `https://example.com/child.json`.
- */
 type RecipeSourceBase = { kind: 'file'; dir: string } | { kind: 'url'; base: string };
 
-/**
- * A loaded recipe plus the form of it that is safe to persist.
- *
- * `recipe` is fully resolved: `${VAR}` env references substituted, relative
- * child/extension paths made absolute, URL systemPrompt fetched. It is what
- * the running host consumes — and it can contain secrets (API tokens pulled
- * from the environment), so it must never be written to disk.
- *
- * `persistable` is the raw pre-substitution recipe JSON with only the
- * source-relative paths (`modules.fleet.children[].recipe`,
- * `extensions[*].path`) resolved to their final absolute form — those need
- * the original source base, which a resumed session no longer has. Every
- * `${VAR}` reference and any URL systemPrompt stay unresolved, so the file
- * `saveRecipe` writes carries no secret material and re-resolves against the
- * *current* environment on resume.
- */
 export interface LoadedRecipe {
   recipe: Recipe;
   persistable: Record<string, unknown>;
 }
 
-/**
- * Load a recipe from a URL or local file path.
- * If the systemPrompt value is an HTTP(S) URL, fetches the text.
- * Recipe string values containing `${VAR}` patterns are substituted against
- * `process.env` before validation — see substituteEnvVars().
- * Relative `modules.fleet.children[].recipe` paths are resolved against the
- * parent recipe's directory (or URL base) so sibling recipes are portable.
- */
 export async function loadRecipe(source: string): Promise<Recipe> {
   return (await loadRecipeDetailed(source)).recipe;
 }
 
-/**
- * Like loadRecipe, but also returns the persistable (unresolved) form —
- * see LoadedRecipe. Callers that snapshot the recipe to disk (index.ts's
- * resolveRecipe) must save `persistable`, never `recipe`. The store audit
- * (src/update/audit-stores.ts) loads a fleet child's recipe with
- * `fetchSystemPrompt: false`, as it reads a saved one.
- */
 export async function loadRecipeDetailed(source: string, options: { fetchSystemPrompt?: boolean } = {}): Promise<LoadedRecipe> {
   let raw: unknown;
   let sourceBase: RecipeSourceBase;
@@ -1611,8 +1527,6 @@ export async function loadRecipeDetailed(source: string, options: { fetchSystemP
     sourceBase = { kind: 'file', dir: dirname(path) };
   }
 
-  // Snapshot the pre-substitution form before substituteEnvVars walks the
-  // object — this is what gets persisted, so resolved secrets never do.
   const persistable = structuredClone(raw) as Record<string, unknown>;
 
   raw = substituteEnvVars(raw, source);
@@ -1624,17 +1538,6 @@ export async function loadRecipeDetailed(source: string, options: { fetchSystemP
   return { recipe: resolved, persistable };
 }
 
-/**
- * Copy the resolved `modules.fleet.children[].recipe` and
- * `extensions[*].path` values from the resolved recipe into the raw
- * pre-substitution snapshot. Those fields are resolved against the recipe's
- * original source base (its directory or URL), which is gone by resume time
- * — so the persisted form must carry them already-absolute. Substitution
- * never changes object shape (it is a per-string replacement), so the two
- * trees align index-for-index and key-for-key. Paths are not treated as
- * secret: an env value that was interpolated into a child-recipe or
- * extension path IS persisted in resolved form.
- */
 function copyResolvedPathsIntoRaw(raw: Record<string, unknown>, recipe: Recipe): void {
   const fleet = recipe.modules?.fleet;
   const resolvedChildren = (typeof fleet === 'object' && fleet !== null) ? fleet.children : undefined;
@@ -1661,15 +1564,10 @@ function copyResolvedPathsIntoRaw(raw: Record<string, unknown>, recipe: Recipe):
   }
 }
 
-/**
- * Resolve a single `children[].recipe` value against the parent recipe's
- * source base.  Returns unchanged if absolute or http(s) URL.
- */
 export function resolveRecipeRelative(child: string, base: RecipeSourceBase): string {
   if (child.startsWith('http://') || child.startsWith('https://')) return child;
   if (isAbsolute(child)) return child;
   if (base.kind === 'file') return resolve(base.dir, child);
-  // URL base: resolve the child against the parent URL.
   return new URL(child, base.base).href;
 }
 
@@ -1682,12 +1580,6 @@ function resolveChildRecipePaths(recipe: Recipe, base: RecipeSourceBase): void {
   }
 }
 
-/**
- * Resolve relative `extensions[].path` values against the recipe file's
- * directory. URL-loaded recipes cannot carry relative extension paths — the
- * host never fetches code over the network, so there is nothing local to
- * resolve them against.
- */
 function resolveExtensionPaths(recipe: Recipe, base: RecipeSourceBase): void {
   for (const [name, ext] of Object.entries(recipe.extensions ?? {})) {
     if (isAbsolute(ext.path)) continue;
@@ -1701,10 +1593,6 @@ function resolveExtensionPaths(recipe: Recipe, base: RecipeSourceBase): void {
   }
 }
 
-/**
- * If systemPrompt is an HTTP(S) URL, fetch its contents as plain text.
- * Only treated as a URL if it looks like a single URL (no spaces/newlines).
- */
 async function resolveSystemPrompt(recipe: Recipe): Promise<Recipe> {
   const prompt = recipe.agent.systemPrompt;
   const isUrl = (prompt.startsWith('http://') || prompt.startsWith('https://'))
@@ -1722,8 +1610,6 @@ async function resolveSystemPrompt(recipe: Recipe): Promise<Recipe> {
 
 function validateKvUnifiedConfig(strategy: Record<string, unknown>): void {
   const type = strategy.type ?? 'autobiographical';
-  // An omitted foldingStrategy is kv-unified under adaptive resolution
-  // (buildFrameworkStrategy), so a kvUnified block there is in use.
   const selected = strategy.foldingStrategy === 'kv-unified' || (
     strategy.foldingStrategy === undefined &&
     strategy.adaptiveResolution !== false &&
@@ -1736,7 +1622,6 @@ function validateKvUnifiedConfig(strategy: Record<string, unknown>): void {
     }
     return;
   }
-  // Omitted: the host supplies its standard block (standardKvUnifiedConfig).
   if (raw === undefined) return;
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new Error(
@@ -1824,8 +1709,6 @@ function validateKvUnifiedConfig(strategy: Record<string, unknown>): void {
   if (config.hysteresisCertificate !== undefined && typeof config.hysteresisCertificate !== 'boolean') {
     throw new Error('Recipe agent.strategy.kvUnified.hysteresisCertificate must be a boolean when present.');
   }
-  // A typo here doesn't fail in context-manager: an engine it doesn't know
-  // runs as `auto`, and a mode other than `joint` ranks individually.
   if (config.engine !== undefined && !['auto', 'subtree', 'dag'].includes(config.engine as string)) {
     throw new Error('Recipe agent.strategy.kvUnified.engine must be "auto", "subtree" or "dag" when present.');
   }
@@ -1834,19 +1717,6 @@ function validateKvUnifiedConfig(strategy: Record<string, unknown>): void {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Unknown keys (#167)
-// ---------------------------------------------------------------------------
-
-/**
- * The keys each recipe level reads. The type check below keeps these lists in
- * step with Recipe, RecipeAgent, RecipeModules, RecipeMockConfig and
- * RecipeKvUnifiedConfig with its policy: a key added to an interface and not
- * here (or listed here and gone from the interface) fails to compile. It also
- * ties agent.clock's keys to agent-framework's ClockConfig, a dependency's
- * type, so a framework release that adds or removes a clock key fails the
- * host's typecheck once the lockfile takes it.
- */
 const RECIPE_KEYS = [
   'name', 'description', 'version', 'agent', 'mcpServers', 'modules', 'extensions',
   'sessionNaming', 'codeExecution', 'conversations', 'subconscious', 'toolClassOverrides',
@@ -1859,30 +1729,19 @@ const RECIPE_AGENT_KEYS = [
   'toolWrapperProseGuard', 'autoContinue', 'anthropicBetas', 'strategy', 'thinking', 'responses', 'codex', 'mock',
   'refusalHandling', 'clock',
 ] as const;
-/** The clock an agent gets when its recipe omits `agent.clock`: a row every
- *  ten minutes. A recipe turns clock rows off with `agent.clock: false`. */
 export const DEFAULT_RECIPE_CLOCK: ClockConfig = Object.freeze({ intervalMinutes: 10 }) as ClockConfig;
 
-/** `agent.autoContinue`'s keys, when it is an object. */
 const RECIPE_AGENT_AUTO_CONTINUE_KEYS = ['maxConsecutive'] as const;
 /** agent-framework's bounds for `agent.autoContinue.maxConsecutive` (resolveAutoContinue). */
 const AUTO_CONTINUE_MIN = 1;
 const AUTO_CONTINUE_MAX = 20;
 
-/**
- * Refuse a nested recipe object's keys outside `known`: the framework reads
- * only those and ignores any other, so a misspelling would load as no
- * setting at all. The message names the keys it takes.
- */
 function rejectUnknownKeys(path: string, value: object, known: readonly string[]): void {
   const unknown = Object.keys(value).filter((k) => !known.includes(k));
   if (unknown.length === 0) return;
   const takes = known.length === 1 ? known[0] : `${known.slice(0, -1).join(', ')} and ${known[known.length - 1]}`;
   throw new Error(`Recipe ${path} has unknown key${unknown.length > 1 ? 's' : ''} ${unknown.map((k) => JSON.stringify(k)).join(', ')}; it takes ${takes}.`);
 }
-/** agent-framework's `ClockConfig` keys, the ones `agent.clock` takes: the
- *  framework reads only these and ignores any other, so the host refuses the
- *  rest rather than letting a misspelling load as no setting at all. */
 const RECIPE_AGENT_CLOCK_KEYS = ['intervalMinutes', 'intervalSeconds', 'precision'] as const;
 const RECIPE_AGENT_MOCK_KEYS = [
   'echoMode', 'defaultResponse', 'completeDelayMs', 'streamChunkDelayMs', 'streamChunkSize',
@@ -1906,8 +1765,6 @@ const RECIPE_KV_UNIFIED_POLICY_KEYS = [
 ] as const;
 type ListsExactly<K extends string, L extends readonly string[]> =
   [Exclude<K, L[number]>] extends [never] ? ([Exclude<L[number], K>] extends [never] ? true : false) : false;
-// "Type 'true' is not assignable to type 'false'" here means a key was added
-// to (or removed from) one of the interfaces without the list above following.
 const recipeKeyListsInStep: [
   ListsExactly<keyof Recipe & string, typeof RECIPE_KEYS>,
   ListsExactly<keyof RecipeAgent & string, typeof RECIPE_AGENT_KEYS>,
@@ -1928,55 +1785,33 @@ const MOUNT_WAKE_OPS = ['created', 'modified', 'deleted'] as const;
 /** The longest delay a timer keeps: Bun's and Node's run a longer or negative one at once. */
 const TIMER_MS_MAX = 2147483647;
 
-/** Values in a sentence: `"a" or "b"`, `"a", "b" or "c"`. */
 function listed(values: readonly string[]): string {
   const quoted = values.map((v) => `"${v}"`);
   return quoted.length > 1 ? `${quoted.slice(0, -1).join(', ')} or ${quoted[quoted.length - 1]}` : quoted.join('');
 }
 
-/** What a value must be, for the refusal's words, or null when it is that. */
 type MountValueCheck = (value: unknown) => string | null;
 const oneOf = (values: readonly string[]): MountValueCheck => (v) => values.includes(v as string) ? null : listed(values);
 const nonEmptyText: MountValueCheck = (v) => typeof v === 'string' && v !== '' ? null : 'a non-empty string';
 const trueOrFalse: MountValueCheck = (v) => typeof v === 'boolean' ? null : 'true or false';
-/**
- * A whole number of milliseconds from `min` to the longest delay a timer
- * keeps. A timer truncates a fraction, so a fraction isn't the delay that runs.
- */
 const timerMs = (min: number): MountValueCheck => (v) =>
   typeof v === 'number' && Number.isInteger(v) && v >= min && v <= TIMER_MS_MAX ? null
     : `a whole number of milliseconds from ${min} to ${TIMER_MS_MAX}`;
 
-/**
- * Each workspace mount key, with what its value must be: what the framework
- * reads as the recipe means it. It's typed by the framework's `MountConfig`,
- * so a framework release that adds a mount key fails this typecheck until
- * the key has a check here, and the mount builder then passes it on
- * unchanged (workspace-mounts.ts). To hold a new key back instead, leave it
- * out of `RecipeWorkspaceMount`, and type this and the lists below by
- * `Exclude<keyof MountConfig, 'key'>`, so a recipe that gives it is refused
- * as a key a mount doesn't have. A key these checks don't name stops the
- * recipe loading (#275). What a value must be together with the mount's
- * other keys, such as a direct mount's, is the framework's to say
- * (validateRecipe).
- */
 const MOUNT_KEY_CHECKS: { readonly [K in keyof MountConfig]-?: MountValueCheck } = {
   name: nonEmptyText,
   path: nonEmptyText,
   mode: oneOf(MOUNT_MODES),
   backend: oneOf(MOUNT_BACKENDS),
   watch: oneOf(MOUNT_WATCH_VALUES),
-  // 0 is no wait, which the framework runs as that.
   watchDebounceMs: timerMs(0),
   // A poll of 0 runs as often as one of 1: the framework has no "off" for it.
   watchRootPollMs: timerMs(1),
   ignore: (v) => Array.isArray(v) && v.every((p) => typeof p === 'string') ? null : 'an array of strings',
-  // The framework refuses an empty list, and reads each pattern itself.
   include: (v) => Array.isArray(v) && v.length > 0 && v.every((p) => typeof p === 'string') ? null : 'a non-empty list of strings',
   followSymlinks: trueOrFalse,
   // A cap of 0 refuses every file that isn't empty: the framework has no "no limit".
   maxFileSize: (v) => typeof v === 'number' && Number.isInteger(v) && v >= 1 ? null : 'a whole number of bytes, 1 or more',
-  // The framework refuses anything else when the workspace is built.
   walkCap: (v) => typeof v === 'number' && Number.isSafeInteger(v) && v >= 1 ? null
     : `a whole number of entries from 1 to ${Number.MAX_SAFE_INTEGER}`,
   wakeOnChange: (v) => typeof v === 'boolean' || (Array.isArray(v) && v.every((op) => (MOUNT_WAKE_OPS as readonly unknown[]).includes(op)))
@@ -1984,13 +1819,9 @@ const MOUNT_KEY_CHECKS: { readonly [K in keyof MountConfig]-?: MountValueCheck }
   autoMaterialize: trueOrFalse,
 };
 const RECIPE_MOUNT_KEYS = Object.keys(MOUNT_KEY_CHECKS) as Array<keyof MountConfig & string>;
-/** The keys a recipe's mount must give; the builder supplies `mode` and `watch`. */
 const REQUIRED_MOUNT_KEYS: readonly string[] = ['name', 'path'];
 
 type IsNever<T> = [T] extends [never] ? true : false;
-// "Type 'true' is not assignable to type 'false'" here means agent-framework's
-// MountConfig gained or lost a key or a value the host's types and checks
-// don't follow yet.
 const mountListsInStep: [
   ListsExactly<keyof Extract<RecipeModules['workspace'], object> & string, typeof RECIPE_WORKSPACE_KEYS>,
   ListsExactly<keyof RecipeWorkspaceMount & string, Array<keyof MountConfig & string>>,
@@ -2001,31 +1832,21 @@ const mountListsInStep: [
   IsNever<Exclude<MountConfig['wakeOnChange'], undefined | boolean | readonly unknown[]>>,
 ] = [true, true, true, true, true, true, true];
 void mountListsInStep;
-// "Type 'true' is not assignable to type 'false'" here means agent-framework's
-// CodeExecutionConfig gained or lost a setting CODE_EXECUTION_NUMBER_KEYS
-// doesn't follow yet.
 const codeExecutionKeysInStep: ListsExactly<
   Exclude<keyof CodeExecutionConfig, 'enabled'> & string, typeof CODE_EXECUTION_NUMBER_KEYS
 > = true;
 void codeExecutionKeysInStep;
 
-/**
- * A key a section doesn't have, refused with what to write instead, when the
- * key is a known mistake, or else the nearest key it does have, when there is
- * one.
- */
 function unknownKeyError(where: string, key: string, known: readonly string[], instead?: string): Error {
   const near = instead === undefined ? nearestRecipeKey(key, known) : null;
   const hint = instead !== undefined ? ` (${instead})` : near ? ` (did you mean "${near}"?)` : '';
   return new Error(`${where} has unknown key ${JSON.stringify(key)}${hint}; known: ${known.join(', ')}`);
 }
 
-/** A mount key recipes have used that the host never read, with what says it. */
 const MOUNT_KEY_INSTEAD: Record<string, string> = {
   readOnly: 'mode: "read-only" makes a mount read-only, and a mount is read-write without it',
 };
 
-/** Keys that were renamed or removed, with what replaced them. */
 const RETIRED_RECIPE_KEYS: Record<string, string> = {
   'modules.files': 'modules.workspace',
 };
@@ -2044,7 +1865,6 @@ function editDistance(a: string, b: string): number {
   return prev[b.length]!;
 }
 
-/** The known key a typo most likely meant, when one is close enough to suggest. */
 function nearestRecipeKey(key: string, known: readonly string[]): string | null {
   let best: string | null = null;
   let bestDistance = Infinity;
@@ -2055,14 +1875,6 @@ function nearestRecipeKey(key: string, known: readonly string[]): string | null 
   return best !== null && bestDistance <= Math.max(2, Math.floor(key.length / 3)) ? best : null;
 }
 
-/**
- * The keys a recipe carries that the host never reads — at the top level,
- * under `agent`, `agent.mock`, `agent.strategy.kvUnified` and its `policy`,
- * and `modules` — each with what it was probably
- * meant to be. A misspelled key doesn't fail, it just doesn't happen (#167);
- * for now they are warned about, not rejected, so recipes carrying leftovers
- * keep loading (the strict schema is #91's direction).
- */
 export function unknownRecipeKeys(raw: unknown): string[] {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
   const obj = raw as Record<string, unknown>;
@@ -2072,7 +1884,6 @@ export function unknownRecipeKeys(raw: unknown): string[] {
     for (const key of Object.keys(value)) {
       if (known.includes(key)) continue;
       const path = `${prefix}${key}`;
-      // Own properties only: `constructor` or `__proto__` must not find Object's.
       const retired = Object.hasOwn(RETIRED_RECIPE_KEYS, path) ? RETIRED_RECIPE_KEYS[path] : undefined;
       const near = retired ? null : nearestRecipeKey(key, known);
       found.push(retired ? `${path} (replaced by ${retired})` : near ? `${path} (did you mean ${prefix}${near}?)` : path);
@@ -2084,8 +1895,6 @@ export function unknownRecipeKeys(raw: unknown): string[] {
     !!value && typeof value === 'object' && !Array.isArray(value);
   if (isObject(obj.agent)) {
     check('agent.mock.', obj.agent.mock, RECIPE_AGENT_MOCK_KEYS);
-    // context-manager reads the kvUnified block as written, so a misspelled
-    // optional key there (`latentDemandMod`) silently takes the default.
     const kvUnified = isObject(obj.agent.strategy) ? obj.agent.strategy.kvUnified : undefined;
     check('agent.strategy.kvUnified.', kvUnified, RECIPE_KV_UNIFIED_KEYS);
     if (isObject(kvUnified)) {
@@ -2096,23 +1905,13 @@ export function unknownRecipeKeys(raw: unknown): string[] {
   return found;
 }
 
-/**
- * Warnings from recipe validation, kept for the runtime that takes stderr over
- * later (the TUI's tui-error.log, headless.log): the recipe is validated before
- * either redirect, so the console line alone would never reach those logs.
- * Bounded, for a long-running host that keeps loading recipes (fleet, WebUI).
- */
 const pendingRecipeWarnings: string[] = [];
 const MAX_PENDING_RECIPE_WARNINGS = 50;
 
-/** The recipe warnings not yet taken, oldest first; taking them clears them. */
 export function takeRecipeWarnings(): string[] {
   return pendingRecipeWarnings.splice(0);
 }
 
-/**
- * Validate raw JSON and fill defaults.
- */
 export function validateRecipe(raw: unknown): Recipe {
   if (!raw || typeof raw !== 'object') throw new Error('Recipe must be a JSON object');
   const obj = raw as Record<string, unknown>;
@@ -2124,7 +1923,6 @@ export function validateRecipe(raw: unknown): Recipe {
     throw new Error('Recipe must have an "agent" object');
   }
 
-  // Nothing below reads an unknown key: say so, and what it was probably meant to be.
   const unknownKeys = unknownRecipeKeys(obj);
   if (unknownKeys.length > 0) {
     const warning = `Recipe "${obj.name}" has keys the host does not read (ignored): ${unknownKeys.join(', ')}.`;
@@ -2181,10 +1979,6 @@ export function validateRecipe(raw: unknown): Recipe {
       throw new Error(`Recipe agent.autoContinue must be true, false, or an object such as { "maxConsecutive": 3 }, got ${JSON.stringify(value)}.`);
     }
     rejectUnknownKeys('agent.autoContinue', value, RECIPE_AGENT_AUTO_CONTINUE_KEYS);
-    // The framework's own bounds (resolveAutoContinue, agent-framework#744),
-    // checked here so a recipe fails at load. It isn't exported by the
-    // framework release this host depends on yet; once it is, call it here
-    // as the clock check below calls resolveClockConfig.
     const max = (value as RecipeAutoContinue).maxConsecutive;
     if (max !== undefined && (typeof max !== 'number' || !Number.isInteger(max) || max < AUTO_CONTINUE_MIN || max > AUTO_CONTINUE_MAX)) {
       throw new Error(`Recipe agent.autoContinue.maxConsecutive must be a whole number from ${AUTO_CONTINUE_MIN} to ${AUTO_CONTINUE_MAX}, got ${JSON.stringify(max)}.`);
@@ -2196,7 +1990,6 @@ export function validateRecipe(raw: unknown): Recipe {
       throw new Error(`Recipe agent.clock must be false (no clock rows) or an object such as { "intervalMinutes": 10 }, got ${JSON.stringify(agent.clock)}.`);
     }
     rejectUnknownKeys('agent.clock', agent.clock, RECIPE_AGENT_CLOCK_KEYS);
-    // The framework's own rules, so a recipe fails here rather than at boot.
     try {
       resolveClockConfig('recipe', agent.clock);
     } catch (err) {
@@ -2328,9 +2121,6 @@ export function validateRecipe(raw: unknown): Recipe {
     }
   }
 
-  // openai-compatible: an endpoint the host knows nothing about, so the recipe
-  // must say where it is and which model to ask for. Fail at load time, not as
-  // a fetch to 'undefined/chat/completions' at first inference.
   if (agent.provider === 'openai-compatible') {
     if (typeof agent.baseUrl !== 'string' || !agent.baseUrl.trim()) {
       throw new Error("Recipe agent.baseUrl is required when agent.provider is 'openai-compatible' (e.g. \"http://localhost:11434/v1\").");
@@ -2431,8 +2221,6 @@ export function validateRecipe(raw: unknown): Recipe {
     }
   }
 
-  // Validate the extensions block if present (before the strategy check,
-  // which consults it to admit custom strategy types).
   let hasStrategyExtension = false;
   if (obj.extensions !== undefined) {
     if (!obj.extensions || typeof obj.extensions !== 'object' || Array.isArray(obj.extensions)) {
@@ -2462,7 +2250,6 @@ export function validateRecipe(raw: unknown): Recipe {
     }
   }
 
-  // Validate strategy type if present
   if (agent.strategy) {
     const strategy = agent.strategy as Record<string, unknown>;
     if (
@@ -2505,8 +2292,6 @@ export function validateRecipe(raw: unknown): Recipe {
       );
     }
     validateKvUnifiedConfig(strategy);
-    // These controls belong to the built-in memory strategies. Extensions
-    // receive their own config verbatim and may use different conventions.
     const strategyType = strategy.type ?? 'autobiographical';
     if (strategyType === 'autobiographical' || strategyType === 'frontdesk') {
       for (const key of ['maxLiveImages', 'imageStripDepthTokens', 'maxLiveImageBytes'] as const) {
@@ -2620,17 +2405,12 @@ export function validateRecipe(raw: unknown): Recipe {
     }
   }
 
-  // Validate mcpServers entries if present
   if (obj.mcpServers && typeof obj.mcpServers === 'object') {
     for (const [id, entry] of Object.entries(obj.mcpServers as Record<string, unknown>)) {
       if (!entry || typeof entry !== 'object') {
         throw new Error(`mcpServers.${id} must be an object`);
       }
       const server = entry as Record<string, unknown>;
-      // An entry with neither command nor url names a server defined in
-      // mcpl-servers.json and sets only policy fields on it; it is resolved
-      // (or rejected, if the file has no such id) at startup by
-      // mergeRecipeServers. When present, each must be a non-empty string.
       if (server.command !== undefined && !(typeof server.command === 'string' && server.command)) {
         throw new Error(`mcpServers.${id}.command must be a non-empty string`);
       }
@@ -2779,28 +2559,18 @@ export function validateRecipe(raw: unknown): Recipe {
     }
   }
 
-  // A `modules` that isn't an object would read every module setting as
-  // absent and build the default mounts, read-write `products` included.
-  // `null` is refused too, as for `extensions`.
   if (obj.modules !== undefined && (typeof obj.modules !== 'object' || obj.modules === null || Array.isArray(obj.modules))) {
     throw new Error('modules must be an object of module settings, not null or a list');
   }
 
-  // Validate workspace mounts if present
   if (obj.modules && typeof obj.modules === 'object') {
     const mods = obj.modules as Record<string, unknown>;
-    // Anything else would build the default mounts, read-write `products`
-    // included (a string such as "off"), or crash the mount builder (null).
     if (mods.workspace !== undefined && typeof mods.workspace !== 'boolean'
         && (typeof mods.workspace !== 'object' || mods.workspace === null || Array.isArray(mods.workspace))) {
       throw new Error('modules.workspace must be true, false or an object of settings, not null or a list');
     }
     if (mods.workspace && typeof mods.workspace === 'object') {
       const ws = mods.workspace as Record<string, unknown>;
-      // A key the host doesn't read stops the load: a mount's keys decide
-      // what an agent can read and write, and a misspelt one would otherwise
-      // leave the mount as it would be without it (`readOnly: true` left a
-      // mount read-write).
       for (const key of Object.keys(ws)) {
         if (!(RECIPE_WORKSPACE_KEYS as readonly string[]).includes(key)) throw unknownKeyError('workspace', key, RECIPE_WORKSPACE_KEYS);
       }
@@ -2823,8 +2593,6 @@ export function validateRecipe(raw: unknown): Recipe {
           if (Object.hasOwn(MOUNT_KEY_CHECKS, key)) continue;
           throw unknownKeyError(where, key, RECIPE_MOUNT_KEYS, Object.hasOwn(MOUNT_KEY_INSTEAD, key) ? MOUNT_KEY_INSTEAD[key] : undefined);
         }
-        // Each key it gives, and the two it must have. `null` is no value of
-        // any key's kind, so it's refused like any other.
         for (const key of RECIPE_MOUNT_KEYS) {
           if (m[key] === undefined && !REQUIRED_MOUNT_KEYS.includes(key)) continue;
           const mustBe = MOUNT_KEY_CHECKS[key](m[key]);
@@ -2850,9 +2618,6 @@ export function validateRecipe(raw: unknown): Recipe {
       }
     }
 
-    // Validate instructions if present. It reads through a workspace mount,
-    // so pairing it with `workspace: false` is a config contradiction — fail
-    // at load, not with a silent no-injection at runtime.
     if (mods.instructions !== undefined && mods.instructions !== false) {
       if (mods.instructions !== true
           && (typeof mods.instructions !== 'object' || Array.isArray(mods.instructions))) {
@@ -2903,32 +2668,13 @@ export function validateRecipe(raw: unknown): Recipe {
         }
       }
 
-      // The mount the instructions path names is knowable at load time in
-      // EVERY configuration — explicit mounts from the declaration, the
-      // implicit default workspace from the fixed input/products pair the
-      // host builds — so a typo, the default "instructions/…" path with no
-      // matching mount, or `instructions: true` on the implicit workspace
-      // (whose mount set can never contain "instructions") all fail here
-      // instead of as a silent no-injection at runtime.
-      //
-      // A read-write instructions mount additionally requires
-      // autoMaterialize: workspace write/edit are Chronicle-first and reach
-      // disk only when the mount materializes, while this module reads disk
-      // — without it, an agent's own curation edits would never appear in
-      // the injection (and its workspace read would show the new content,
-      // hiding the drift entirely). Read-only mounts are exempt: disk is
-      // their only write path. So are direct ones: a write there is on disk
-      // when it answers, or refused in a session the mount runs as chronicle.
       {
         const effectivePath =
           typeof mods.instructions === 'object'
               && typeof (mods.instructions as { path?: unknown }).path === 'string'
             ? (mods.instructions as { path: string }).path
-            : DEFAULT_INSTRUCTIONS_PATH; // keep in sync with DEFAULT_INSTRUCTIONS_PATH
+            : DEFAULT_INSTRUCTIONS_PATH;
         const mountName = effectivePath.slice(0, effectivePath.indexOf('/'));
-        // Reason over the SAME mount construction the runtime uses — one
-        // builder, no validator-vs-host drift (the storePath placeholder is
-        // irrelevant here; only names/modes/flags are consulted).
         const declaredExplicitly =
           !!mods.workspace && typeof mods.workspace === 'object' &&
           !!(mods.workspace as { mounts?: unknown }).mounts;
@@ -2968,9 +2714,6 @@ export function validateRecipe(raw: unknown): Recipe {
       }
     }
 
-    // History: boolean, or { semantic: { url, ... } } for embedding search.
-    // Unknown keys are rejected at both levels: `{ sematic: … }` or
-    // `syncIntervalMS` would otherwise validate clean and silently do nothing.
     const history = mods.history;
     if (history !== undefined && typeof history !== 'boolean') {
       if (!history || typeof history !== 'object' || Array.isArray(history)) {
@@ -3009,10 +2752,6 @@ export function validateRecipe(raw: unknown): Recipe {
         if (parsed.username || parsed.password || parsed.search || parsed.hash || semCfg.url.includes('?') || semCfg.url.includes('#')) {
           throw new Error('modules.history.semantic.url must not carry credentials, a query or a fragment (use `token` for auth).');
         }
-        // Sync ships raw messages (incl. private notes by default) and the
-        // bearer token. Plain http is fine where the network is the
-        // encryption (loopback, the tailnet's WireGuard); anywhere else it
-        // takes an explicit opt-in.
         if (parsed.protocol === 'http:' && !isLoopbackOrTailnetHost(parsed.hostname) && semCfg.allowInsecureHttp !== true) {
           throw new Error(
             `modules.history.semantic.url ${JSON.stringify(semCfg.url)} is plaintext http to a host that is neither loopback nor tailnet ` +
@@ -3030,8 +2769,6 @@ export function validateRecipe(raw: unknown): Recipe {
             throw new Error(`modules.history.semantic.${k} must be an integer >= 1 when set.`);
           }
         }
-        // 0 = no background sync (search still catches up); otherwise a floor,
-        // so a typo can't become a 1 ms setInterval against a shared service.
         const si = semCfg.syncIntervalMs;
         if (si !== undefined && (!Number.isInteger(si) || ((si as number) !== 0 && (si as number) < 5000))) {
           throw new Error('modules.history.semantic.syncIntervalMs must be 0 (no background sync) or an integer >= 5000 when set.');
@@ -3042,7 +2779,6 @@ export function validateRecipe(raw: unknown): Recipe {
       }
     }
 
-    // Validate retrieval provider reasoning when configured.
     const retrieval = mods.retrieval;
     if (retrieval !== undefined && typeof retrieval !== 'boolean') {
       if (!retrieval || typeof retrieval !== 'object' || Array.isArray(retrieval)) {
@@ -3079,8 +2815,6 @@ export function validateRecipe(raw: unknown): Recipe {
       }
     }
 
-    // Validate notices if present: channel ids and tiers are the whole
-    // contract, and a typo here means an outage nobody is told about.
     if (mods.notices !== undefined && mods.notices !== false && mods.notices !== true) {
       if (mods.notices === null || typeof mods.notices !== 'object' || Array.isArray(mods.notices)) {
         throw new Error('modules.notices must be a boolean or object');
@@ -3127,8 +2861,6 @@ export function validateRecipe(raw: unknown): Recipe {
       }
     }
 
-    // Validate selfRestart if present: a typo'd cooldown would otherwise
-    // let an agent restart in a loop, or never.
     if (mods.selfRestart !== undefined && mods.selfRestart !== false && mods.selfRestart !== true) {
       if (mods.selfRestart === null || typeof mods.selfRestart !== 'object' || Array.isArray(mods.selfRestart)) {
         throw new Error('modules.selfRestart must be true, false or an object ({ cooldownMinutes? })');
@@ -3145,9 +2877,6 @@ export function validateRecipe(raw: unknown): Recipe {
       }
     }
 
-    // Validate ttsRelay if present — url + token are load-bearing, and a
-    // recipe that names the module but can't reach a relay should fail at
-    // load, not silently stream nowhere.
     if (mods.ttsRelay !== undefined && mods.ttsRelay !== false) {
       if (typeof mods.ttsRelay !== 'object' || mods.ttsRelay === null) {
         throw new Error('modules.ttsRelay must be an object ({ url, token, ... })');
@@ -3161,7 +2890,6 @@ export function validateRecipe(raw: unknown): Recipe {
       }
     }
 
-    // Validate fleet if present (object form only — boolean is trivially valid).
     if (mods.fleet && typeof mods.fleet === 'object') {
       const fleet = mods.fleet as Record<string, unknown>;
       if (fleet.children !== undefined) {
@@ -3196,8 +2924,6 @@ export function validateRecipe(raw: unknown): Recipe {
         if (!Array.isArray(fleet.allowedRecipes) || !fleet.allowedRecipes.every((r) => typeof r === 'string')) {
           throw new Error('fleet.allowedRecipes must be an array of strings');
         }
-        // Prefix-match-only: reject mid-string `*` so the pattern can't look
-        // like a glob while silently behaving as a literal.
         for (const pattern of fleet.allowedRecipes as string[]) {
           if (pattern === '*' || !pattern.includes('*')) continue;
           if (pattern.indexOf('*') !== pattern.length - 1) {
@@ -3267,8 +2993,6 @@ export function validateRecipe(raw: unknown): Recipe {
     if (typeof sub.enabled !== 'boolean') {
       throw new Error('Recipe subconscious.enabled must be a boolean.');
     }
-    // The mode block is the subconscious's whole character; an enabled
-    // subconscious without one would run on an empty system prompt.
     if (typeof sub.systemPrompt !== 'string' || !sub.systemPrompt.trim()) {
       throw new Error('Recipe subconscious.systemPrompt must be a non-empty string.');
     }
@@ -3369,10 +3093,6 @@ export function validateRecipe(raw: unknown): Recipe {
   return obj as unknown as Recipe;
 }
 
-// ---------------------------------------------------------------------------
-// Persistence
-// ---------------------------------------------------------------------------
-
 export function savedRecipePath(dataDir: string): string {
   return resolve(dataDir, '.recipe.json');
 }
@@ -3385,19 +3105,6 @@ export function savedRecipePath(dataDir: string): string {
  */
 export const SAVED_RECIPE_UNRESOLVED_KEY = '$unresolved';
 
-/**
- * Snapshot a recipe to `$DATA_DIR/.recipe.json` so a later run without a
- * recipe argument resumes the same configuration.
- *
- * Pass the `persistable` half of loadRecipeDetailed(), NOT the resolved
- * recipe: `$DATA_DIR` is typically host-mounted and backed up, so the file
- * must never contain substituted secrets. The snapshot keeps `${VAR}`
- * references (and any URL systemPrompt) unresolved; loadSavedRecipe
- * re-resolves them against the environment current at resume time.
- *
- * The file is written 0600 and chmod'd to 0600 even when it already exists,
- * as defense in depth for legacy resolved snapshots being overwritten.
- */
 export function saveRecipe(dataDir: string, unresolvedRecipe: Record<string, unknown>): void {
   mkdirSync(dataDir, { recursive: true });
   const path = savedRecipePath(dataDir);
@@ -3421,34 +3128,10 @@ export function savedRecipeDirectory(dataDir: string): string | null {
     if (entry?.isDirectory()) return "it's a directory";
     if (entry?.isSymbolicLink() && statSync(path, { throwIfNoEntry: false })?.isDirectory()) return "it's a link to a directory";
   } catch {
-    // Nothing that can be looked at, such as a link to itself.
   }
   return null;
 }
 
-/**
- * Load the `.recipe.json` snapshot for a resumed session, or null when there
- * is none. A snapshot that's there but can't be used THROWS, saying why: one
- * that can't be read, isn't JSON, isn't a JSON object, or doesn't validate, in
- * either format. Returning null would start the default recipe in the resumed
- * agent's place, without a word.
- *
- * Snapshots carrying SAVED_RECIPE_UNRESOLVED_KEY are re-resolved through the
- * same pipeline loadRecipe uses — env substitution (so rotated secrets take
- * effect on restart), validation, and URL systemPrompt fetch. A missing
- * required `${VAR}` THROWS rather than returning null: silently falling back
- * to the default recipe would start a misconfigured agent, and the loud
- * failure names the variable to restore. A failed systemPrompt fetch throws
- * for the same reason.
- *
- * Legacy snapshots (no marker — saved fully resolved by older versions) are
- * validated and returned verbatim: no substitution, so a literal `${...}`
- * that survived resolution in prose cannot fail the load.
- *
- * The store audit (src/update/audit-stores.ts) reads it with
- * `fetchSystemPrompt: false`, since opening the resident's stores needs no
- * system prompt, and an audit shouldn't wait on the network for one.
- */
 export async function loadSavedRecipe(dataDir: string, options: { fetchSystemPrompt?: boolean } = {}): Promise<Recipe | null> {
   const path = savedRecipePath(dataDir);
   let text: string;
@@ -3477,14 +3160,10 @@ export async function loadSavedRecipe(dataDir: string, options: { fetchSystemPro
   }
 
   if (!(SAVED_RECIPE_UNRESOLVED_KEY in raw)) {
-    // Legacy resolved snapshot: load verbatim (no substitution).
     return validateRecipe(raw);
   }
 
   const { [SAVED_RECIPE_UNRESOLVED_KEY]: _marker, ...unresolved } = raw as Record<string, unknown>;
-  // Deliberately outside a try/catch: substitution and validation errors on
-  // a snapshot we wrote ourselves are actionable operator errors (a rotated
-  // secret removed from the environment), not corruption to shrug off.
   const substituted = substituteEnvVars(unresolved, path);
   const recipe = validateRecipe(substituted);
   return options.fetchSystemPrompt === false ? recipe : resolveSystemPrompt(recipe);
@@ -3498,10 +3177,6 @@ export function clearSavedRecipe(dataDir: string): void {
   rmSync(savedRecipePath(dataDir), { force: true });
 }
 
-// ---------------------------------------------------------------------------
-// CLI helpers
-// ---------------------------------------------------------------------------
-
 /**
  * Parse argv to find a recipe source: the first argument after argv's first
  * two that doesn't start with `--`, or a `source` of null when there is none.
@@ -3513,7 +3188,6 @@ export function parseRecipeArg(argv: string[]): { source: string | null; noRecip
 
   for (const arg of argv.slice(2)) {
     if (arg.startsWith('--')) continue;
-    // First positional arg is the recipe source
     source = arg;
     break;
   }

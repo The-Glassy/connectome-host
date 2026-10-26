@@ -177,10 +177,6 @@ export function childrenFilePath(dataDir: string): string {
   return join(dataDir, 'fleet-children.json');
 }
 
-// ---------------------------------------------------------------------------
-// The forms
-// ---------------------------------------------------------------------------
-
 /** install.json, written by setup. */
 export interface InstallRecord {
   v: 1;
@@ -389,10 +385,6 @@ export function isChildEntry(entry: unknown): entry is ChildrenFile['children'][
     (e.pid === null || typeof e.pid === 'number') && (e.bootId === null || typeof e.bootId === 'string');
 }
 
-// ---------------------------------------------------------------------------
-// Reading and writing
-// ---------------------------------------------------------------------------
-
 export class ContractError extends Error {
   constructor(message: string) {
     super(message);
@@ -400,17 +392,11 @@ export class ContractError extends Error {
   }
 }
 
-/** Whether `value` can name one entry of a directory: a non-empty string with
- *  no separator or NUL, neither `.` nor `..`, and no longer than an entry's
- *  name can be (NAME_MAX). */
 function pathSegment(value: unknown): value is string {
   return typeof value === 'string' && value !== '' && value !== '.' && value !== '..' &&
     !value.includes('/') && !value.includes('\0') && Buffer.byteLength(value) <= NAME_MAX;
 }
 
-/** `value`, when it is one path segment, or a ContractError: every path this
- *  module builds from a release or a mark id takes it as one entry of a
- *  directory, wherever the value came from. */
 function segment(value: string, what: string): string {
   if (!pathSegment(value)) {
     throw new ContractError(`The ${what} ${JSON.stringify(value)} isn't one path segment, so it can't name a directory.`);
@@ -499,7 +485,6 @@ export function appendJournal(root: string, line: Omit<JournalLine, 'v'>): void 
   syncDir(root);
 }
 
-/** Cut a last line left without its newline back to the line before it. */
 function cutTornTail(path: string): void {
   let bytes: Buffer;
   try {
@@ -648,8 +633,6 @@ export function pendingGoBack(lines: JournalLine[]): JournalLine | null {
  *  from there, not done. Like any mark, it's spent by its commit, the older
  *  release's, or by a successful fallback that names it. */
 export function markSpent(mark: Mark, lines: JournalLine[], current: string | null): boolean {
-  // No line can say that a mark without an id has run, though a line that
-  // names no mark has no id either.
   return current === mark.to || (typeof mark.id === 'string' &&
     lines.some((line) => line.step === 'fallback' && line.outcome === 'ok' && line.mark === mark.id));
 }
@@ -713,10 +696,6 @@ export function writeMark(
     try {
       standing = readRecord<Mark>(path, 'mark');
     } catch {
-      // A file that isn't a record isn't this write's mark, which went in
-      // whole. One that can't be read at all is taken as not this write's
-      // either: reading a file this process has just renamed into place, its
-      // own descriptor closed, fails only on a filesystem that's failing.
     }
     if (standing?.id !== mark.id) throw error;
     return { mark, unsynced: error instanceof Error ? error : new Error(String(error)) };

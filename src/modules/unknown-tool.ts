@@ -5,16 +5,12 @@
 
 import type { ToolDefinition, ToolResult } from '@animalabs/agent-framework';
 
-/** What the answer reads from a module: its name and what it offers. A
- *  module passes itself. */
 export interface ToolOffering {
   readonly name: string;
   getTools(): ToolDefinition[];
   getUtilities?(): ToolDefinition[];
 }
 
-/** `called` is the bare name the module received. `also` is the module's
- *  own pointer, a sentence or more, such as where its settings live now. */
 export function unknownToolResult(module: ToolOffering, called: string, also?: string): ToolResult {
   const full = (name: string) => `${module.name}--${name}`;
   const tools = module.getTools().map((t) => full(t.name));

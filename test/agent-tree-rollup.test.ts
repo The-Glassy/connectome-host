@@ -1,17 +1,9 @@
-/**
- * Phase rollup logic — picks the busiest active phase from a list of
- * AgentTreeReducer nodes, used by the TUI to colour fleet-child header rows
- * with what's *actually happening inside the child*, not just lifecycle
- * status. The helper itself lives inside tui.ts as a closure, so this test
- * mirrors its behaviour against canonical reducer state.
- */
 import { describe, test, expect } from 'bun:test';
 import { AgentTreeReducer } from '../src/state/agent-tree-reducer.js';
 import type { AgentNode } from '../src/state/agent-tree-reducer.js';
 
 type ActivePhase = 'sending' | 'streaming' | 'invoking' | 'executing';
 
-/** Reference implementation of the rollup. Mirrors tui.ts:rollupActivePhase. */
 function referenceRollupActivePhase(nodes: AgentNode[]): ActivePhase | null {
   const PRIORITY: Record<ActivePhase, number> = {
     streaming: 5,
@@ -62,7 +54,6 @@ describe('phase rollup for fleet-child header status', () => {
       timestamp: t(1),
     });
     r.applyEvent({ type: 'tool:started', callId: 'c1', tool: 'x', module: 'm', timestamp: t(2) });
-    // Now agent 'a' is in 'executing'. Add agent 'b' that starts streaming.
     r.applyEvent({ type: 'inference:tokens', agentName: 'b', content: 'hi', timestamp: t(3) });
     expect(referenceRollupActivePhase(r.getNodes())).toBe('streaming');
   });
@@ -71,7 +62,7 @@ describe('phase rollup for fleet-child header status', () => {
     const r = new AgentTreeReducer();
     r.applyEvent({ type: 'inference:started', agentName: 'a', timestamp: t(0) });
     r.applyEvent({ type: 'inference:completed', agentName: 'a', durationMs: 5, timestamp: t(1) });
-    r.seedFrameworkAgents(['idle-agent']); // phase=idle by default
+    r.seedFrameworkAgents(['idle-agent']);
     expect(referenceRollupActivePhase(r.getNodes())).toBeNull();
   });
 

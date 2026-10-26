@@ -1,9 +1,3 @@
-/**
- * File-driven MCPL server configuration.
- *
- * Reads/writes `mcpl-servers.json` (CC `.mcp.json` shape), keyed by server ID.
- */
-
 import { readFileSync, writeFileSync, existsSync, lstatSync, unlinkSync, openSync, fstatSync, closeSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { agentOverlayPath } from './update/agent-overlay-path.js';
@@ -69,14 +63,8 @@ export interface McplServersFile {
   mcplServers: Record<string, ServerFileEntry>;
 }
 
-/** A loaded server config — serializable fields plus the id from the key. */
 export type LoadedServerConfig = ServerFileEntry & { id: string };
 
-/**
- * Load MCPL server configs from a JSON file.
- * Returns empty array if the file doesn't exist.
- * Resolves relative paths in `args` relative to the config file's directory.
- */
 export function loadMcplServers(configPath: string): LoadedServerConfig[] {
   if (!existsSync(configPath)) return [];
 
@@ -88,7 +76,6 @@ export function loadMcplServers(configPath: string): LoadedServerConfig[] {
 
   for (const [id, entry] of Object.entries(parsed.mcplServers)) {
     const args = entry.args?.map(arg => {
-      // Resolve relative paths (starting with ./ or ../) relative to config dir
       if (arg.startsWith('./') || arg.startsWith('../')) {
         return resolve(configDir, arg);
       }
@@ -154,7 +141,6 @@ export const RECIPE_OVERRIDABLE_SERVER_FIELDS = [
   'toolHints',
 ] as const;
 
-/** A file-defined server with the recipe's policy overrides applied. */
 export function applyRecipeServerOverrides<T extends Record<string, unknown>>(
   fileEntry: T,
   recipeEntry: Record<string, unknown>,
@@ -168,17 +154,6 @@ export function applyRecipeServerOverrides<T extends Record<string, unknown>>(
 
 type MergedServer = { id: string; command?: string; url?: string; [k: string]: unknown };
 
-/**
- * The recipe's servers, resolved against mcpl-servers.json. Recipes opt in:
- * a file server loads only when the recipe names its id.
- *
- * - The recipe names a file server (with or without its own command/url):
- *   the file's definition, with the recipe's policy overrides applied.
- * - The recipe defines a server the file doesn't have, with `command` or
- *   `url`: the recipe entry verbatim.
- * - The recipe names an id with neither, and the file has no such server:
- *   an error — a typo'd id must not silently load nothing.
- */
 export function mergeRecipeServers(
   recipeServers: Record<string, Record<string, unknown>>,
   fileServers: ReadonlyArray<{ id: string } & Record<string, unknown>>,
@@ -200,10 +175,6 @@ export function mergeRecipeServers(
   }
   return out;
 }
-
-// ---------------------------------------------------------------------------
-// Agent overlay — servers the agent deployed/unloaded for itself at runtime
-// ---------------------------------------------------------------------------
 
 export { AGENT_OVERLAY_FILE_NAME, AGENT_OVERLAY_FILE_ENV } from './update/agent-overlay-path.js';
 
@@ -237,12 +208,6 @@ export interface AgentOverlayFile {
   mcplServers: Record<string, AgentOverlayEntry>;
 }
 
-/**
- * The agent overlay can't be read as an overlay: it isn't valid JSON, or its
- * root is `null`. Its message is the operator's, for the boot, which stops on
- * it; the mcpl-admin tools say it to the agent from `path` and `problem`.
- * Neither quotes the file, which can hold credentials.
- */
 export class OverlayUnreadableError extends Error {
   constructor(readonly path: string, readonly problem: 'not-json' | 'null-root') {
     super(
@@ -252,31 +217,6 @@ export class OverlayUnreadableError extends Error {
   }
 }
 
-/**
- * Read the agent overlay file: its entries by id, the root's keys other than
- * `mcplServers`, and `notes` on a file read differently from how it's
- * written, which the startup warnings log.
- *
- * Main read `parsed.mcplServers ?? {}`, and this reads every file the same
- * way, past one leading byte order mark, which main refused as not JSON:
- * - a missing file, a root without `mcplServers`, and `mcplServers: null`
- *   hold no entries;
- * - a root that isn't an object (a list, text, a number, true/false) holds
- *   no entries, with a note;
- * - an `mcplServers` that's a list holds its items as entries named by
- *   position ("0", "1", …), as main iterated it, with a note;
- * - an `mcplServers` that's text, a number or true/false holds no entries,
- *   with a note (main iterated a text's characters, each an entry naming
- *   nothing to run, so nothing loaded).
- *
- * A file that isn't valid JSON, or whose root is `null`, throws an
- * OverlayUnreadableError naming the file, as main threw on both. The boot
- * stops on it until the file is fixed: the file carries the agent's
- * tombstones, so reading past it would load servers the agent unloaded.
- * No writer produces those shapes: saveAgentOverlay writes an object root
- * whose `mcplServers` is a map. The error never quotes the file, which can
- * hold credentials.
- */
 export function readAgentOverlayFile(overlayPath: string): {
   servers: Record<string, AgentOverlayEntry>;
   otherKeys: string[];
@@ -305,19 +245,15 @@ export function readAgentOverlayFile(overlayPath: string): {
     };
   }
   if (typeof servers !== 'object') {
-    // main iterated a text's characters as entries, each naming nothing to
-    // run, and a number or true/false as none: nothing loaded either way.
     return { servers: {}, otherKeys, notes: ['has an mcplServers that isn\'t a map of entries, so nothing in it loads, as on main'] };
   }
   return { servers: servers as Record<string, AgentOverlayEntry>, otherKeys, notes: [] };
 }
 
-/** The agent overlay's entries by id (readAgentOverlayFile). */
 export function readAgentOverlay(overlayPath: string): Record<string, AgentOverlayEntry> {
   return readAgentOverlayFile(overlayPath).servers;
 }
 
-/** Name lists. One non-empty name given as text reads as a list of one. */
 const OVERLAY_NAME_LIST_FIELDS = [
   'enabledFeatureSets',
   'disabledFeatureSets',
@@ -326,13 +262,10 @@ const OVERLAY_NAME_LIST_FIELDS = [
   'disabledCapabilities',
 ] as const;
 
-/** An overlay entry as the boot reads it: one it loads (or a tombstone),
- *  with `notes` on what it reads differently from main; or why it skips it. */
 export type OverlayEntryReading =
   | { entry: AgentOverlayEntry; notes: string[]; problem?: undefined }
   | { problem: string; entry?: undefined; notes?: undefined };
 
-/** Text, a number or true/false. */
 const isPlain = (v: unknown): v is string | number | boolean =>
   typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean';
 
@@ -341,8 +274,6 @@ const isPlain = (v: unknown): v is string | number | boolean =>
 const isPlainToWrite = (v: unknown): v is string | number | boolean =>
   isPlain(v) && !(typeof v === 'number' && !Number.isFinite(v));
 
-/** The problem readOverlayEntry gives an entry with neither a command nor a
- *  url, which mcpl_deploy says in its own words. */
 export const NAMES_NOTHING = 'it names no command to run and no url to dial';
 
 /**
@@ -353,15 +284,6 @@ export const NAMES_NOTHING = 'it names no command to run and no url to dial';
 export const OPERATOR_ONLY_OVERLAY_FIELDS = ['enabledCapabilities', 'toolLifecycle', 'inheritEnv', 'allowHostCommands'] as const;
 type OperatorOnlyField = (typeof OPERATOR_ONLY_OVERLAY_FIELDS)[number];
 
-/** Where the operator grants each operator-only field. A server in
- *  mcpl-servers.json loads only when the recipe names it
- *  (mergeRecipeServers). The file's loader (loadMcplServers) and a recipe's
- *  override of a server from that file (RECIPE_OVERRIDABLE_SERVER_FIELDS)
- *  pass on inheritEnv and toolLifecycle, and neither passes on
- *  enabledCapabilities or allowHostCommands. Those two come only from a
- *  server the recipe defines itself, whose entry mergeRecipeServers takes
- *  whole, and only under an id the file doesn't define: for an id it does,
- *  the file's entry is taken, with the recipe's overrides alone. */
 const OPERATOR_FIELD_HOME: Record<OperatorOnlyField, string> = {
   enabledCapabilities: "a server the recipe defines itself, with its own command or url and an id mcpl-servers.json doesn't define",
   toolLifecycle: 'mcpl-servers.json for a server the recipe names, or the recipe',
@@ -380,77 +302,9 @@ function setsSomething(value: unknown): boolean {
   return Boolean(value);
 }
 
-/**
- * Read one agent overlay entry as the boot reads it. Every reader takes this
- * reading (the boot, the startup warnings, mcpl_list, mcpl_restart's note,
- * mcpl_unload), so they agree on what the boot loaded, and none throws on a
- * shape.
- *
- * The overlay is the agent's hand-editable file. The boot passes each entry
- * to agent-framework as main passed it, nulls, env values and wrong kinds
- * included: the framework starts each server on its own and logs one that
- * fails. The reading differs from main's in two ways by design, and
- * otherwise only where main's own handling broke; `notes` names each such
- * reading, which the startup warnings log. By design:
- * - an operator-only field (OPERATOR_ONLY_OVERLAY_FIELDS) is named when it
- *   sets anything (setsSomething), with where the operator grants it, and
- *   resolveOverlayEntry leaves it out of what the boot loads, since the
- *   agent's file narrows what a server may do and never widens it;
- * - a `reconnect` that isn't true or false reads by its truth, as main read
- *   it, except the text "false" in any case and with any spaces around it,
- *   which reads as false, and the framework is handed true or false, since
- *   agent-framework 0.22.3 refuses any value but true, false or null (null,
- *   main's way of saying off, reads as false, unnamed).
- * - a `toolHints` that isn't true or false is left out, and named: recipes
- *   and mcpl-servers.json refuse one, and the overlay refuses its value
- *   rather than guess what it meant (a truthy "false" would turn hints on),
- *   so the server gets agent-framework's default.
- * Where main's handling broke:
- * - `args` holding numbers or true/false read as their text, where main
- *   stopped the start (`arg.startsWith`);
- * - a name list given as one non-empty text reads as a list of one, where
- *   main read it character by character (a tool or feature-set list) or not
- *   at all (`disabledCapabilities`);
- * - a number or true/false `toolPrefix` reads as its text, and an object or
- *   list one as absent, so the default prefix applies, where main mis-routed
- *   calls to the server's tools (it isn't text, so `prefix.length` misleads);
- * - a `disabledCapabilities` item that String() can't read, such as a parsed
- *   object whose own `toString` isn't a function, denies nothing, where
- *   main's String() stopped the start;
- * - a `transport` of null reads as absent, as agent-framework 0.22 read
- *   it, since 0.23 refuses a null transport whatever else the entry says;
- * - an entry the framework refuses as written (openedBy), such as a
- *   websocket transport with no url, or a command and a url with no
- *   transport, is named; it passes on as written and still replaces any
- *   operator definition, as on main, and the framework's own line at the
- *   start says why.
- *
- * Skipped, so the operator's definition, if any, stays: an entry that isn't
- * an object, and `args` that aren't a list of text, numbers or true/false,
- * on which main stopped the start; an entry that names no command to run
- * and no url to dial (NAMES_NOTHING); and a `disabled` that's truthy but not
- * `true`, which main neither
- * loaded nor took as a tombstone. `disabled: true` is a tombstone, whatever
- * else the entry holds, as main's applyAgentOverlay read it.
- *
- * `strict` is for new writes (mcpl_deploy): what a model writes now is held
- * to the plain shapes, text where text is meant, lists of text, an env map
- * of text, numbers or true/false, a transport of stdio or websocket, and a
- * reconnect and a toolHints of true or false, so anything else is refused,
- * not saved.
- * (mcpl_deploy reads numbers and true/false in a list as their text before
- * this reading, as the boot reads args, so those are saved as text.) It
- * names every field that breaks them at once, joined by "; ", so a deploy
- * isn't refused one field at a time; a field's later checks are skipped
- * only where its first one leaves nothing to check, such as the items of an
- * env that isn't a map.
- */
 export function readOverlayEntry(raw: unknown, opts: { strict?: boolean } = {}): OverlayEntryReading {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { problem: 'it isn\'t an object' };
   const e: Record<string, unknown> = { ...(raw as Record<string, unknown>) };
-  // main's two tests: applyAgentOverlay unloaded the operator's server only
-  // for `disabled === true`, and resolveOverlayEntry loaded nothing for any
-  // truthy `disabled`; a falsy one (false, null, 0, "") loaded the entry.
   if (e.disabled === true) return { entry: { disabled: true }, notes: [] };
   if (e.disabled) return { problem: 'its disabled is neither true nor false' };
   if (opts.strict) {
@@ -480,9 +334,6 @@ export function readOverlayEntry(raw: unknown, opts: { strict?: boolean } = {}):
       }
       const items = e[k] as unknown[];
       if (!items.every((x) => typeof x === 'string')) problems.push(`its ${k} isn't a list of names`);
-      // An empty name matches nothing, so in an allow-list it's the deny-all
-      // that an empty list is kept from being. Checked among the names a
-      // list holds, whatever else it holds.
       if (items.some((x) => typeof x === 'string' && x.trim() === '')) {
         problems.push(`its ${k} holds an empty name, which matches nothing`);
       }
@@ -492,7 +343,6 @@ export function readOverlayEntry(raw: unknown, opts: { strict?: boolean } = {}):
     if (problems.length > 0) return { problem: problems.join('; ') };
   }
   const notes: string[] = [];
-  // main resolved args only when truthy, so a falsy one passes on as it did.
   if (e.args) {
     if (!Array.isArray(e.args) || !e.args.every(isPlain)) return { problem: 'its args aren\'t a list of text, numbers or true/false' };
     if (!e.args.every((a) => typeof a === 'string')) {
@@ -514,9 +364,6 @@ export function readOverlayEntry(raw: unknown, opts: { strict?: boolean } = {}):
     notes.push(`its reconnect isn't true or false, so it's read as ${read}: write true or false, without quotes`);
     e.reconnect = read;
   }
-  // MCPL RFC-014's opt-in is true or false, as recipes and
-  // mcpl-servers.json require. Any other value is left out rather than read
-  // by its truth, so the server gets agent-framework's default.
   if (e.toolHints !== undefined && typeof e.toolHints !== 'boolean') {
     notes.push('its toolHints isn\'t true or false, so it\'s left out and the server gets the default: write true or false, without quotes');
     delete e.toolHints;
@@ -528,25 +375,19 @@ export function readOverlayEntry(raw: unknown, opts: { strict?: boolean } = {}):
     notes.push(`its toolPrefix is ${typeof e.toolPrefix === 'number' ? 'a number' : 'true or false'}, read as its text, so calls to its tools reach it`);
     e.toolPrefix = String(e.toolPrefix);
   } else if (e.toolPrefix !== null && typeof e.toolPrefix === 'object') {
-    // An object or a list isn't text either, so main mis-routed these
-    // calls too: the default prefix routes them.
     notes.push('its toolPrefix isn\'t text, so its tools take the default prefix, which calls to them reach');
     delete e.toolPrefix;
   }
   if (Array.isArray(e.disabledCapabilities) && e.disabledCapabilities.some((c) => { try { String(c); return false; } catch { return true; } })) {
-    // main's String() stopped the start on such an item.
     notes.push('its disabledCapabilities holds an item that can\'t be read as text, which denies nothing, where the host used to stop the start');
   }
   // agent-framework refuses a null transport (resolveServerBinding).
   if (e.transport === null) delete e.transport;
   if (!e.command && !e.url) return { problem: NAMES_NOTHING };
-  // Passed on as main passed it, and named: such an entry replaces any
-  // operator definition with one the framework refuses.
   if (openedBy(e) === null) notes.push('the framework refuses it as written (its own line at the start says why), so nothing connects in its place');
   return { entry: e as AgentOverlayEntry, notes };
 }
 
-/** Why an agent overlay entry is malformed, or null when it's read (readOverlayEntry). */
 export function overlayEntryProblem(entry: unknown, opts: { strict?: boolean } = {}): string | null {
   return readOverlayEntry(entry, opts).problem ?? null;
 }
@@ -568,18 +409,6 @@ export function isLoopbackHost(hostname: string): boolean {
     || /^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(host);
 }
 
-/**
- * The credential a server entry would send unencrypted, if any, and where.
- * It recognizes four carriers: the entry's `access` grant (pass it only when
- * an identity attaches the grant's credential), its `token`, a user or
- * password in the url, and the url's own `token` parameter, the one
- * agent-framework's transport sends. No other query parameter is
- * recognized. It counts only an entry the framework dials (openedBy) on a
- * `ws://` url to a host other than this machine, where anyone on the
- * network between can read the url and the headers. The grant is named
- * first, since the framework sends its credential in place of the token
- * whenever it resolves.
- */
 export function cleartextCredential(
   entry: { url?: unknown; token?: unknown; access?: unknown; command?: unknown; transport?: unknown },
 ): { carrier: 'access' | 'token' | 'url'; host: string } | undefined {
@@ -607,14 +436,12 @@ export function cleartextCredential(
   return carrier ? { carrier, host: url.host } : undefined;
 }
 
-/** What a cleartext carrier sends, for a refusal or a warning. */
 export function cleartextCarrierText(carrier: 'access' | 'token' | 'url', access?: unknown): string {
   if (carrier === 'access') return `the credential of its access grant ${JSON.stringify(String(access))}`;
   if (carrier === 'token') return 'its token';
   return "the user, password or token parameter in its url";
 }
 
-/** A tombstone: `disabled: true`, the one rule every reader uses, whatever else the entry holds. */
 export function overlayEntryTombstones(entry: unknown): boolean {
   return readOverlayEntry(entry).entry?.disabled === true;
 }
@@ -655,18 +482,6 @@ export function saveAgentOverlay(
   writeServersFile(overlayPath, servers);
 }
 
-/**
- * Write `servers` as a servers file's `mcplServers`, in place. The root's
- * other keys are kept as JSON.parse reads them past one leading byte order
- * mark, which the file is written back without: no reader acts on them, but
- * they're whoever wrote them's, such as an entry under a misspelled key. A
- * root of null is refused by both files' readers, and every save follows a
- * read of its file, so a save meets one only when another writer put it
- * there after that read; it's replaced then, as any other root that isn't
- * an object is, since such a root holds no entries for any reader. A file
- * that doesn't parse is never overwritten: its readers refuse it, so the
- * save refuses too, without quoting it.
- */
 function writeServersFile(path: string, servers: Record<string, unknown>): void {
   let root: Record<string, unknown> = {};
   if (existsSync(path)) {
@@ -733,16 +548,6 @@ export function resolveOverlayEntry(
     if (Array.isArray(rec[k]) && (rec[k] as unknown[]).length === 0) delete rec[k];
   }
   for (const k of OPERATOR_ONLY_OVERLAY_FIELDS) delete rec[k];
-  // A network server the agent deployed should come back when it bounces.
-  // reconnect defaulted to false, so an entry that never said `reconnect:
-  // true` was severed PERMANENTLY by any server restart — with no signal to
-  // anyone — until the agent's own next restart, which for a long-lived
-  // resident is days away (Mythos, eventless in eidoverse after the
-  // 2026-08-04 door deploy). An entry that names a url now defaults to
-  // reconnect unless it says otherwise; `reconnect: null` says otherwise, as
-  // main read it, and readOverlayEntry has made it false. The default keys on a
-  // url's presence, as main keyed it. An entry with only a command keeps no
-  // default.
   if (read.url && rec.reconnect === undefined) rec.reconnect = true;
   const denied = new Set<string>([
     ...AGENT_DEPLOY_DENIED_CAPABILITIES,
@@ -767,11 +572,6 @@ export function resolveOverlayEntry(
   };
 }
 
-/**
- * Apply the agent overlay to a resolved server list:
- *   - tombstones (`disabled: true`) remove the matching server
- *   - full entries replace an existing server or append a new one
- */
 export function applyAgentOverlay<T extends { id: string }>(
   servers: T[],
   overlayPath: string,
@@ -779,17 +579,12 @@ export function applyAgentOverlay<T extends { id: string }>(
   return composeOverlay(servers, readAgentOverlay(overlayPath));
 }
 
-/** applyAgentOverlay's work on an overlay already read, such as one a
- *  deploy is about to save, so it can see what the next start will load. */
 export function composeOverlay<T extends { id: string }>(
   servers: T[],
   overlay: Record<string, AgentOverlayEntry>,
 ): Array<T | ({ id: string } & Record<string, unknown>)> {
   if (Object.keys(overlay).length === 0) return servers;
 
-  // A malformed entry is skipped: it neither tombstones nor replaces. An
-  // entry with `disabled: true` is a tombstone whatever else it holds
-  // (readOverlayEntry).
   const result: Array<T | ({ id: string } & Record<string, unknown>)> =
     servers.filter(s => !overlayEntryTombstones(Object.hasOwn(overlay, s.id) ? overlay[s.id] : undefined));
 
@@ -804,26 +599,14 @@ export function composeOverlay<T extends { id: string }>(
   return result;
 }
 
-/**
- * What a server definition gives its process or connection, by name only:
- * the env names it maps, and not their values, which are credentials;
- * whether it carries a token; the access grant it names; and whether it
- * inherits the host environment.
- */
 export interface ServerProvisions {
   env: string[];
   token: boolean;
   access: string | null;
   inheritEnv: boolean;
-  /** The other operator-only fields the definition sets, as agent-framework
-   *  0.22.3 reads each (grantsThrough), in OPERATOR_ONLY_OVERLAY_FIELDS'
-   *  order: an overlay entry can't carry them, so a replacement the
-   *  framework opens always lacks them. */
   grants: GrantField[];
 }
 
-/** The operator-only fields a ServerProvisions lists as grants: inheritEnv
- *  has its own field, since it counts only for a replacement that spawns. */
 type GrantField = Exclude<OperatorOnlyField, 'inheritEnv'>;
 
 /** As agent-framework reads each operator-only field: host commands only for
@@ -849,14 +632,9 @@ function grantsThrough(field: GrantField, value: unknown): boolean {
 
 export function serverProvisions(definition: Record<string, unknown>): ServerProvisions {
   const env = definition.env && typeof definition.env === 'object' ? Object.keys(definition.env) : [];
-  // As the boot dials it: the operator's grant isn't trimmed, so a grant
-  // that differs only by spaces is another audience, and the comparison
-  // (lostByReplacement) says so.
   const access = typeof definition.access === 'string' ? definition.access : '';
   return {
     env: env.sort(),
-    // As the framework sends it: any truthy token goes on the dial, as
-    // lostByReplacement reads the replacement's.
     token: Boolean(definition.token),
     access: access || null,
     inheritEnv: definition.inheritEnv === true,
@@ -864,14 +642,12 @@ export function serverProvisions(definition: Record<string, unknown>): ServerPro
   };
 }
 
-/** How a replacement's warning names an operator grant it lacks. */
 const LACKED_GRANT: Record<GrantField, string> = {
   enabledCapabilities: 'enabled capabilities (enabledCapabilities)',
   toolLifecycle: 'tool lifecycle (toolLifecycle)',
   allowHostCommands: 'host commands (allowHostCommands)',
 };
 
-/** A text that names a host variable, as substituteEnvVars reads one. */
 const namesHostVariable = (text: unknown): boolean => typeof text === 'string' && namesEnvReference(text);
 
 /** agent-framework spreads an env that isn't a map into names such as "0",
@@ -894,14 +670,6 @@ export const openedBy = (entry: { transport?: unknown; url?: unknown; command?: 
   }
 };
 
-/**
- * The parts of an agent overlay entry that name a host variable (`${VAR}`),
- * as labels for a receipt: `command`, `args` and `env NAME` for an entry the
- * framework spawns, `url`, `token` and `access` for one it dials (openedBy).
- * Only a recipe substitutes those (substituteEnvVars); from an overlay entry
- * the server gets the text as written. Labels only, never values. The entry
- * is read as the boot reads it (readOverlayEntry); a malformed one names none.
- */
 export function hostVariableReferences(raw: AgentOverlayEntry): string[] {
   const refs: string[] = [];
   const entry = readOverlayEntry(raw).entry;
@@ -912,8 +680,6 @@ export function hostVariableReferences(raw: AgentOverlayEntry): string[] {
     if (Array.isArray(entry.args) && entry.args.some(namesHostVariable)) refs.push('args');
     const env = envOf(entry);
     for (const name of Object.keys(env).sort()) {
-      // The host sets this one over the entry's value, so the server never
-      // gets the entry's text for it (as lostByReplacement reads it).
       if (namesHostVariable(env[name]) && !hostSetsOverServer(name)) refs.push(`env ${name}`);
     }
   } else if (opened === 'dial') {
@@ -933,8 +699,6 @@ export function lostByReplacement(operator: ServerProvisions, raw: AgentOverlayE
   const entry = readOverlayEntry(raw).entry;
   if (!entry || entry.disabled === true) return null;
   const opened = openedBy(entry);
-  // An entry the framework refuses lacks nothing that would reach a server:
-  // nothing connects in its place, as its note says (readOverlayEntry).
   if (opened === null) return null;
   if (opened === 'spawn') {
     const declared = new Set(
@@ -944,50 +708,25 @@ export function lostByReplacement(operator: ServerProvisions, raw: AgentOverlayE
     if (missing.length > 0) lost.push(`env ${missing.join(', ')}`);
     if (operator.inheritEnv) lost.push('inherited host environment (inheritEnv)');
   } else if (opened === 'dial') {
-    // As the framework sends it: any truthy token goes on the dial
-    // (buildWebSocketUrl), a number as its text, as main passed it.
     const token = Boolean(entry.token) && !namesHostVariable(entry.token);
     if (operator.token && !token) lost.push('token');
-    // A grant is a name, not a credential: another name is another grant.
-    // Each side as it's dialled, as written; the boot asks for no grant for
-    // an access that isn't text (index.ts).
     const access = typeof entry.access === 'string' ? entry.access : '';
     if (operator.access && access !== operator.access) lost.push(`access grant "${operator.access}"`);
   }
-  // Whatever its transport, a replacement can't carry these: the boot
-  // leaves them out of every overlay entry.
   for (const k of operator.grants) lost.push(LACKED_GRANT[k]);
   return lost.length > 0 ? lost.join('; ') : null;
 }
 
-/** Whether the host sets `name` on every stdio child over whatever a server
- *  maps for it (composeMcplChildEnv, AGENT_TIMEZONE today), so no
- *  definition's own value reaches a child and a replacement can't lack it.
- *  Read from the composition itself, so the two can't drift. */
 function hostSetsOverServer(name: string): boolean {
   const mapped = '\u0000mapped';
   return composeMcplChildEnv({ [name]: mapped }, '')[name] !== mapped;
 }
 
-/** Whether an overlay entry replaces a server rather than tombstoning it or
- *  being skipped: the entries applyAgentOverlay puts in a server's place. A
- *  malformed one (overlayEntryProblem) never does. */
 export function overlayEntryReplaces(entry: unknown): entry is AgentOverlayEntry {
   const read = entry === undefined ? undefined : readOverlayEntry(entry).entry;
   return read !== undefined && read.disabled !== true;
 }
 
-/**
- * The startup log's lines about the agent overlay: one for each way the file
- * is read differently from how it's written (readAgentOverlayFile's notes),
- * one naming root keys besides `mcplServers`, one for each entry the boot
- * skips and why, one for each reading readOverlayEntry notes, one for each
- * entry that replaces an operator's definition and lacks something of it
- * (lostByReplacement), and one for each entry with a part that names a host
- * variable (hostVariableReferences). An operator reading the log learns why
- * a server misbehaves before anyone calls it. No line quotes a value from
- * the file, which can hold credentials.
- */
 export function overlayWarnings(
   operatorServers: ReadonlyArray<{ id: string } & Record<string, unknown>>,
   overlayPath: string,
@@ -996,8 +735,6 @@ export function overlayWarnings(
   const lines: string[] = [];
   const { servers, otherKeys, notes } = readAgentOverlayFile(overlayPath);
   for (const note of notes) lines.push(`[mcpl] the agent overlay (${overlayPath}) ${note}`);
-  // Whether or not mcplServers holds entries: a tombstone under a misspelled
-  // key is dropped either way.
   if (otherKeys.length > 0) {
     lines.push(
       `[mcpl] the agent overlay (${overlayPath}) has keys besides mcplServers, ${otherKeys.map((k) => JSON.stringify(k)).join(', ')}, ` +
@@ -1036,19 +773,11 @@ export function overlayWarnings(
   return lines;
 }
 
-/**
- * Read the raw server entries from the config file (for editing).
- * Returns empty object if file doesn't exist. A file that isn't valid JSON,
- * or whose root is null, throws as parseServersFile says.
- */
 export function readMcplServersFile(configPath: string): Record<string, ServerFileEntry> {
   if (!existsSync(configPath)) return {};
   return (parseServersFile(configPath) as McplServersFile).mcplServers ?? {};
 }
 
-/**
- * Write server entries to the config file.
- */
 export function saveMcplServers(configPath: string, servers: Record<string, ServerFileEntry>): void {
   writeServersFile(configPath, servers);
 }

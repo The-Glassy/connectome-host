@@ -1,8 +1,6 @@
 import { expect, test } from 'bun:test';
 import { switchSessionSteps } from '../src/session-switch.js';
 
-/** A switch's steps, recording each in order. `during` runs inside a step,
- *  as a stop that begins while the step is under way. */
 function recorder(opts: { during?: Partial<Record<'stopOld' | 'make', () => void>>; nextStop?: () => Promise<void>; makeFails?: boolean } = {}) {
   const calls: string[] = [];
   const next = {
@@ -62,7 +60,6 @@ test('when stopping the made framework fails, the server still closes, the failu
   const lines: string[] = [];
   await expect(switchSessionSteps(app, steps, (line) => lines.push(line))).rejects.toThrow('injected stop failure');
   expect(calls).toEqual(['stopOld', 'make', 'next.stop', 'stopServer']);
-  // Once stopping, nothing draws the switch's failure, so the switch logs it.
   expect(lines).toEqual([expect.stringContaining('stopping the framework the switch had made failed: injected stop failure')]);
 });
 
@@ -81,6 +78,5 @@ test('a making that fails with the host running closes nothing, and the failure 
   const lines: string[] = [];
   await expect(switchSessionSteps(app, steps, (line) => lines.push(line))).rejects.toThrow('injected make failure');
   expect(calls).toEqual(['stopOld', 'make']);
-  // The caller draws it, so the switch logs nothing.
   expect(lines).toEqual([]);
 });

@@ -1,9 +1,3 @@
-/**
- * The optional Web UI bundle can be missing: its build runs in postinstall,
- * which can fail or be skipped (`--ignore-scripts`). At run time, a missing
- * bundle used to show only as a 503 to whoever opened the page. The host now
- * says so once at start, and the page keeps its 503 and its remedy.
- */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -51,7 +45,6 @@ describe('WebUiModule with a missing bundle', () => {
     expect(warnings[0]).toContain('In a checkout, run `npm run build:web`');
     expect(warnings[0]).toContain('an installed package carries it built, so reinstall the package');
 
-    // The server is a process singleton: a later start reuses it and says nothing more.
     expect(await startCapturingWarnings(root)).toHaveLength(0);
 
     const res = await fetch(`http://127.0.0.1:${__getSharedServerPortForTests()}/`);

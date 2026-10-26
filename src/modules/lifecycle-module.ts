@@ -22,16 +22,11 @@ import {
 export const DEFAULT_SELF_RESTART_COOLDOWN_MINUTES = 10;
 
 export interface LifecycleModuleConfig {
-  /** Where `self-restart.json` / `self-restart.last.json` live (the host's DATA_DIR). */
   dataDir: string;
-  /** Minimum time between completed self-restarts. Default 10. */
   cooldownMinutes?: number;
   timeZone?: string;
-  /** For tests; defaults to the process's state. */
   state?: SelfRestartState;
-  /** For tests. */
   now?: () => Date;
-  /** For tests; defaults to the host package's version. */
   hostVersion?: string;
 }
 
@@ -216,7 +211,6 @@ export class LifecycleModule implements Module {
     return Number.isFinite(d.getTime()) ? formatZonedDateTime(d, this.timeZone) : iso;
   }
 
-  /** Who asked for a request, as `caller` reads it. */
   private asker(request: SelfRestartRequest, caller?: string): string {
     if (request.requestedBy === undefined) return 'an agent';
     return request.requestedBy === caller ? 'you' : request.requestedBy;

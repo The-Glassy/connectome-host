@@ -6,8 +6,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FleetModule } from '../src/modules/fleet-module.js';
 
-// Exercise the existing connection/event owner on a real socket. Raw prefix
-// receipt and decoded event completion are observed independently.
 async function connectionFixture() {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'fleet-stream-')));
   const server = createServer();
@@ -25,7 +23,6 @@ async function connectionFixture() {
     const controller = new AbortController();
     const accepted = once(server, 'connection', { signal: controller.signal });
     try {
-      // Observe both promises immediately, including acceptance rejection.
       const [, [peer]] = await Promise.all([transport.connectChildSocket(child), accepted]);
       return peer as Socket;
     } finally {
@@ -42,7 +39,6 @@ async function connectionFixture() {
       rmSync(dir, { recursive: true, force: true });
     }
   }
-  // Cleanup ownership exists before either setup await can reject.
   try {
     server.listen(join(dir, 'ipc.sock'));
     await once(server, 'listening');
@@ -107,7 +103,6 @@ test('Fleet preserves Unicode JSONL at every byte boundary', async () => {
       expect(received.at(-1)).toEqual(event);
       expect(received).toHaveLength(cut);
     }
-    // Multiple complete lines in a single chunk retain event order.
     await writeAndWait(frame.length + 1, () => f.peer.write(Buffer.concat([frame, frame])));
     expect(received).toHaveLength(frame.length + 1);
     expect(received.slice(-2)).toEqual([event, event]);
@@ -131,8 +126,6 @@ test('Fleet reconnect starts a fresh line and Unicode stream', async () => {
   } finally { off(); await f.close(); }
 }, 10000);
 
-// Start with an empty old buffer so stale callbacks cannot be hidden by an
-// invalid concatenated frame from the separate reconnect-reset regression.
 test('Fleet ignores data from a superseded socket', async () => {
   const f = await connectionFixture();
   const { received, writeAndWait, off } = observeEvents(f.fleet);

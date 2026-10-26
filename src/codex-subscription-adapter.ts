@@ -40,16 +40,8 @@ export interface CodexAuthProvider {
   getAccessToken(forceRefresh?: boolean): Promise<string>;
   getAccountId?(): string | undefined;
   readRateLimits?(): Promise<unknown>;
-  /** Drop the stored login so the next getAccessToken() runs a fresh
-   *  device-code flow. Optional: providers without it re-login only when
-   *  the app-server reports no account. */
   logout?(): Promise<void>;
-  /** Abandon a device-code login in progress so a fresh one can start.
-   *  Resolves true when there was one to cancel. */
   cancelLogin?(): Promise<boolean>;
-  /** The token is a static credential for a gateway that holds the real
-   *  login: nothing here can refresh, log in or replace it, so the credential
-   *  monitor observes verdicts only and offers no host-side actions. */
   gateway?: { baseURL: string };
   dispose?(): void;
 }
@@ -80,7 +72,6 @@ export class CodexAppServerAuth implements CodexAuthProvider {
   private authIsRefresh = false;
   private stderrTail = '';
   private accountId: string | undefined;
-  /** The device-code login being waited on, with its abort. */
   private pendingLogin: { loginId: string; abort: (error: Error) => void } | null = null;
 
   constructor(config: CodexAppServerAuthConfig = {}) {
@@ -96,8 +87,6 @@ export class CodexAppServerAuth implements CodexAuthProvider {
   async getAccessToken(forceRefresh = false): Promise<string> {
     if (this.authPromise) {
       if (!forceRefresh || this.authIsRefresh) return this.authPromise;
-      // A 401 refresh cannot be satisfied by an unrelated stale disk read.
-      // Wait for it, then coalesce concurrent refresh callers onto one refresh.
       await this.authPromise.catch(() => {});
       return this.getAccessToken(true);
     }
@@ -112,23 +101,16 @@ export class CodexAppServerAuth implements CodexAuthProvider {
     return this.accountId;
   }
 
-  /** Raw `account/rateLimits/read` result — the subscription's utilization
-   *  windows. Costs no inference; parsed by the quota meter. */
   async readRateLimits(): Promise<JsonObject> {
     await this.ensureStarted();
     return this.request('account/rateLimits/read', {});
   }
 
-  /** `account/logout`: forget the stored ChatGPT login so the next token
-   *  request starts a device-code flow (operator "log in again"). */
   async logout(): Promise<void> {
     await this.ensureStarted();
     await this.request('account/logout', {});
   }
 
-  /** `account/login/cancel` for the device-code login in progress, and
-   *  fail its waiter, so "Restart login" can start a fresh flow instead of
-   *  queuing behind a ten-minute wait. */
   async cancelLogin(): Promise<boolean> {
     const pending = this.pendingLogin;
     if (!pending) return false;
@@ -174,8 +156,6 @@ export class CodexAppServerAuth implements CodexAuthProvider {
       }
 
       this.onLoginRequired({ verificationUrl, userCode });
-      // The waiter itself is what a cancel rejects, so its timer and
-      // registration go with it instead of lingering until timeout.
       const wait = this.makeWaiter('account/login/completed', (params) => params.loginId === loginId, this.loginTimeoutMs);
       this.pendingLogin = { loginId, abort: wait.reject };
       let completed: JsonObject;
@@ -307,8 +287,6 @@ export class CodexAppServerAuth implements CodexAuthProvider {
     return this.makeWaiter(method, predicate, timeoutMs).promise;
   }
 
-  /** A registered notification waiter whose `reject` also unregisters it
-   *  and clears its timer (what a cancel calls). */
   private makeWaiter(
     method: string,
     predicate: ((params: JsonObject) => boolean) | undefined,
@@ -340,7 +318,6 @@ export class CodexAppServerAuth implements CodexAuthProvider {
     return { promise, reject: (error) => waiterRef.reject(error) };
   }
 
-  /** Registered notification waiters (tests: a cancelled login leaves none). */
   get waiterCount(): number {
     return this.waiters.size;
   }
@@ -416,7 +393,6 @@ export interface CodexSubscriptionAdapterConfig extends CodexAppServerAuthConfig
   fastMode?: boolean;
 }
 
-/** Host-owned login and disposal; all Responses transport behavior lives in Membrane. */
 export class CodexSubscriptionAdapter extends OpenAIResponsesAPIAdapter {
   override readonly name = 'openai-codex';
   private readonly auth: CodexAuthProvider;
@@ -441,19 +417,14 @@ export class CodexSubscriptionAdapter extends OpenAIResponsesAPIAdapter {
     this.auth = auth;
   }
 
-  /** Subscription utilization windows, or null when the auth provider has no
-   *  such surface (tests inject bare token providers). */
   async readRateLimits(): Promise<unknown> {
     return this.auth.readRateLimits ? this.auth.readRateLimits() : null;
   }
 
-  /** Operator action: rotate the access token through the app-server now. */
   async refreshCredentials(): Promise<void> {
     await this.auth.getAccessToken(true);
   }
 
-  /** Operator action: forget the login (when the provider can) and run a
-   *  fresh device-code flow. The URL + code reach `onLoginRequired`. */
   async login(): Promise<void> {
     if (this.auth.logout) {
       try {
@@ -465,11 +436,6 @@ export class CodexSubscriptionAdapter extends OpenAIResponsesAPIAdapter {
     await this.auth.getAccessToken(true);
   }
 
-  /** The host's credential-monitor view of this adapter. No probe: the
-   *  app-server owns validity, and its own reads succeed on a stale token.
-   *  Through a gateway the source is observe-only — a 401 there means the
-   *  gate rejected the host's token or lost its own upstream login, and
-   *  neither is fixable from this process. */
   credentialSource(): CredentialSource {
     if (this.auth.gateway) {
       return {

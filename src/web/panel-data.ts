@@ -1,23 +1,3 @@
-/**
- * Panel data layer — process-agnostic builders and mutation appliers behind
- * every operator inspection surface (MCPL, settings, pins, health, context
- * debug). Extracted from web-ui-module.ts so the SAME code answers a panel
- * query whether the process is the WebUI host itself or a headless fleet
- * child asked over the fleet IPC:
- *
- *   WebUiModule (scope 'local')  ──┐
- *                                  ├──> runPanelOp(app, op, params)
- *   headless.ts ('panel-request') ─┘
- *
- * Everything here operates on a minimal `PanelAppRef` (framework + recipe +
- * optional call ledger), NOT on the full AppContext — keeps the layer free of
- * import cycles and callable from both runtimes.
- *
- * Results are wire-shaped JSON. Errors carry an optional HTTP-ish `status`
- * so the WebUI's HTTP proxy routes can answer faithfully (404 unknown agent,
- * 429 preview cooldown, 501 unsupported build).
- */
-
 import type { AgentFramework } from '@animalabs/agent-framework';
 import { NativeFormatter } from '@animalabs/membrane';
 import type { ContentBlock, NormalizedMessage, NormalizedRequest, ToolDefinition } from '@animalabs/membrane';
@@ -39,25 +19,15 @@ import {
 import { effectiveContextBudgetTokens } from '../framework-agent-config.js';
 import { hostUpdate } from '../update/update.js';
 
-/** Minimal slice of AppContext the panel layer needs. Both the WebUI host
- *  and the headless child runtime satisfy this structurally. */
 export interface PanelAppRef {
   framework: AgentFramework;
   recipe: Recipe;
-  /** Content-free recent provider-call ledger, when the host wired one. */
   callLedger?: CallLedger | null;
-  /** Subscription quota windows, when the host runs on a subscription. */
   quotaMeter?: QuotaMeter | null;
-  /** Credential state + operator actions, when the host runs on a subscription. */
   credentials?: CredentialMonitor | null;
-  /** On a subscription without a local meter (openai-codex through an
-   *  inference gateway, which tracks the windows per login): no windows to
-   *  show, but the dollar estimate is still not a bill. */
   subscriptionUnmetered?: boolean;
 }
 
-/** Panel operations servable by any conhost process. Kept as a const list so
- *  fleet-types.ts and tests can enumerate without importing the handlers. */
 export const PANEL_OPS = [
   'mcpl',
   'tool-classes',
@@ -86,22 +56,12 @@ export type PanelResult =
   | { ok: true; data: unknown }
   | { ok: false; error: string; status?: number };
 
-/** Error carrying an HTTP-ish status through the shared layer. */
 export class PanelError extends Error {
   constructor(message: string, readonly status: number = 500) {
     super(message);
   }
 }
 
-// ---------------------------------------------------------------------------
-// Dispatch
-// ---------------------------------------------------------------------------
-
-/**
- * Run one panel op. Never throws — all failures come back as
- * `{ok:false, error, status}` so both callers (WS handler, IPC handler)
- * forward them without their own try/catch choreography.
- */
 export async function runPanelOp(
   app: PanelAppRef,
   op: string,
@@ -154,7 +114,6 @@ export async function runPanelOp(
         const agent = resolveAgent(app, params.agent);
         const removed = applyPinRemove(app, agent, String(params.pinId ?? ''));
         const data = buildPinsSnapshot(app, agent, { withCandidates: params.withCandidates === true }) as unknown as Record<string, unknown>;
-        // A stale panel can ask twice; report it without failing the refresh.
         if (!removed) data.warning = `no such pin: ${String(params.pinId ?? '')}`;
         return { ok: true, data };
       }
@@ -189,7 +148,6 @@ export async function runPanelOp(
   }
 }
 
-/** Default to the recipe's primary agent when the caller omits a name. */
 export function resolveAgent(app: PanelAppRef, name?: unknown): string {
   if (typeof name === 'string' && name.length > 0) return name;
   return app.recipe.agent.name ?? app.framework.getAllAgents()[0]?.name ?? 'agent';
@@ -200,10 +158,6 @@ function requireAgent(app: PanelAppRef, agentName: string): NonNullable<ReturnTy
   if (!agent) throw new PanelError(`Agent not found: ${agentName}`, 404);
   return agent;
 }
-
-// ---------------------------------------------------------------------------
-// Media — one inline image block, served lazily
-// ---------------------------------------------------------------------------
 
 interface MediaReadableCm {
   getMessage(id: never): { content?: ReadonlyArray<unknown> } | null;
@@ -217,10 +171,6 @@ interface MediaReadableCm {
 
 const MEDIA_SCAN_WINDOW = 500;
 
-/** The message's content with blobs inflated. `getMessage` normally resolves
- *  blobs; if a facade hands back `blob_ref` placeholders, fall back to a
- *  windowed read of just that slot (tail-first scan — media requests are
- *  almost always for recent messages). */
 function readInflatedContent(cm: MediaReadableCm, messageId: string): ReadonlyArray<unknown> | null {
   const direct = cm.getMessage(messageId as never);
   if (!direct) return null;
@@ -239,13 +189,6 @@ function readInflatedContent(cm: MediaReadableCm, messageId: string): ReadonlyAr
   return content;
 }
 
-/**
- * Resolve one inline image block by store message id + block path
- * (`<blockIndex>` or `<blockIndex>.<innerIndex>` for an image nested in a
- * tool_result). Returns the raw base64 + media type; the HTTP layer turns it
- * into bytes. Only `image/*` is served — documents/audio are not viewer
- * content.
- */
 export function buildMediaBlock(
   app: PanelAppRef,
   agentName: string,
@@ -278,31 +221,18 @@ export function buildMediaBlock(
   return { mediaType: src.mediaType, base64: src.data };
 }
 
-// ---------------------------------------------------------------------------
-// MCPL
-// ---------------------------------------------------------------------------
-
-/** Live MCPL server state as this process's framework sees it. */
 export interface McplLiveServer {
   id: string;
   connected: boolean;
   toolCount: number;
   toolPrefix?: string;
-  /** command or url — whatever the transport targets. */
   target?: string;
 }
 
-/**
- * MCPL snapshot: the shared file registry (what the panel can edit) PLUS the
- * live servers this process actually loaded (recipe opt-in + agent overlay),
- * with connection status. The live list is what a fleet child meaningfully
- * differs on — the file is shared cwd-wide, but each recipe opts into its
- * own subset.
- */
 export function buildMcplSnapshot(app: PanelAppRef): Record<string, unknown> {
   let servers: ReturnType<typeof readMcplServersFile> = {};
   try { servers = readMcplServersFile(DEFAULT_CONFIG_PATH); }
-  catch { /* missing or malformed file → empty list */ }
+  catch { }
 
   let live: McplLiveServer[] = [];
   try {
@@ -321,13 +251,11 @@ export function buildMcplSnapshot(app: PanelAppRef): Record<string, unknown> {
         ...(s.command || s.url ? { target: s.command ?? s.url } : {}),
       }));
     }
-  } catch { /* live view is best-effort; the file registry still renders */ }
+  } catch { }
 
-  // Every tool's effective class (all agents), for the panel's tool-class
-  // section. Omitted when the framework build has no listing.
   let toolClasses: ToolClassRow[] | null = null;
   try { toolClasses = readToolClasses(app.framework); }
-  catch { /* best-effort, like the live view */ }
+  catch { }
 
   return {
     configPath: DEFAULT_CONFIG_PATH,
@@ -345,10 +273,6 @@ export function buildMcplSnapshot(app: PanelAppRef): Record<string, unknown> {
     ...(toolClasses ? { toolClasses } : {}),
   };
 }
-
-// ---------------------------------------------------------------------------
-// Tool classes (MCPL RFC-008 §6)
-// ---------------------------------------------------------------------------
 
 export interface ToolClassesSnapshot {
   /** The agent whose surface this is, or null for every tool offered. */
@@ -374,10 +298,6 @@ export function buildToolClassesSnapshot(app: PanelAppRef, agent?: string): Tool
   return { agent: agent ?? null, counts: countToolClassSources(tools), tools };
 }
 
-// ---------------------------------------------------------------------------
-// Settings
-// ---------------------------------------------------------------------------
-
 export interface SettingsStateData {
   agent: string;
   settings: Record<string, unknown>;
@@ -387,11 +307,6 @@ export interface SettingsStateData {
   previewAvailable: boolean;
 }
 
-/**
- * Build the settings snapshot. Returns null when the framework build has no
- * runtime-settings surface at all: that is a legitimate state for the panel
- * to render read-only, not an error to surface.
- */
 export function buildSettingsState(app: PanelAppRef, agentName: string): SettingsStateData | null {
   const fw = app.framework as unknown as {
     getAgentRuntimeSettings?: (n: string) => Record<string, unknown>;
@@ -418,7 +333,7 @@ export function buildSettingsState(app: PanelAppRef, agentName: string): Setting
     hotConfigurable = !!cm && typeof cm.getHotContextSettings === 'function'
       && cm.getHotContextSettings() !== null;
     previewAvailable = !!cm && typeof cm.previewContext === 'function';
-  } catch { /* leave both false — read-only panel */ }
+  } catch { }
 
   const overrides: string[] = [];
   try {
@@ -427,7 +342,7 @@ export function buildSettingsState(app: PanelAppRef, agentName: string): Setting
     } | undefined;
     const ov = agent?.getRuntimeSettingsOverrides?.() ?? {};
     for (const [k, val] of Object.entries(ov)) if (val !== undefined) overrides.push(k);
-  } catch { /* informational only */ }
+  } catch { }
 
   return {
     agent: agentName,
@@ -449,8 +364,6 @@ function requireSettingsState(app: PanelAppRef, agentName: string): SettingsStat
   return state;
 }
 
-/** Apply a live settings patch. Throws with the framework's own message on
- *  rejection (budget ≤ max response tokens, non-hot strategy, ...). */
 export function applySettingsUpdate(
   app: PanelAppRef,
   agentName: string,
@@ -495,13 +408,6 @@ export function applySettingsCancelTransition(app: PanelAppRef, agentName: strin
   fw.cancelAgentRuntimeSettingsTransition(agentName);
 }
 
-/**
- * Opt-in push notice to the agent that an operator changed its context
- * settings. OFF by default at the protocol level, because this injects text
- * into the very context being tuned: it invalidates the KV prefix and is
- * itself classifier-visible. The zero-cost alternative the agent always has
- * is to PULL via its `agent_settings` tool.
- */
 export function notifyAgentOfSettingsChange(
   app: PanelAppRef,
   agentName: string,
@@ -521,14 +427,9 @@ export function notifyAgentOfSettingsChange(
     const cm = app.framework.getAgent(agentName)?.getContextManager();
     cm?.addMessage('Context Manager', [{ type: 'text', text }], { system: true });
   } catch (err) {
-    // A failed notice must never fail the apply that already succeeded.
     console.warn('[settings] notify failed (change still applied):', err);
   }
 }
-
-// ---------------------------------------------------------------------------
-// Pins
-// ---------------------------------------------------------------------------
 
 export interface PinsSnapshotData {
   agent: string;
@@ -545,14 +446,9 @@ export interface PinsSnapshotData {
   pinsSupported: boolean;
   levelHonored: boolean;
   deepestLevel?: number;
-  /** Recent pinnable messages (real store ids), when requested. Lets a
-   *  remote panel offer its picker without holding this process's
-   *  conversation window. */
   candidates?: Array<{ id: string; index: number; participant: string; text: string }>;
 }
 
-/** Duck-typed pin surface. Throws with a clear reason rather than returning a
- *  half-usable object, so callers can report it to the operator verbatim. */
 function pinnableCm(app: PanelAppRef, agentName: string): {
   pinRange?: (a: string, b: string, o?: unknown) => string;
   markDocument?: (a: string, o?: unknown) => string;
@@ -572,18 +468,9 @@ function pinnableCm(app: PanelAppRef, agentName: string): {
   return cm;
 }
 
-/** How many recent messages a pins snapshot ships as picker candidates. */
 const PIN_CANDIDATE_LIMIT = 200;
 const PIN_CANDIDATE_TEXT_CAP = 160;
 
-/**
- * Pin snapshot. Never throws for an unsupported strategy — that's a
- * legitimate read-only state for the panel, not an error.
- *
- * `levelHonored` matters: pin-AT-level is implemented only by the kv-stable
- * controller. Elsewhere it degrades to raw, which is a safe superset but not
- * what the operator asked for, so the UI needs to be able to say so.
- */
 export function buildPinsSnapshot(
   app: PanelAppRef,
   agentName: string,
@@ -605,7 +492,6 @@ export function buildPinsSnapshot(
     }));
     supported = true;
   } catch (err) {
-    // Unknown agent is a real error; unsupported strategy is a state.
     if (err instanceof PanelError && err.status === 404) throw err;
     supported = false;
   }
@@ -627,7 +513,7 @@ export function buildPinsSnapshot(
         deepestLevel = s.level;
       }
     }
-  } catch { /* informational only */ }
+  } catch { }
 
   return {
     agent: agentName,
@@ -639,11 +525,6 @@ export function buildPinsSnapshot(
   };
 }
 
-/**
- * Recent pinnable messages with REAL store ids. Mirrors the client-side
- * candidate list the local panel builds from its own message window — a
- * remote (fleet-child) panel has no such window, so the snapshot carries one.
- */
 function buildPinCandidates(
   app: PanelAppRef,
   agentName: string,
@@ -697,25 +578,16 @@ export function applyPinAdd(app: PanelAppRef, agentName: string, params: Record<
   if (params.kind === 'document') {
     cm.markDocument!(firstMessageId, opts);
   } else {
-    // A single-message pin is a range of one; the strategy takes both ends.
     cm.pinRange!(firstMessageId, String(params.lastMessageId ?? firstMessageId), opts);
   }
 }
 
-/** Returns false when no such pin existed (stale panel double-click). */
 export function applyPinRemove(app: PanelAppRef, agentName: string, pinId: string): boolean {
   const cm = pinnableCm(app, agentName);
   if (!pinId) throw new PanelError('pinId required', 400);
   return cm.unpin!(pinId);
 }
 
-// ---------------------------------------------------------------------------
-// Health
-// ---------------------------------------------------------------------------
-
-/** Whether the framework is actually holding an agent on a host verdict. A
- *  spent window alone parks nothing: the hold arms on a 429, and only on a
- *  framework that has the `providerHold` hook. null = framework cannot say. */
 function hostHoldActive(app: PanelAppRef): boolean | null {
   const fw = app.framework as unknown as { healthSnapshot?: () => { agents?: unknown } };
   if (typeof fw.healthSnapshot !== 'function') return null;
@@ -730,12 +602,6 @@ function hostHoldActive(app: PanelAppRef): boolean | null {
   }
 }
 
-/**
- * Subscription quota windows. The request IS the poll: a client asks only
- * while its page is visible, and the meter's refresh floor keeps any number
- * of viewers down to one provider read per interval. `subscription: false`
- * tells the client to keep showing dollars.
- */
 export async function buildQuotaSnapshot(app: PanelAppRef): Promise<Record<string, unknown>> {
   if (!app.quotaMeter) return { subscription: app.subscriptionUnmetered === true, windows: [] };
   const snapshot = await app.quotaMeter.refresh();
@@ -744,24 +610,19 @@ export async function buildQuotaSnapshot(app: PanelAppRef): Promise<Record<strin
     provider: app.quotaMeter.provider,
     windows: snapshot?.windows ?? [],
     fetchedAt: snapshot?.fetchedAt ?? 0,
-    // A failed read is one with an error, whatever its text, even none.
     ...(snapshot?.error !== undefined ? { error: snapshot.error } : {}),
     blockedUntil: app.quotaMeter.blockedUntil(app.recipe.agent.model) ?? null,
     parked: hostHoldActive(app),
   };
 }
 
-/** `credential` panel op / health `credential` block: the monitor's state,
- *  or `{ subscription: false }` on an API-key host. Never carries a token. */
 export function buildCredentialSnapshot(app: PanelAppRef): Record<string, unknown> {
   if (!app.credentials) return { subscription: false };
-  // `agent` = the name the host's alerts carry, so a UI can key the two the same.
   return { subscription: true, agent: resolveAgent(app), ...app.credentials.snapshot() };
 }
 
 const CREDENTIAL_ACTIONS: ReadonlySet<string> = new Set(['refresh', 'login', 'set-token', 'recheck']);
 
-/** `credential-action`: run one operator action and answer with the state. */
 export async function applyCredentialAction(app: PanelAppRef, params: Record<string, unknown>): Promise<Record<string, unknown>> {
   if (!app.credentials) throw new PanelError('this host runs on an API key; no credential actions', 404);
   const action = typeof params.action === 'string' ? params.action : '';
@@ -774,25 +635,15 @@ export async function applyCredentialAction(app: PanelAppRef, params: Record<str
 
 type FrameworkAgent = ReturnType<AgentFramework['getAllAgents']>[number];
 
-/** A failed health read's message, cut to a length a health poll can carry. */
 const READ_FAILURE_MAX_CHARS = 300;
-/** What readFailures says for a thrown value that yields no message. */
 const READ_FAILURE_UNDESCRIBED = "the read failed, and its error couldn't be described";
 
-/** What a thrown value says, for readFailures: an object's `message`, such
- *  as an Error's, or a thrown primitive as a string, cut to its first 300
- *  code points, so no code point is split. An object with no
- *  non-empty string message, such as an Error with an empty one or a plain
- *  object with none, gets a fixed text, and so does anything whose reading
- *  throws: describing a failure can't throw, so a strange throw still loses
- *  only its agent. */
 function describeReadFailure(error: unknown): string {
   try {
     const message = typeof error === 'object' && error !== null
       ? (error as { message?: unknown }).message
       : String(error);
     if (typeof message === 'string' && message.length > 0) {
-      // Walk only as far as the cut, however long the message is.
       let kept = '';
       let count = 0;
       for (const codePoint of message) {
@@ -802,23 +653,16 @@ function describeReadFailure(error: unknown): string {
       return kept;
     }
   } catch {
-    // Fall through to the fixed text.
   }
   return READ_FAILURE_UNDESCRIBED;
 }
 
-/** One health section's entries by agent name. Each agent is read on its own,
- *  so an agent whose read throws (such as one whose context manager a store
- *  surgery left uninitialized) doesn't hide the others. Its failure goes in
- *  `failures`, under its name and the section's, so a reader can tell it from
- *  an agent with nothing to report, which is simply left out. */
 function perAgentHealth(
   app: PanelAppRef,
   section: string,
   failures: Record<string, Record<string, string>>,
   read: (agent: FrameworkAgent, name: string) => unknown,
 ): Record<string, unknown> {
-  // Keyed by agent name, so with no prototype: any name is an own key.
   const entries: Record<string, unknown> = Object.create(null);
   for (const agent of app.framework.getAllAgents()) {
     const name = (agent as unknown as { name: string }).name;
@@ -856,7 +700,6 @@ export function buildHealthSnapshot(app: PanelAppRef): Record<string, unknown> {
       (snapshot as Record<string, unknown>).credential = { agent: resolveAgent(app), ...app.credentials.snapshot() };
     }
   } catch {
-    // Health reads never throw.
   }
   // compressionQuarantine: each agent's compression quarantine, as its
   // strategy reports it.
@@ -866,7 +709,6 @@ export function buildHealthSnapshot(app: PanelAppRef): Record<string, unknown> {
         getStrategy?: () => { getCompressionQuarantineStatus?: () => unknown };
       }).getStrategy?.()?.getCompressionQuarantineStatus?.());
   } catch {
-    // Health reads never throw.
   }
   // compressionDebt: each agent's compression debt as context-manager
   // reduces it, healthy, degraded, critical or unknown, with the numbers
@@ -877,7 +719,6 @@ export function buildHealthSnapshot(app: PanelAppRef): Record<string, unknown> {
         getStrategy?: () => { getCompressionDebt?: () => unknown };
       }).getStrategy?.()?.getCompressionDebt?.());
   } catch {
-    // Health reads never throw.
   }
   // loadRepair: each agent's newest load-repair report, which its strategy
   // keeps for its life, so a session switch starts it fresh; absent while
@@ -888,7 +729,6 @@ export function buildHealthSnapshot(app: PanelAppRef): Record<string, unknown> {
         getStrategy?: () => { getLatestLoadRepairReport?: () => unknown };
       }).getStrategy?.()?.getLatestLoadRepairReport?.());
   } catch {
-    // Health reads never throw.
   }
   // contextComposition: each agent's render stats from its last live
   // compile. An agent with none is left out, and contextCompositionNotKept,
@@ -903,7 +743,6 @@ export function buildHealthSnapshot(app: PanelAppRef): Record<string, unknown> {
     });
     if (notKept.length > 0) (snapshot as Record<string, unknown>).contextCompositionNotKept = notKept;
   } catch {
-    // Health reads never throw.
   }
   // runtimeSettings: each agent's runtime settings, the core of what
   // `agent_settings get` returns.
@@ -917,7 +756,6 @@ export function buildHealthSnapshot(app: PanelAppRef): Record<string, unknown> {
         getSettings.call(app.framework, (agent as unknown as { name: string }).name));
     }
   } catch {
-    // Health reads never throw.
   }
   if (Object.keys(readFailures).length > 0) {
     (snapshot as Record<string, unknown>).readFailures = readFailures;
@@ -927,21 +765,15 @@ export function buildHealthSnapshot(app: PanelAppRef): Record<string, unknown> {
     const ledger = app.callLedger?.snapshot();
     if (ledger) (snapshot as Record<string, unknown>).callLedger = ledger;
   } catch {
-    // Health reads never throw.
   }
   // update: the host's update status, absent before main() sets it up.
   try {
     (snapshot as Record<string, unknown>).update = hostUpdate.status();
   } catch {
-    // Health reads never throw.
   }
   return snapshot;
 }
 
-/**
- * Counts-only state and bounded history for periodic context maintenance.
- * The framework snapshot deliberately contains no message or summary text.
- */
 export function buildContextMaintenance(app: PanelAppRef): Record<string, unknown> {
   const framework = app.framework as unknown as {
     getContextMaintenanceSnapshot?: () => Record<string, unknown>;
@@ -951,10 +783,6 @@ export function buildContextMaintenance(app: PanelAppRef): Record<string, unknow
   }
   return framework.getContextMaintenanceSnapshot();
 }
-
-// ---------------------------------------------------------------------------
-// Context debug (makeup / coverage / curve / preview / raw request)
-// ---------------------------------------------------------------------------
 
 interface CoverageSummary {
   id: string;
@@ -1021,7 +849,6 @@ export interface ContextCoverageSnapshot {
   };
 }
 
-/** Build a text-free projection of the autobiographical summary pyramid. */
 export function buildContextCoverageSnapshot(
   agentName: string,
   cm: {
@@ -1111,57 +938,22 @@ export function buildContextCoverageSnapshot(
   };
 }
 
-/** What the exact count needs from a previewed activation: the same
- *  normalized request membrane formats for inference. */
 export interface CountablePreview {
   system?: string | ContentBlock[];
   messages?: NormalizedMessage[];
   tools?: ToolDefinition[];
   config?: { thinking?: { enabled: boolean; budgetTokens?: number } };
-  /** The agent's prefill scaffold message, which the activation request
-   *  carries when the agent has one. Typed by membrane's own request, so a
-   *  rename there fails the build instead of silently dropping it here. */
   prefillUserMessage?: NormalizedRequest['prefillUserMessage'];
 }
 
-/** Anthropic count_tokens payload (everything but `model`). */
 export interface CountTokensPayload {
   system?: unknown;
   messages: unknown[];
   tools?: unknown[];
 }
 
-/** The formatter surface the count needs; both prefill formatters implement it. */
 export type CountFormatter = Pick<NativeFormatter, 'buildMessages'>;
 
-/**
- * Build the count_tokens payload by running the previewed activation through
- * the SAME formatter path inference uses (`buildMessages`, multiuser, the
- * agent as assistant, the tool mode the caller passes): participant prefixes
- * land on the text blocks the formatter prefixes, exactly as on the wire,
- * non-text-only messages get no name block, and the agent's prefill message
- * goes where the formatter puts it (anthropic-xml sends it first, in place of
- * its default opener, whenever its request would otherwise open with the
- * assistant's turn, as a prefill transcript usually does).
- * Tool pairs are normalized and same-role runs merged by the formatter
- * itself, and every block the formatter sends is counted: for the native
- * formatter that includes signed `thinking` / `redacted_thinking`,
- * `tool_use`, `tool_result` and images, and, when `anthropicServerBlocks` is
- * true, an assistant turn's Anthropic server-tool blocks (web search and the
- * like). Membrane sends those only through an adapter that replays them,
- * which only its Anthropic API adapter does, so the caller passes whether
- * inference does.
- *
- * The previous version flattened each message to its text blocks and sent no
- * tool definitions: on a keep-all model (Opus >= 4.5, Sonnet >= 4.6, Fable)
- * the replayed hidden thinking is most of the prompt, so the "exact" number
- * read up to ~10x below what the provider bills. A hand-rolled mirror of the
- * formatter (one standalone "Name: " block per message) still differed in
- * prefix bytes and block framing — hence the formatter itself.
- *
- * `promptCaching: false` keeps cache_control markers out of the payload; they
- * do not change the count and this request never warms a cache.
- */
 export function buildCountTokensPayload(
   preview: CountablePreview,
   agentName: string,
@@ -1196,14 +988,6 @@ export function buildCountTokensPayload(
   };
 }
 
-/**
- * Best-effort mapping from an agent's configured model string to a bare
- * Anthropic API model id for /v1/messages/count_tokens. Handles membrane /
- * OpenRouter provider prefixes ("anthropic/claude-…", "…/anthropic/claude-…")
- * and Bedrock ids ("us.anthropic.claude-…-v1:0"). Returns null for
- * non-Anthropic models — exact counting is unsupported there, and reporting
- * that honestly beats 404ing against a wrong tokenizer.
- */
 export function anthropicCountModel(agentModel: string | undefined): string | null {
   if (!agentModel) return null;
   let m = agentModel;
@@ -1244,11 +1028,6 @@ export async function buildContextMakeup(app: PanelAppRef, agentName: string): P
   const stats = cm.getRenderStats();
   const statsKept = keepsRenderStats(cm);
 
-  // Count through the formatter the agent's recipe names: an anthropic-xml
-  // agent's count takes the XML scaffold, prefill or not; everyone else the
-  // native shape. The host's one Membrane decides where an XML agent's tools
-  // go from the recipe's primary agent and its model, for every agent it runs,
-  // so the count asks the same.
   const xml = app.recipe.agent.formatter === 'anthropic-xml';
   const primaryAgentModel = () => requireAgent(app, resolveAgent(app)).model;
   const payload = buildCountTokensPayload(
@@ -1281,9 +1060,6 @@ export async function buildContextMakeup(app: PanelAppRef, agentName: string): P
     const res = await fetch(base + '/v1/messages/count_tokens', {
       method: 'POST',
       headers: {
-        // Mirror the main adapter's auth: the LIVE subscription bearer when
-        // the host runs on one (it rotates; the env string does not), else
-        // ANTHROPIC_AUTH_TOKEN, else x-api-key.
         ...((app.credentials?.bearer() ?? process.env.ANTHROPIC_AUTH_TOKEN)
           ? {
               authorization: `Bearer ${app.credentials?.bearer() ?? process.env.ANTHROPIC_AUTH_TOKEN}`,
@@ -1401,11 +1177,6 @@ export async function buildContextCurve(app: PanelAppRef, agentName: string): Pr
   requireAgent(app, agentName);
   const agent = app.framework.getAgent(agentName)!;
   const cm = (agent as unknown as { getContextManager: () => any }).getContextManager();
-  // Use the LIVE budget, not the recipe's. Runtime overrides persist in the
-  // `framework/state` Chronicle slot and win over the recipe, so reading
-  // app.recipe here plotted the wrong curve on any agent whose budget had
-  // ever been changed at runtime. Fall back to the recipe only if the live
-  // read is unavailable.
   let maxTokens = effectiveContextBudgetTokens(app.recipe);
   let transition: string | undefined;
   try {
@@ -1415,7 +1186,7 @@ export async function buildContextCurve(app: PanelAppRef, agentName: string): Pr
     const live = settings?.contextBudgetTokens;
     if (typeof live === 'number' && live > 0) maxTokens = live;
     transition = settings?.transition;
-  } catch { /* keep the recipe fallback */ }
+  } catch { }
   const reserveForResponse = app.recipe.agent.maxTokens ?? 16_384;
   // A dry run: a committing compile on every render would persist its fold
   // resolutions and queue compression from its plan, mid-stream included.
@@ -1508,16 +1279,6 @@ export async function buildContextCurve(app: PanelAppRef, agentName: string): Pr
   };
 }
 
-/**
- * Single-flight + cooldown for preview, PER PROCESS.
- *
- * A preview is a real compile: ~8s on a large store, and `select()` is
- * synchronous so it BLOCKS the agent's event loop for that whole time (no
- * heartbeat, no Discord, no MCPL). Overlapping or rapid-fire previews
- * therefore don't just queue — they stack agent stalls. Reject instead.
- * Module-level state on purpose: the guard protects this process's agent,
- * regardless of which surface (HTTP handler, fleet IPC) asked.
- */
 let previewInFlight = false;
 let previewLastAt = 0;
 const PREVIEW_COOLDOWN_MS = 3_000;
@@ -1580,7 +1341,6 @@ export function runContextPreview(
     if (!Number.isSafeInteger(tail) || tail < 0) {
       throw new PanelError('tail must be a non-negative integer', 400);
     }
-    // The strategy knob behind "tail" is recentWindowTokens.
     overrides.recentWindowTokens = tail;
   }
   const wantRender = params.render === true || params.render === '1' || params.render === 1;
@@ -1623,10 +1383,6 @@ export function runContextPreview(
           + 'or the active strategy has no fold plan (non-adaptive)', 501,
       );
     }
-    // Honest budget accounting. context-manager's `budgetTokens` is the
-    // REJECTION budget: (requested - reserve) * (1 + overBudgetGraceRatio),
-    // i.e. the threshold above which a compile throws. Its `fits` therefore
-    // means "would not hard-fail", NOT "fits the budget you asked for".
     const reserve = app.recipe.agent.maxTokens ?? 16_384;
     return {
       agent: agentName,
@@ -1644,15 +1400,6 @@ export function runContextPreview(
   }
 }
 
-/**
- * The membrane-normalized request the framework would hand to the model if
- * the agent were activated right now. Delegates to `framework.previewActivation`.
- *
- * Transparent by default: no inference of its own, no Chronicle writes, no
- * external MCPL calls. Pass `injections: true` to gather dynamic injections
- * (lessons/retrieval/MCPL context), which is NOT
- * transparent: it can run inference and fire MCPL `beforeInference` hooks.
- */
 export async function buildDebugContext(
   app: PanelAppRef,
   agentName: string,

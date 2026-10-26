@@ -20,10 +20,8 @@ export async function connectWhenAccepting(
     const socket = connect({ path, allowHalfOpen });
     const error = await new Promise<Error | null>((resolve) => {
       const onConnect = () => {
-        // The listener for a later error goes on here, before the promise
-        // resolves and the caller's code runs.
         socket.off('error', onError);
-        socket.once('error', () => { /* a later error is the test's, if it listens */ });
+        socket.once('error', () => { });
         resolve(null);
       };
       const onError = (err: Error) => { socket.off('connect', onConnect); resolve(err); };

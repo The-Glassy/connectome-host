@@ -52,7 +52,6 @@ function envFlag(value: string | undefined, name = 'GATE_TELEMETRY'): boolean {
   return false;
 }
 
-/** What the framework knows about the turn in progress (agent-framework InferenceRequest). */
 export interface TurnTrigger {
   reason: string;
   source: string;
@@ -68,12 +67,6 @@ export interface DynamicHeadersContext {
   lane?: 'stream' | 'complete';
 }
 
-/**
- * Collapse the framework's free-form reason/source pair into the ledger's
- * origin classes. The raw reason survives when no class fits, clipped and
- * sanitized (ids and words only), so a new event kind shows up as itself
- * instead of vanishing into 'event'.
- */
 export function originClass(trigger: TurnTrigger): string {
   const r = trigger.reason.toLowerCase();
   const s = trigger.source.toLowerCase();
@@ -81,7 +74,6 @@ export function originClass(trigger: TurnTrigger): string {
   if (r.includes('mail') || s.includes('mail')) return 'mail';
   // channel/push events, directly or batched through the framework's EventGate
   if (r === 'mcpl:channel-incoming' || r === 'mcpl:push-event' || r.startsWith('discord') || r.startsWith('gate:') || s === 'gate') return 'event';
-  // a person typing at the host itself: headless IPC, CLI, TUI, web UI, API
   if (r === 'external-message' || ['headless', 'cli', 'tui', 'webui', 'api'].includes(s)) return 'operator';
   if (r.includes('admin') || r.includes('nudge') || r.includes('unstick') || r.includes('operator')) return 'operator';
   return r.replace(/[^a-z0-9:_-]/g, '').slice(0, 40) || 'event';
@@ -103,15 +95,6 @@ function attr(v: string | undefined): string | null {
   return t.slice(0, 120);
 }
 
-/**
- * Which agent's turn may be stamped onto a request, given that ONE provider
- * adapter — and therefore one header hook — serves every agent in the
- * process (primary, subconscious, forks, ephemerals) and the hook cannot
- * tell whose request it is decorating. Rule: stamp the primary's trigger
- * only while the primary is the ONLY agent with a turn in flight; any other
- * agent mid-turn → withhold (null), never guess. Debt is per agent, not per
- * request, so it may always be read from the primary.
- */
 export function stampedTrigger(view: {
   agents: string[];
   primary?: string | null;

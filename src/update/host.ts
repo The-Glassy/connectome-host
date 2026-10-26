@@ -1,8 +1,3 @@
-/**
- * The host's side of the update contract (contract.ts): which install a host
- * was started in and which of its releases it runs from, and the commit that
- * records that release as the one the install's data runs on.
- */
 import { readdirSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,29 +6,13 @@ import {
 } from './contract.js';
 import { disarmTrialLog } from './trial-log.js';
 
-/** This host's package root: the directory its src/ is in. */
 export const HOST_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-/** An install a host was started in through its entry point, and the release it runs from. */
 export interface ReleaseHere {
-  /** The install's root. */
   root: string;
-  /** The entry of the install's `releases/` that holds this host's code: the name `current` and the journal use. */
   release: string;
 }
 
-/**
- * The install this host was started in and the release it runs from, or null
- * when no entry point started it (CONNECTOME_INSTALL_ROOT unset), in which
- * case it writes none of the contract's files.
- *
- * The release is the entry of the install's `releases/` whose real path holds
- * this host's code, so it names what is running, whether the entry point
- * started it through `current` or the release is itself a link. Only an entry
- * point sets the variable, so a root that doesn't hold this host exactly once
- * is refused: committing a release other than the one running would tell the
- * launcher about a switch that didn't happen.
- */
 export function releaseHere(
   env: Record<string, string | undefined> = process.env,
   hostRoot: string = HOST_ROOT,
@@ -42,8 +21,6 @@ export function releaseHere(
   if (root === null) return null;
   const { releases } = installPaths(root);
   const host = realpathSync(hostRoot);
-  // Only what isn't there holds nothing: a releases directory or an entry
-  // that can't be read might hold this host, so the refusal names the error.
   const unreadable = (what: string, error: unknown): ContractError => new ContractError(
     `${INSTALL_ROOT_ENV} names the install at ${root}, and ${what} can't be read, so this host can't tell which ` +
     `of its releases it is: ${error instanceof Error ? error.message : String(error)}`,
@@ -52,7 +29,6 @@ export function releaseHere(
   try {
     entries = readdirSync(releases);
   } catch (error) {
-    // No releases directory holds nothing; refused below.
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw unreadable(`its releases directory ${releases}`, error);
   }
   const holding = entries.filter((entry) => {
@@ -60,7 +36,7 @@ export function releaseHere(
     try {
       path = realpathSync(join(releases, entry));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; // a link to nothing holds nothing
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
       throw unreadable(`the entry ${entry} of ${releases}`, error);
     }
     return host === path || host.startsWith(path + sep);
@@ -73,7 +49,6 @@ export function releaseHere(
       `(${holding.join(', ')}), so it can't tell which release it is. Each entry of ${releases} should be a release of its own.`);
 }
 
-/** What the commit checks of a start before it moves `current`. */
 export interface CommitCheck {
   /** The MCPL servers the framework is configured with and hasn't connected:
    *  agent-framework logs a server that fails to connect and goes on. */
@@ -81,8 +56,6 @@ export interface CommitCheck {
   now?: Date;
 }
 
-/** The release `current` names, or null when there's none, as a start reads
- *  it: a `current` that can't be read ends the start, saying so. */
 export function currentForStart(root: string): string | null {
   try {
     return readCurrent(root);
@@ -151,7 +124,6 @@ export function commitRelease(here: ReleaseHere, check: CommitCheck = {}): { fro
       : `This host couldn't record ${release} as the release the install at ${root} runs on, so none of its ` +
         `agents started, and the next start goes back to ${from}: ${said(error)}`);
   }
-  // Committed: what this release writes from here isn't a trial's to keep.
   disarmTrialLog();
   const at = (check.now ?? new Date()).toISOString();
   try {

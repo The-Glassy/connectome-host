@@ -18,13 +18,11 @@ import { dirname, join, resolve } from "node:path";
 const WEB_UI = "dist/web/index.html";
 const MAX_BUFFER = 64 * 1024 * 1024;
 
-/** npm: the one running this, when npm runs it. */
 function npm(args) {
   const cli = process.env.npm_execpath;
   return cli && /npm-cli\.c?js$/.test(cli) ? [process.execPath, [cli, ...args]] : ["npm", args];
 }
 
-/** The .git of the checkout this directory is in, or null outside one. */
 function checkout(dir) {
   for (let at = resolve(dir); ; at = dirname(at)) {
     if (existsSync(join(at, ".git"))) return join(at, ".git");

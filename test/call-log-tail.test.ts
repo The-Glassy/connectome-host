@@ -39,7 +39,6 @@ describe('readLinesFromEnd', () => {
     withFile('{"a":1}\n{"b":', (path) => {
       expect(read(path)).toEqual({ lines: ['{"a":1}'], truncated: false, bytes: 13 });
     });
-    // A log with no newline at all: its one line is also its last.
     withFile('{"a":', (path) => {
       expect(read(path)).toEqual({ lines: [], truncated: false, bytes: 5 });
     });
@@ -49,7 +48,6 @@ describe('readLinesFromEnd', () => {
   });
 
   test('a last line with no newline, over several chunks, is handed on only if it parses', () => {
-    // 2.5 MiB, so its parse check runs on pieces joined from three chunks.
     const pad = 'x'.repeat(2.5 * CHUNK_BYTES);
     withFile(`{"a":1}\n{"pad":"${pad}"}`, (path) => {
       const { lines } = read(path);
@@ -76,7 +74,6 @@ describe('readLinesFromEnd', () => {
   });
 
   test('four lines of a budget\'s quarter are read whole only with the byte before them', () => {
-    // Each line is 99 characters and its newline: 100 bytes.
     const line = (c: string) => c.repeat(99) + '\n';
     withFile(line('a') + line('b') + line('c') + line('d') + line('e'), (path) => {
       const four = read(path, 401);
@@ -93,8 +90,6 @@ describe('readLinesFromEnd', () => {
   });
 
   test('a budget that runs out inside a later chunk ends the read there', () => {
-    // 32 lines of 100,000 bytes, newlines included, read with 1.5 MiB:
-    // fifteen whole lines and the byte before them fit, and sixteen don't.
     const line = (i: number) => String(i).padStart(2, '0') + 'x'.repeat(99_997) + '\n';
     withFile(Array.from({ length: 32 }, (_, i) => line(i)).join(''), (path) => {
       const { lines, truncated, bytes } = read(path, 1.5 * CHUNK_BYTES);
@@ -119,8 +114,6 @@ describe('readLinesFromEnd', () => {
   });
 
   test('a log changed during its read: what was appended is left out, and a shrink stops the read with an error', () => {
-    // 32 lines of 100,000 bytes. The callback first runs while the last 1 MiB
-    // chunk is handed on, before the next chunk is read.
     const content = Array.from({ length: 32 }, () => 'y'.repeat(99_999) + '\n').join('');
     withFile(content, (path) => {
       let appended = false;
@@ -133,8 +126,6 @@ describe('readLinesFromEnd', () => {
       expect(lines.includes('{"late":1}')).toBe(false);
     });
     withFile(content, (path) => {
-      // Cut to a length inside the next chunk, so its read comes back short
-      // and the read after it finds nothing.
       let cut = false;
       expect(() => readLinesFromEnd(path, CALL_LOG_READ_BUDGET, () => {
         if (!cut) { truncateSync(path, 1_600_000); cut = true; }

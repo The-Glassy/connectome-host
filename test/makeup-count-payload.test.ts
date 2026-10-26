@@ -3,13 +3,6 @@ import { NativeFormatter, AnthropicXmlFormatter } from '@animalabs/membrane';
 import type { NormalizedMessage } from '@animalabs/membrane';
 import { buildContextMakeup, buildCountTokensPayload } from '../src/web/panel-data.js';
 
-// Regression: the makeup panel's exact count flattened every message to its
-// text blocks and sent no tool definitions, so signed thinking, tool_use and
-// tool_result — most of a keep-all model's prompt — were not counted and the
-// "exact" number read up to ~10x below what the provider bills. A hand-rolled
-// mirror of the formatter then differed in prefix bytes and block framing; the
-// payload is now built by the formatter inference uses.
-
 const SIG = 'A'.repeat(4000);
 type Block = { type: string; text?: string; signature?: string; id?: string; tool_use_id?: string; source?: unknown };
 const blocksOf = (m: unknown) => (m as { content: Block[] }).content;
@@ -204,8 +197,6 @@ describe('buildCountTokensPayload', () => {
     expect(JSON.stringify(leftOut.messages)).not.toContain('web_search_tool_result');
   });
 
-  // An empty system, as text or as a list, and an empty tool list send
-  // neither field.
   test('an empty system and an empty tool list leave both out of the payload', () => {
     for (const system of ['', [] as never]) {
       const payload = buildCountTokensPayload({
@@ -217,9 +208,6 @@ describe('buildCountTokensPayload', () => {
   });
 });
 
-// #287: an anthropic-xml agent's tool definitions go into its system block when
-// its recipe has a system prompt and prompt caching, and into the transcript
-// otherwise, and the panel's exact count has to build the request it sends.
 for (const [label, systemPrompt, where] of [
   ['with a system prompt, in the system block', 'You are agent.', 'system'],
   ['with none, in the transcript', '', 'messages'],
@@ -257,10 +245,6 @@ for (const [label, systemPrompt, where] of [
   });
 }
 
-// Inference sends an assistant turn's server-tool blocks back only through the
-// Anthropic API adapter, which the host builds for provider `anthropic` (the
-// default); a Bedrock host's requests leave them out. The count sends what
-// inference does.
 for (const [label, provider, sendsServerBlocks] of [
   ['on the Anthropic API (the default provider), with', undefined, true],
   ['on Bedrock, without', 'bedrock', false],
@@ -294,10 +278,6 @@ for (const [label, provider, sendsServerBlocks] of [
   });
 }
 
-// The host's one Membrane places every agent's tools by the recipe's primary
-// agent and its model, so a subagent's count asks the same, whatever its own
-// model: here the subagent's model is one Bedrock's caching gate turns off, so
-// asking with it would give main's placement.
 test("a subagent's context count places its tools as the primary agent's model decides", async () => {
   const tools = [{ name: 'read_file', description: 'Read a file from the workspace', inputSchema: { type: 'object', properties: {} } }];
   const messages: NormalizedMessage[] = Array.from({ length: 30 }, (_, i) => ({
