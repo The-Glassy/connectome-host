@@ -12,18 +12,23 @@ function routeOf(recipe: Recipe, env: Env): Route | undefined {
     case 'anthropic':
       return {
         endpoint: { setting: 'ANTHROPIC_BASE_URL', value: env.ANTHROPIC_BASE_URL },
-        credential: env.ANTHROPIC_OAUTH_CREDENTIALS_FILE ? 'ANTHROPIC_OAUTH_CREDENTIALS_FILE'
-          : env.ANTHROPIC_AUTH_TOKEN ? 'ANTHROPIC_AUTH_TOKEN'
+        credential: env.ANTHROPIC_OAUTH_CREDENTIALS_FILE || env.ANTHROPIC_AUTH_TOKEN
+          ? 'the subscription credential (/auth status says which one is in use)'
           : 'ANTHROPIC_API_KEY',
       };
     case 'openai-responses':
       return { endpoint: { setting: 'OPENAI_BASE_URL', value: env.OPENAI_BASE_URL }, credential: 'OPENAI_API_KEY' };
     case 'bedrock':
-      return { endpoint: { setting: 'BEDROCK_BASE_URL', value: env.BEDROCK_BASE_URL }, credential: 'AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY' };
+      return {
+        endpoint: { setting: 'BEDROCK_BASE_URL', value: env.BEDROCK_BASE_URL },
+        credential: env.AWS_SESSION_TOKEN
+          ? 'AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN'
+          : 'AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY',
+      };
     case 'openai-codex':
       return {
         endpoint: { setting: 'CODEX_BASE_URL', value: env.CODEX_BASE_URL },
-        credential: env.CODEX_GATE_TOKEN ? 'CODEX_GATE_TOKEN' : 'the ChatGPT login',
+        credential: env.CODEX_GATE_TOKEN?.trim() ? 'CODEX_GATE_TOKEN' : 'the ChatGPT login (/auth status says its state)',
       };
     case 'openai-compatible':
       return { endpoint: { setting: "the recipe's agent.baseUrl", value: recipe.agent.baseUrl }, credential: 'OPENAI_COMPATIBLE_API_KEY' };
@@ -36,11 +41,8 @@ function routeOf(recipe: Recipe, env: Env): Route | undefined {
 
 function endpointState(value: string | undefined): string {
   if (!value) return 'not set, so the default';
-  try {
-    return `set to ${new URL(value).host}`;
-  } catch {
-    return 'set, but not to a URL';
-  }
+  const host = URL.canParse(value) ? new URL(value).host : '';
+  return host === '' ? 'set, but not to a URL with a host' : `set to ${host}`;
 }
 
 export function failureHint(recipe: Recipe, env: Env): (errorType: string | undefined) => string | undefined {

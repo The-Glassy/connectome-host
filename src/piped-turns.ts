@@ -37,6 +37,9 @@ export interface PipedTurns {
   onTrace(event: { type: string; [key: string]: unknown }): void;
   /** Resolves when the primary agent's turn settles, or after `capMs`. */
   waitForTurn(capMs?: number): Promise<void>;
+  /** The host follows another framework, whose turns owe nothing to the
+   *  failures counted so far. */
+  switched(): void;
 }
 
 /** The longest a line waits for its turn. */
@@ -55,7 +58,7 @@ export function createPipedTurns(
    *  the agent, and starts no next turn of the agent until then
    *  (state/turn-trace.ts). */
   const streams = new Map<string, 'open' | 'failed'>();
-  const failures = createTurnFailures();
+  let failures = createTurnFailures();
   let settle: (() => void) | null = null;
 
   function onTrace(event: { type: string; [key: string]: unknown }): void {
@@ -63,6 +66,7 @@ export function createPipedTurns(
     switch (event.type) {
       case 'inference:started':
         if (agent !== undefined) streams.set(agent, 'open');
+        failures.onTrace(event);
         out.write('\n');
         return;
       case 'inference:tokens':
@@ -81,9 +85,9 @@ export function createPipedTurns(
       }
     }
     if (agent === undefined || !STREAM_END_TRACES.has(event.type)) return;
-    const step = failures.onTrace(event);
     const state = streams.get(agent);
     if (state === undefined) return;
+    const step = failures.onTrace(event);
     const primary = agent === primaryAgentName;
     // A stream's first end closes its prose line on stdout, so that what
     // prints next, such as a batch's echo of its next line, starts a line of
@@ -99,8 +103,9 @@ export function createPipedTurns(
     // terminal showing both reads as before; where stdout's line had already
     // ended, as after a tool's line, stdout gets an empty line. The primary's
     // stop, `aborted`, goes to stdout, since it isn't one. An end after an
-    // end prints nothing, but for the primary's `exhausted` after its
-    // failures, which says how many attempts the turn made and what to check.
+    // end prints nothing of its own. The primary's `exhausted`, after its
+    // failures or alone, is then followed by a line saying how many attempts
+    // the turn made and what to check.
     if (state === 'open') {
       if (event.type === 'inference:failed') {
         out.write('\n');
@@ -114,9 +119,8 @@ export function createPipedTurns(
       } else {
         out.write('\n');
       }
-    } else if (primary && step?.show === 'ended') {
-      out.error(turnEndedLine(step.attempts, hint(step.errorType)));
     }
+    if (primary && step?.show === 'ended') out.error(turnEndedLine(step.attempts, hint(step.errorType)));
     if (!TURN_SETTLED_TRACES.has(event.type)) {
       streams.set(agent, 'failed');
       return;
@@ -146,7 +150,11 @@ export function createPipedTurns(
     });
   }
 
-  return { onTrace, waitForTurn };
+  function switched(): void {
+    failures = createTurnFailures();
+  }
+
+  return { onTrace, waitForTurn, switched };
 }
 
 /** What sends traces: a framework, whose onTrace returns the listener's

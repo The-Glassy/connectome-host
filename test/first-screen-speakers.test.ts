@@ -48,6 +48,10 @@ describe('a row reads as "you" only when someone typed it at one of the host\'s 
 });
 
 describe('the host\'s own rows read as the host\'s, by kind', () => {
+  test('a host mark wins over a surface stamp', () => {
+    expect(shown({ ...surface, hostNote: 'session-start' }).web).toBe('host · session start');
+  });
+
   test('agent-framework\'s clock row and a host notice', () => {
     expect(shown({ system: true, kind: 'clock', clock: { at: 1, onBoundary: true, zone: 'UTC' } }, 'Clock: Monday'))
       .toEqual({ tui: 'host · clock: Clock: Monday', web: 'host · clock' });
@@ -65,6 +69,7 @@ describe('the host\'s own rows read as the host\'s, by kind', () => {
     await new TimeModule('UTC').start(ctx);
     expect(written).toHaveLength(1);
     expect(shown(written[0]).web).toBe('host · session start');
+    expect((written[0] as { system?: unknown }).system).toBeUndefined();
   });
 
   test('the lifecycle module\'s note after a restart it asked for', async () => {
@@ -81,6 +86,7 @@ describe('the host\'s own rows read as the host\'s, by kind', () => {
       await after.start(ctx);
       expect(written).toHaveLength(1);
       expect(shown(written[0]).web).toBe('host · restart');
+    expect((written[0] as { system?: unknown }).system).toBeUndefined();
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
@@ -97,6 +103,7 @@ describe('the host\'s own rows read as the host\'s, by kind', () => {
     inner.addForLauncher(undefined, undefined, 'scout', 'returned', 'done');
     inner.addForLauncher(undefined, undefined, 'scout', 'failed', 'Error: x');
     expect(written.map((m) => shown(m).web)).toEqual(['host · subagent returned', 'host · subagent failed']);
+    expect(written.map((m) => (m as { system?: unknown }).system)).toEqual([undefined, undefined]);
   });
 
   test('the TTS relay\'s note that a reply was interrupted', async () => {
@@ -113,6 +120,7 @@ describe('the host\'s own rows read as the host\'s, by kind', () => {
     await inner.handleInterruption({ channelId: '42', spokenText: 'The ferry', reason: 'user_speech', timestamp: 2 });
     expect(written).toHaveLength(1);
     expect(shown(written[0]).web).toBe('host · voice interruption');
+    expect((written[0] as { system?: unknown }).system).toBeUndefined();
   });
 });
 
@@ -126,6 +134,15 @@ describe('someone else\'s words read as theirs', () => {
 
   test('a push that names no channel reads as its server\'s', () => {
     expect(shown(push)).toEqual({ tui: 'heartbeat (push): hello', web: 'heartbeat (push)' });
+  });
+
+  test('a push to a channel reads as the author it names, or else as its server\'s in that channel', () => {
+    const pushed = { inboundSource: { ...channel.inboundSource, lane: 'push/event', serverId: 'heartbeat' } };
+    expect(shown({ ...pushed, authorName: 'alice', authorId: 'u42' }).web).toBe('alice in #general');
+    expect(shown({ ...pushed, authorId: 'u42' }).web).toBe('u42 in #general');
+    expect(shown({ ...pushed, author: { id: '', name: 'Someone' } }).web).toBe('heartbeat (push) in #general');
+    expect(shown({ ...pushed, author: { id: '', name: 'Someone' }, authorName: 'alice' }).web).toBe('alice in #general');
+    expect(shown(pushed).web).toBe('heartbeat (push) in #general');
   });
 });
 

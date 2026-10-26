@@ -1,14 +1,17 @@
 - The TUI's session history and the Web UI's conversation call a message
-  "you" only when someone typed it at one of the host's own surfaces. The
-  host's own messages read as the host's, by kind: agent-framework's clock
-  and notices, and the host's notes of a session's start time, a restart
-  it asked for, a subagent's return or failure and a voice reply cut off,
-  which now carry `hostNote` in their metadata. A channel message reads as
-  its author's in its channel, a push that names no channel as its
+  "you" only when it came in as the host's own input: typed in the TUI or
+  the Web UI, a piped line, the API, or a fleet parent's message to its
+  child. The host's own messages read as the host's, by kind:
+  agent-framework's clock and notices, and the host's notes of a session's
+  start time, a restart it asked for, a subagent's return or failure and a
+  voice reply cut off, which now carry `hostNote` in their metadata. A
+  channel message reads as its author's in its channel, a push as its
   server's, and anything else, such as an imported history, as `user`.
   Before, every one of them read "You:" in the TUI and "you" in the Web UI.
-  The Web UI's message entries carry who each `user` entry is as `speaker`.
-  The model's requests are unchanged.
+  Messages stored before this release, and typed ones stored before
+  agent-framework 0.22.3 marked where input came from, carry no mark and
+  read as `user`. The Web UI's message entries carry who each `user` entry
+  is as `speaker`. The model's requests are unchanged.
 - A turn the framework retries shows a repeated failure once: the TUI
   updates the line's count in place (`Error (×3): …`), and batch mode
   prints nothing more until the failure's words change. When the turn

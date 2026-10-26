@@ -927,6 +927,7 @@ async function runPiped(app: AppContext) {
       }
       if (result.switchToSessionId) {
         const sessionId = result.switchToSessionId;
+        turns.switched();
         await switchFollowing(traces, () => app.switchSession(sessionId), () => app.framework);
         console.log('Session switched.');
       }

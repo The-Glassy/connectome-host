@@ -167,7 +167,7 @@ describe('what piped mode prints', () => {
     turns.onTrace({ type: 'inference:tokens', agentName: 'spawn-c', content: 'Half' });
     turns.onTrace({ type: 'inference:failed', agentName: 'spawn-c', error: 'overloaded' });
     expect(out).toEqual([
-      'out:\n', 'out:Partial answer', 'out:\n', 'err:(turn ended: Stream aborted: timeout)',
+      'out:\n', 'out:Partial answer', 'out:\n', 'err:(turn ended: Stream aborted: timeout)', 'err:Turn ended after 1 attempt.',
       'out:\n', 'out:Another', 'out:\n', 'err:Error: bad request', 'err:Turn ended after 1 attempt.',
       'out:\n', 'out:Half', 'out:\n', 'err:Error: overloaded',
     ]);
@@ -209,7 +209,7 @@ describe('what piped mode prints', () => {
     emit('inference:exhausted', { error: 'Stream aborted: timeout' });
     expect(out).toEqual([
       'out:\n', 'log:\n(turn aborted: user)',
-      'out:\n', 'out:\n', 'err:(turn ended: Stream aborted: timeout)',
+      'out:\n', 'out:\n', 'err:(turn ended: Stream aborted: timeout)', 'err:Turn ended after 1 attempt.',
     ]);
   });
 });

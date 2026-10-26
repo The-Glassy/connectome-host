@@ -112,10 +112,11 @@ describe("the TUI's Escape, through runTui", () => {
     expect(at('retried').frame).toContain('[✓ idle]');
 
     // A turn the framework gave up on: its failure's error stands for it,
-    // once, with no line for the end after it; Escape isn't offered, and it
-    // does nothing.
+    // once, and the end after it adds how many attempts it made; Escape
+    // isn't offered, and it does nothing.
     expect(times(at('ended error').frame, 'gave up')).toBe(1);
     expect(at('ended error').frame).toContain('Error: gave up');
+    expect(times(at('ended error').frame, 'Turn ended after 1 attempt.')).toBe(1);
     expect(at('ended error').frame).toContain('[✗ error]');
     expect(at('ended error, Escape').aborts).toHaveLength(8);
     expect(at('ended error, Escape').frame).toContain('[✗ error]');
@@ -191,6 +192,27 @@ describe("the TUI's Escape with a subagent running, through runTui", () => {
     expect(at('subagents, Escape').aborts).toEqual(['first:spawn-1', 'cancelAll', 'first:agent']);
     expect(at('subagents, Escape').frame).toContain('1 subagent stopped');
     expect(at('subagent compiled').aborts).toEqual(['first:spawn-1', 'cancelAll', 'first:agent', 'first:spawn-1']);
+  }, 40000);
+});
+
+describe("the TUI's repeated failures, through runTui", () => {
+  test('a failure repeated with the same words is one line whose count goes up, and the turn giving up says how many attempts it made', async () => {
+    const steps = await play('repeated-failures');
+    const at = (name: string): Step => {
+      const step = steps.get(name);
+      if (!step) throw new Error(`no step ${name}`);
+      return step;
+    };
+    expect(times(at('three failures').frame, 'zz connection refused')).toBe(1);
+    expect(at('three failures').frame).toContain('Error (×3): zz connection refused');
+    expect(times(at('other words').frame, 'zz connection refused')).toBe(1);
+    expect(times(at('other words').frame, 'Error: zz overloaded')).toBe(1);
+    expect(times(at('gave up').frame, 'Turn ended after 4 attempts.')).toBe(1);
+    expect(times(at('gave up').frame, 'zz overloaded')).toBe(1);
+    expect(times(at('subagent twice').frame, 'zz subagent failure')).toBe(1);
+    expect(at('subagent twice').frame).toContain('[spawn-web-1700000000000] Error (×2): zz subagent failure');
+    expect(times(at('after the switch').frame, 'Error: zz before the switch')).toBe(1);
+    expect(at('after the switch').frame).not.toContain('(×2): zz before the switch');
   }, 40000);
 });
 

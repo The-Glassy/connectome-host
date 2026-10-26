@@ -39,7 +39,7 @@ import { FleetTreeAggregator } from './state/fleet-tree-aggregator.js';
 import type { AgentNode } from './state/agent-tree-reducer.js';
 import { emptyUsage, foldUsageSample, type UsageCounts, type UsageSample } from './state/stream-usage.js';
 import { STREAM_END_TRACES, TURN_RUNNING_TRACES, traceError } from './state/turn-trace.js';
-import { createTurnFailures, failureCountLine, turnEndedLine, type FailureStep } from './state/turn-failures.js';
+import { createFailureLines, createTurnFailures, turnEndedLine, type FailureStep } from './state/turn-failures.js';
 import { failureHint } from './failure-hint.js';
 import { TurnInterrupts, interruptSubagents } from './state/turn-interrupt.js';
 import { switchFollowing, traceFollower } from './piped-turns.js';
@@ -611,7 +611,7 @@ export async function runTui(app: AppContext): Promise<void> {
   const subagentFailureShown = new Set<string>();
   let turnFailures = createTurnFailures();
   const failedTurnHint = failureHint(app.recipe, process.env);
-  const failureLines = new Map<string, { line: TextRenderable; lead: string }>();
+  const failureLines = createFailureLines();
   const PHASE_COLOR: Record<SubagentPhase, string> = {
     sending: YELLOW,
     streaming: CYAN,
@@ -859,14 +859,10 @@ export async function runTui(app: AppContext): Promise<void> {
   }
 
   function showFailure(agent: string, label: string, step: Exclude<FailureStep, { show: 'ended' }>, color: string): void {
-    const held = failureLines.get(agent);
-    if (step.show === 'count' && held && !held.line.isDestroyed) {
-      held.line.content = `${held.lead}${failureCountLine(step.text, step.count)}`;
-      return;
-    }
-    const lead = `${hhmm()} ${label}`;
-    const line = addLine(`${lead}${failureCountLine(step.text, step.show === 'count' ? step.count : 1)}`, color);
-    if (line) failureLines.set(agent, { line, lead });
+    failureLines.show(agent, `${hhmm()} ${label}`, step, (text) => {
+      const line = addLine(text, color);
+      return line && { setText: (next: string) => { line.content = next; }, get isDestroyed() { return line.isDestroyed; } };
+    });
   }
 
   /**
