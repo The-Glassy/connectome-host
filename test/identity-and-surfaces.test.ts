@@ -1869,17 +1869,19 @@ describe('identity request: fromFile reads only what the mount allows', () => {
 
   it('refuses a path no mount holds, and one leading out of its mount, each with its own reason', async () => {
     const { bodies, upload, workspace } = await mounted();
-    expect((await upload('nope/grid.png')).error).toBe('Nothing was sent to "orrery": Unknown mount: "nope". Available: files.');
-    // A path that climbs out of its mount: agent-framework 0.22.3 says it
-    // "resolves outside mount", and its release with
-    // anima-research/agent-framework#536 says it "climbs above the root" of
-    // the mount. The upload passes on the read's own refusal.
+    // agent-framework's words for these refusals differ between releases, so
+    // the test pins the host's part of each line and what each reason names.
+    const unmounted = (await upload('nope/grid.png')).error ?? '';
+    expect(unmounted).toStartWith('Nothing was sent to "orrery": ');
+    const reason = unmounted.slice('Nothing was sent to "orrery": '.length);
+    expect(reason).toContain('nope');
+    expect(reason).toContain('files');
     const climb = await workspace.readFileFromDisk('files/../outside/host-secret.txt').then(
       () => { throw new Error('agent-framework read a path that climbs out of its mount'); },
       (err: WorkspaceReadError) => err,
     );
     expect(climb.code).toBe('traversal');
-    expect(climb.message).toStartWith('Path traversal detected: "files/../outside/host-secret.txt" ');
+    expect(climb.message).toContain('"files/../outside/host-secret.txt"');
     expect((await upload('files/../outside/host-secret.txt')).error).toBe(
       `Nothing was sent to "orrery": ${climb.message.trim().replace(/\.+$/, '')}.`,
     );

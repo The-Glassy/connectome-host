@@ -185,7 +185,12 @@ describe('InstructionsModule', () => {
     expect(await mod.gatherContext('a')).toEqual([]);
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(alerts).toHaveLength(1);
-    expect(alerts[0]!.message).toContain('Unknown mount');
+    // agent-framework's words for this refusal differ between releases, so
+    // the test pins the host's part of the line and the names the reason gives.
+    expect(alerts[0]!.message).toStartWith('no instructions injected: ');
+    const reason = alerts[0]!.message.slice('no instructions injected: '.length);
+    expect(reason).toContain('nonexistent');
+    expect(reason).toContain('instructions');
   });
 
   test('no workspace wired fails open, and says so', async () => {
