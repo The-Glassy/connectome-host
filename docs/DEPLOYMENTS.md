@@ -213,8 +213,8 @@ it, and what has to happen first. A pull doesn't stop for it. So:
   the agent's `MCPL_AGENT_OVERLAY_FILE` names, where it names one), and
   the files its MCPL servers keep
   their state in, such as heartbeat-mcpl's `HEARTBEAT_CONFIG_FILE` (or,
-  with `modules.heartbeat` on, the heartbeat's `config/heartbeat.json`, in
-  the data directory unless `statePath` names another) and
+  with `modules.heartbeat` on, the heartbeat's `heartbeat.json`, in the
+  data directory unless `statePath` names another) and
   those discord-mcpl's README lists under
   [Stored state](https://github.com/anima-research/discord-mcpl#stored-state).
   Make full or reflinked copies, never hardlinks, which share files the

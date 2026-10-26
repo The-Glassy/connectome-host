@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
 
 import { validateRecipe } from '../src/recipe.js';
-import { heartbeatOptionsFor } from '../src/heartbeat-options.js';
+import { heartbeatOptionsFor, isHeartbeatMcpl, withoutHeartbeatMcpl } from '../src/heartbeat-options.js';
 
 function recipe(heartbeat: unknown, extra: Record<string, unknown> = {}) {
   return { name: 'heartbeat-test', agent: { systemPrompt: 'sys' }, modules: { heartbeat }, ...extra };
@@ -60,21 +60,40 @@ describe('recipe: modules.heartbeat', () => {
 });
 
 describe('heartbeat options for modules.heartbeat', () => {
-  test('off or left out is none; true is the defaults', () => {
-    expect(heartbeatOptionsFor(undefined)).toBeUndefined();
-    expect(heartbeatOptionsFor(false)).toBeUndefined();
-    expect(heartbeatOptionsFor(true)).toEqual({});
+  test('off or left out is none; on keeps its state in the install\'s data directory, across sessions', () => {
+    expect(heartbeatOptionsFor(undefined, 'data')).toBeUndefined();
+    expect(heartbeatOptionsFor(false, 'data')).toBeUndefined();
+    expect(heartbeatOptionsFor(true, 'data')).toEqual({ statePath: resolve('data/heartbeat.json') });
   });
 
   test('paths are read from the install directory; the rest goes as written', () => {
     expect(heartbeatOptionsFor({
-      statePath: 'data/heartbeat.json',
+      statePath: 'state/heartbeat.json',
       defaults: { intervalSeconds: 3600 },
       importFrom: { configPath: 'old/heartbeat-config.json' },
-    })).toEqual({
-      statePath: resolve('data/heartbeat.json'),
+    }, 'data')).toEqual({
+      statePath: resolve('state/heartbeat.json'),
       defaults: { intervalSeconds: 3600 },
       importFrom: { configPath: resolve('old/heartbeat-config.json') },
     });
+  });
+
+  test('heartbeat-mcpl is known by its id, a heartbeat tool prefix, or the command that runs it', () => {
+    expect(isHeartbeatMcpl({ id: 'heartbeat' })).toBe(true);
+    expect(isHeartbeatMcpl({ id: 'hb', toolPrefix: 'mcpl--heartbeat' })).toBe(true);
+    expect(isHeartbeatMcpl({ id: 'hb', toolPrefix: 'heartbeat' })).toBe(true);
+    expect(isHeartbeatMcpl({ id: 'ticks', command: 'node', args: ['/opt/heartbeat-mcpl/dist/src/index.js', '--stdio'] })).toBe(true);
+    expect(isHeartbeatMcpl({ id: 'discord', command: 'node', args: ['discord-mcpl/dist/index.js'] })).toBe(false);
+  });
+
+  test("a heartbeat-mcpl from the server file or the agent's overlay is left out beside it, named", () => {
+    const lines: string[] = [];
+    const kept = withoutHeartbeatMcpl([
+      { id: 'discord', command: 'node' },
+      { id: 'hb', command: 'node', args: ['heartbeat-mcpl/dist/src/index.js', '--stdio'] },
+    ], (line) => lines.push(line));
+    expect(kept.map((s) => s.id)).toEqual(['discord']);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('the MCPL server "hb" (heartbeat-mcpl');
   });
 });

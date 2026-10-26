@@ -854,7 +854,8 @@ export interface RecipeReplyJudge {
 
 /** `modules.heartbeat` as an object. */
 export interface RecipeHeartbeat {
-  /** The state file; relative to the install directory. Default `{storePath}/config/heartbeat.json`. */
+  /** The state file; relative to the install directory. Default `{dataDir}/heartbeat.json`: the
+   *  install's, so every session reads the same schedule, as heartbeat-mcpl's state was. */
   statePath?: string;
   /** The schedule a first start writes when there's nothing to import. */
   defaults?: RecipeHeartbeatDefaults;
