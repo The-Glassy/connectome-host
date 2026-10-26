@@ -4,8 +4,8 @@
  * step names to every listener, as agent-framework's emitTrace calls each
  * one, and its abortInference aborts only once told an agent's model call is
  * in flight, then sends `inference:aborted` alone, as agent-framework
- * 0.22.3's does. In the `subagents` and `subagent-exhausted` scenarios its
- * subagent module stands in for the host's.
+ * 0.22.3's does. In the `subagents`, `subagent-exhausted` and numbered-fork
+ * scenarios its subagent module stands in for the host's.
  * Prints one `TUI_STEP` line of JSON per step: the frame's text and the
  * aborts asked for so far.
  */
@@ -254,7 +254,6 @@ async function play(): Promise<void> {
     await Promise.resolve();
     await step('subagent compiled');
   } else if (scenario === 'numbered-fork-failed' || scenario === 'numbered-fork-exhausted') {
-    // Fresh child invocations keep lone exhaustion independent of failure.
     for (const [full, name] of [
       ['web-d1-1700000000000', 'web'],
       ['web-1-d1-1700000000001', 'web-1'],
@@ -278,7 +277,6 @@ async function play(): Promise<void> {
     first.send(scenario === 'numbered-fork-failed' ? 'inference:failed' : 'inference:exhausted', {
       agentName, error: 'numbered fork failure',
     });
-    // Rebuild after the trace without relying on a poll tick.
     await tab();
     await tab();
     await step('after');

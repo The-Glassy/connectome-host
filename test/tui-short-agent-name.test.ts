@@ -26,6 +26,14 @@ describe('shortAgentName', () => {
     expect(shortAgentName('spawn-web-1-1700000000002')).toBe('web-1');
   });
 
+  test('a requested name that looks like a fork envelope, a retry or a prefix keeps it', () => {
+    expect(shortAgentName('spawn-build-d2-1700000000003')).toBe('build-d2');
+    expect(shortAgentName('spawn-web-retry1-1700000000004')).toBe('web-retry1');
+    expect(shortAgentName('step-d1-d1-1700000000005')).toBe('step-d1');
+    expect(shortAgentName('fork-1-d1-1700000000006')).toBe('fork-1');
+    expect(shortAgentName('fork-1-d1-retry2-1700000000007')).toBe('fork-1');
+  });
+
   test('bare trailing -retryN (historical defensive strip)', () => {
     expect(shortAgentName('web-retry2')).toBe('web');
   });
