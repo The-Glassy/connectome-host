@@ -1,9 +1,3 @@
-/**
- * Per-server `toolHints` (MCPL RFC-014 opt-in): recipe validation,
- * mcpl-servers.json carrying it, the recipe's override of it for a server
- * from that file, and the server list the host hands agent-framework
- * keeping it as configured.
- */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -73,7 +67,6 @@ describe('what the host hands agent-framework', () => {
 
   test('a server the recipe defines itself keeps it as written, beside an agent overlay that loads', () => {
     const merged = mergeRecipeServers({ surfaces: { url: 'ws://127.0.0.1:1/mcpl', toolHints: true } }, []);
-    // A real overlay with an entry of its own, so the overlay's pass runs.
     const overlay = serversFile({ mine: { command: 'node' } }, 'mcpl-servers.agent.json');
     const final = applyAgentOverlay(merged, overlay);
     expect(final.find((s) => s.id === 'surfaces')).toEqual({ id: 'surfaces', url: 'ws://127.0.0.1:1/mcpl', toolHints: true });
@@ -102,14 +95,12 @@ describe('the agent overlay: toolHints', () => {
     );
     const loaded = applyAgentOverlay([], overlay);
     expect(loaded.map((s) => s.id).sort()).toEqual(Object.keys(odd).sort());
-    // Each server still loads, with no toolHints for agent-framework to read by its truth.
     for (const server of loaded) expect('toolHints' in server).toBe(false);
     const lines = overlayWarnings([], overlay).filter((line) => line.includes('toolHints'));
     expect(lines).toHaveLength(Object.keys(odd).length);
     for (const id of Object.keys(odd)) {
       expect(lines.some((line) => line.includes(`server "${id}"`) && line.includes('its toolHints isn\'t true or false, so it\'s left out'))).toBe(true);
     }
-    // No line quotes the value it refused.
     expect(lines.join('\n')).not.toContain('"false"');
   });
 

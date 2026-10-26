@@ -1,10 +1,3 @@
-/**
- * Recipe surface for tune-out's subconscious resident (agent-framework#77):
- * schema validation of the `subconscious` block. The block passes through to
- * FrameworkConfig.subconscious verbatim, so validation is the host's whole
- * contribution — a typo'd key or a missing mode block must fail at recipe
- * load, not surface as a subconscious running on an empty system prompt.
- */
 import { describe, test, expect } from 'bun:test';
 import { validateRecipe } from '../src/recipe.js';
 

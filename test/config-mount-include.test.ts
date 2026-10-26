@@ -59,7 +59,6 @@ describe("the _config mount's include", () => {
     writeFileSync(join(cfg, 'gate.js'), 'export default () => true;\n');
     writeFileSync(join(cfg, 'gate.recipe.json'), '{}\n');
     for (const name of LEFT_OUT) writeFileSync(join(cfg, name), `${name}\n`);
-    // An include's name covers that name in a directory beneath too.
     mkdirSync(join(cfg, 'old'));
     writeFileSync(join(cfg, 'old', 'gate.json'), '{}\n');
     writeFileSync(join(cfg, 'old', 'notes.txt'), 'old notes\n');
@@ -93,15 +92,14 @@ describe("the _config mount's include", () => {
 
   test("the watcher takes in a new gate.js and nothing written beside it", async () => {
     const { root, storePath, cfg } = setUp();
-    // gate.json is there before the start, so the event that takes it in
-    // comes from the catch-up pass, which runs once the watcher is ready.
+    // The watcher ignores what's there when it starts: the event that takes
+    // gate.json in comes from the catch-up pass it runs once it's ready.
     writeFileSync(join(cfg, 'gate.json'), '{}\n');
     const { events, eventNaming } = await started(root, configMount(storePath));
     await eventNaming('_config/gate.json');
-    // Written beside the config first, then gate.js, all after the watcher is
-    // ready. The watcher batches what it sees but doesn't promise order, so
-    // after gate.js arrives the test waits past another batch (the 300 ms
-    // debounce after awaitWriteFinish's 100 ms) before it checks.
+    // The watcher doesn't promise the order it reports writes in, so once gate.js
+    // arrives the test waits past another batch: the 300 ms debounce after
+    // awaitWriteFinish's 100 ms.
     for (const name of LEFT_OUT) writeFileSync(join(cfg, name), `${name}\n`);
     writeFileSync(join(cfg, 'gate.js'), 'export default () => true;\n');
     await eventNaming('_config/gate.js');
@@ -119,9 +117,6 @@ describe("the _config mount's include", () => {
     expect(existsSync(join(cfg, 'notes.txt'))).toBe(false);
   }, 30_000);
 
-  // A recipe's tool catalogue (agent.toolPresentation.cataloguePath) may sit
-  // in `_config`: agent-framework serves a registered generated file whatever
-  // the include says.
   test('a generated file registered under _config is read whatever the include covers', async () => {
     const { root, storePath } = setUp();
     const { workspace } = await started(root, configMount(storePath));

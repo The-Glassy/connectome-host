@@ -1,10 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { shortAgentName } from '../src/tui.js';
 
-// Guards full↔short agent-name resolution against the naming schemes the
-// SubagentModule actually produces (see its spawn/fork paths). A helper that
-// misses one scheme silently breaks fleet-tree attribution for that agent
-// type — forks slipped through exactly this way once.
 describe('shortAgentName', () => {
   test('spawn names: spawn-{name}-{ts}', () => {
     expect(shortAgentName('spawn-web-1753221234567')).toBe('web');

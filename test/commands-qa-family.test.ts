@@ -3,17 +3,6 @@ import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { handleCommand, createBranchState } from '../src/commands.js';
 import { DEFAULT_CONFIG_PATH } from '../src/mcpl-config.js';
 
-// Regression tests for the QA-reported command family:
-// - first-token argument parsing truncated multi-word names on
-//   /checkpoint, /restore, /checkout, /session switch, /session delete
-//   (while /session rename accepted them — making renamed sessions
-//   unreachable by name);
-// - /session delete executed irreversibly with no confirmation;
-// - /mcp add on an existing server silently wiped its env vars;
-// - head-moving commands ran while a generation was in flight, letting
-//   the streaming reply commit onto the wrong branch (orphaned nodes);
-// - /budget displayed small values as "0k" (50 → "0k") while rejecting 0.
-
 interface StubMessage { id: string; participant: string; content: unknown[] }
 
 function makeStubWorld(agentStatus: string | undefined = 'idle') {
@@ -205,8 +194,6 @@ describe('/budget honest display', () => {
 });
 
 describe('/mcp add preserves env on overwrite', () => {
-  // handleMcp* read/write DEFAULT_CONFIG_PATH (cwd/mcpl-servers.json, which
-  // is gitignored). Skip rather than clobber if a real config exists.
   const hadFile = existsSync(DEFAULT_CONFIG_PATH);
   const original = hadFile ? readFileSync(DEFAULT_CONFIG_PATH, 'utf-8') : null;
 
