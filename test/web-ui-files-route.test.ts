@@ -217,9 +217,6 @@ describe("the web UI's /files/ route serves only what the mount's own read gives
     }
   });
 
-  // A mount with an include, as `_config` has: a file it covers is served,
-  // and one it leaves out is forbidden, in the read's words, as every other
-  // boundary refusal is.
   test("agent-framework's read: a file its mount's include leaves out is forbidden, and says so", async () => {
     const dir = mkdtempSync(join(tmpdir(), 'webui-files-include-'));
     const conf = join(dir, 'conf');

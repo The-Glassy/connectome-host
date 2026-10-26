@@ -162,7 +162,6 @@ describe('applyAgentOverlay', () => {
 
   test('relative args resolve against the working directory, as mcpl_deploy tells the agent, wherever the overlay file is', () => {
     withTmp((dir) => {
-      // The overlay is in a directory of its own, as a fleet child's is in its data directory.
       const path = join(dir, 'overlay.json');
       saveAgentOverlay(path, { mytool: { command: 'node', args: ['./servers/tool.js', '../up.js', '--flag'] } });
       const result = applyAgentOverlay(base, path);

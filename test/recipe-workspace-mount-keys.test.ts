@@ -45,7 +45,7 @@ describe('workspace mount keys', () => {
     for (const mounts of [[mount({ backend: 'direct' })], [mount(), mount({ name: 'repo', path: './repo', backend: 'direct', include: ['*.ts'] })]]) {
       const at = mounts.length - 1;
       expect(() => validateRecipe(recipe({ mounts })))
-        .toThrow(new RegExp(`^workspace\\.mounts\\[${at}\\] is direct, so it must say its mode: add "mode": "read-only", the only mode a direct mount takes in agent-framework 0\\.24$`));
+        .toThrow(new RegExp(`^workspace\\.mounts\\[${at}\\] is direct, so it must say its mode: add "mode": "read-only", or "read-write" for one the agent writes on disk directly, with no undo$`));
     }
     const workspace = {
       mounts: [mount({ backend: 'direct', mode: 'read-only' }), mount({ name: 'out', path: './out' }), mount({ name: 'kept', path: './kept', backend: 'chronicle' })],
@@ -103,8 +103,8 @@ describe('workspace mount keys', () => {
   });
 
   test("refuses an include pattern agent-framework can't read, in its words", () => {
-    expect(() => validateRecipe(recipe({ mounts: [mount({ include: ['*.md', 'src/*.ts'] })] })))
-      .toThrow(/^modules\.workspace: Mount "notes": include must be a non-empty list of names, "\*\.ext" globs or "dir\/\*\*" globs, with no "\." or "\.\." segment/);
+    expect(() => validateRecipe(recipe({ mounts: [mount({ include: ['*.md', 'src/../x'] })] })))
+      .toThrow(/^modules\.workspace: Mount "notes": include .*"\.\." segment/);
   });
 
   test('validates a mount without making its directory, or anything beneath it, as the framework\'s constructor does nothing but check', () => {
@@ -149,7 +149,6 @@ describe('workspace mount keys', () => {
       expect(() => validateRecipe(recipe(workspace)))
         .toThrow(/^workspace\.mounts\[1\] is named "_config", the name of the host's own mount of the session's config directory, which configMount: true adds\. Give this mount another name\.$/);
     }
-    // Another spelling is another name.
     expect(() => validateRecipe(recipe({ mounts: [mount({ name: '_Config', path: './config' })] }))).not.toThrow();
   });
 
@@ -303,8 +302,7 @@ describe('workspace mount keys', () => {
     };
     expect(() => validateRecipe(recipe(workspace))).not.toThrow();
     // What the host built for this recipe before #275, key by key, but for
-    // `_config`, which now says its backend and holds only files with the gate's files' names
-    // (#278).
+    // `_config`, which now says its backend and holds only the gate's files.
     expect(buildWorkspaceMounts(workspace as never, '/store')).toEqual([
       {
         name: 'notes', path: resolve('./notes'), mode: 'read-only', watch: 'on-agent-action', ignore: ['node_modules'],

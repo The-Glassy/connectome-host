@@ -63,9 +63,6 @@ export interface LauncherOps {
   report(line: string): void;
   /** The data directory a host started here would serve. */
   dataDir(): string;
-  /** The agent overlay a host started here would read and write
-   *  (agentOverlayPath, by the host's own environment, which the host is
-   *  started with). */
   agentOverlay(): string;
   cwd(): string;
   bootId(): string | null;
@@ -400,9 +397,7 @@ function waitForChildren(record: InstallRecord, ops: LauncherOps, what: string):
 
 /** Everything a switch copies, as real paths: the data directory, each fleet
  *  child's, the MCPL settings file in the working directory, the agent
- *  overlay the host reads (in the working directory, unless
- *  MCPL_AGENT_OVERLAY_FILE names another), and the extra state setup
- *  recorded. `present` are those there now, none inside another,
+ *  overlay the host reads, and the extra state setup recorded. `present` are those there now, none inside another,
  *  since copying the outer one covers it. `absent` are those that aren't,
  *  none inside a present one or another absent one, which a restore keeps
  *  empty of whatever a trial makes there. */

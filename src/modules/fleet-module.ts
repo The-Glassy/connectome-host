@@ -350,9 +350,9 @@ export function fleetChildDataDir(child: { name: string; dataDir?: string }): st
 }
 
 /** The environment the fleet starts a child with: this host's, the child's
- *  own env over it (only a recipe's entry gives one), and the time zone, data
- *  directory and agent overlay (MCPL_AGENT_OVERLAY_FILE, the child's own in
- *  its data directory) the fleet gives every child, over both, without
+ *  own env over it (only a recipe's entry gives one), and the time zone,
+ *  data directory and agent overlay (MCPL_AGENT_OVERLAY_FILE) the fleet
+ *  gives every child, without
  *  CONNECTOME_INSTALL_ROOT. The child runs the parent's own entry, which is
  *  an install's entry when the parent is the install's host; without the
  *  variable, releaseHere finds no install, so the child neither commits a
@@ -1904,24 +1904,6 @@ export class FleetModule implements Module {
       };
     }
 
-    // The child keeps its own agent overlay in its data directory, under a
-    // name the working directory's never has, so it's the child's own
-    // whatever its data directory, and reads it from MCPL_AGENT_OVERLAY_FILE.
-    // Before children had their own, each read the overlay in the working
-    // directory it shares with this host, by that name (MCPL_AGENT_OVERLAY_FILE
-    // is new with them), so a child launched into this data directory before
-    // starts from a copy of that, which is what it would have loaded, and a
-    // new child from an empty one. A launch was made here where startup.log
-    // is, which every launch tries to open here before its spawn (below),
-    // whether or not the spawn then works: a directory made ahead of time,
-    // empty or holding anything else, is a new child's, which a copy would
-    // hand this host's deploys and their tokens. A child from before this
-    // version with no startup.log, deleted or never opened, starts empty and
-    // loses its deploys, and one that can't be looked at counts as none:
-    // either way nothing is copied. The child's overlay, copied or empty, is
-    // written by a launch that finds none there, and is the child's from then
-    // on, until it's deleted. A new child's launch whose seed fails leaves no
-    // startup.log, so the next one asks the same question again.
     const ranHere = existsSync(join(dataDir, 'startup.log'));
     const overlayPath = join(dataDir, CHILD_AGENT_OVERLAY_FILE_NAME);
     const workingOverlay = resolve(process.cwd(), AGENT_OVERLAY_FILE_NAME);

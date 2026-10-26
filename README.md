@@ -341,7 +341,7 @@ Servers an agent deploys for itself (`mcpl-servers.agent.json`, or a fleet child
 }
 ```
 
-Set it in the recipe, or in `mcpl-servers.json` for a server the recipe names. A recipe naming such a server may override it, so `false` there turns it off. It must be `true` or `false`: anything else stops the load. In the agent's own overlay (`mcpl-servers.agent.json`), anything else is left out and named in a startup line, and the server gets the default. Omitted, agent-framework's default applies. It takes effect with an agent-framework that implements RFC-014; older ones ignore it.
+Set it in the recipe, or in `mcpl-servers.json` for a server the recipe names. A recipe naming such a server may override it, so `false` there turns it off. It must be `true` or `false`: anything else stops the load. In the agent's own overlay (`mcpl-servers.agent.json`, or a fleet child's `mcpl-servers.agent.child.json`), anything else is left out and named in a startup line, and the server gets the default. Omitted, agent-framework's default applies. It takes effect with an agent-framework that implements RFC-014; older ones ignore it.
 
 ### Included recipes
 
@@ -540,17 +540,18 @@ unknown-key warning, like those at the other levels.
 - **Workspace** (`modules.workspace`, on) — mounted directories backed by
   Chronicle: the agent's durable, verbatim notes. Default mounts `input`
   (read-only `./input`) and `products` (read-write `./output`). A mount with
-  `"backend": "direct"` reads disk as it is, with no store or watcher, for a
-  checkout an agent reads: it names `"mode": "read-only"`, the only mode
-  agent-framework takes on a direct mount, and a mount the agent writes, or
-  whose changes should wake it, leaves `backend` out. A direct mount that names no `ignore` passes over `node_modules`,
+  `"backend": "direct"` reads disk as it is, and writes it as it is if it's
+  writable, with no store, undo or watcher: it names its mode, `"read-only"`,
+  or `"read-write"` from agent-framework 0.27.0, and a mount whose changes
+  should wake the agent, or whose writes should be undoable, leaves `backend`
+  out. A direct mount that names no `ignore` passes over `node_modules`,
   `.git`, `dist`, `build`, `coverage`, `target`, `__pycache__` and `.venv`,
   and one that names any passes over only what it names. While its store
-  holds changes from when it ran as Chronicle, it runs as Chronicle until a
-  start after they're settled, and says at start how to settle them.
+  holds changes from when it ran as Chronicle, it runs as Chronicle, taking no
+  writes, until a start after they're settled, and says at start how to settle them.
   `include` limits what a mount holds, and agent-framework keeps its own
-  files (spilled tool results, fetched references) only in a writable mount
-  without one. `configMount: true` adds `_config`, holding only files named
+  files (spilled tool results, saved payloads, fetched references) only in the
+  first writable mount with no `include` that isn't configured direct. `configMount: true` adds `_config`, holding only files named
   `gate.json`, `gate.js` or `gate.recipe.json`, the names of the gate's
   files, anywhere in the session's config directory, subdirectories
   included. `_config` is
@@ -641,7 +642,9 @@ never satisfy the default path, so declare an `instructions` mount explicitly.
 **Who edits, and how it propagates**: the module reads *disk*; agent
 `workspace--write`/`edit` land in Chronicle and reach disk only on an
 `autoMaterialize: true` mount — validation therefore requires it on a
-read-write instructions mount. On a read-only mount the flow reverses:
+read-write instructions mount, unless it's configured direct, where an
+agent's write is on disk when it answers (and is refused in a session the
+mount runs as Chronicle). On a read-only mount the flow reverses:
 human/deploy edits to disk reach the injection, but not `workspace--read`
 (which serves Chronicle) — prefer routing human feedback through conversation
 and letting the agent make the edit. A mount running direct

@@ -38,7 +38,6 @@ interface StubServer {
 function makeStubFramework() {
   const servers = new Map<string, StubServer>();
   const calls: string[] = [];
-  // Each configuration a connect was given, as the framework would spawn it.
   const connected: Array<{ id: string; command?: string; args?: string[] }> = [];
   // The host's modules by name, as agent-framework's getModule finds them.
   const modules = new Set(['mcpl-admin', 'workspace']);
@@ -146,7 +145,6 @@ describe('mcpl_deploy', () => {
     const result = await call(mod, 'mcpl_deploy', { id: 'mytool', command: 'node', args: ['./tool.js', '../up.js', '--flag'] });
 
     expect(result.success).toBe(true);
-    // The overlay is in a directory of its own here, as a fleet child's is.
     expect(connected.find((c) => c.id === 'mytool')?.args).toEqual([resolve(process.cwd(), './tool.js'), resolve(process.cwd(), '../up.js'), '--flag']);
     expect(readAgentOverlay(overlayPath).mytool).toEqual({ command: 'node', args: ['./tool.js', '../up.js', '--flag'] });
   });

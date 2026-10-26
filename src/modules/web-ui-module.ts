@@ -1344,7 +1344,6 @@ export class WebUiModule implements Module {
     // that is itself a link unless the mount follows links (and, from
     // agent-framework's release with anima-research/agent-framework#468, a
     // link among its directories too), and reads a file only if its
-    // mount's include covers it, where the mount has one, and its
     // canonical path lies inside the mount.
     if (url.pathname.startsWith('/files/')) {
       return this.serveWorkspaceFile(url.pathname.slice('/files/'.length));
@@ -3019,7 +3018,7 @@ export class WebUiModule implements Module {
     }
 
     // Branch-change side effects parity with TUI / runPiped: materialize the
-    // _config mount so the gate's files stay in sync, then refresh every
+    // _config mount so gate.json etc. stay in sync, then refresh every
     // welcomed client by re-sending welcome with the new branch's messages.
     if (result.branchChanged) {
       await this.materializeConfigMount();

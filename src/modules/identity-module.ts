@@ -979,8 +979,7 @@ export class IdentityModule implements Module {
    * empty part right after the mount's name or a "." or ".." part, its mount
    * doesn't hold it (it leads out, lies in another mount's directory, falls
    * outside the include, or can't name a file there), or its mount is
-   * read-only; and, the host's own refusal, a path in `_config`, which holds
-   * the gate's config. Null when none holds. Each other
+   * read-only; or it's in `_config`. Null when none holds. Each other
    * refusal is one agent-framework's writeBinary makes too, after the request
    * has gone out (the include's from 0.24, the rest from 0.22.3): its path
    * parser reads what follows an empty part
@@ -993,13 +992,7 @@ export class IdentityModule implements Module {
    */
   private cannotKeep(workspace: WorkspaceModule, path: string): string | null {
     const mounts = workspace.getMounts();
-    // The mounts a response can be kept in, each with the files its include
-    // covers, if it has one. Not `_config`: it holds the gate's config, and a
-    // response saved there would become one of the gate's files at the
-    // host's next materialize of the mount.
     const writable = mounts.filter((m) => m.mode === 'read-write' && m.name !== '_config');
-    // Quoted, as the refusals quote a mount's name, so a mount named like a
-    // word ("files") reads as a name.
     const named = writable.map((m) => (m.include ? `"${m.name}" for ${m.include.join(' or ')}` : `"${m.name}"`)).join(', ');
     const remedy = writable.length > 0
       ? ` Pass \`saveAs\` a path in a mount it can write to (${named}), as "<mount>/<file>", or leave it ` +
@@ -1069,10 +1062,7 @@ export class IdentityModule implements Module {
       onDisk = err;
     }
     // A path no mount holds, or one leading out of its mount, has no copy
-    // anywhere. One its mount's include doesn't cover (`outside_include`)
-    // has none an upload can read: the workspace's reads refuse it, a copy
-    // its history holds from before the include included. One in another
-    // mount's directory nested in it, or reached
+    // anywhere. One in another mount's directory nested in it, or reached
     // through a link into one (`other_mount`, from
     // anima-research/agent-framework#460, and for a link from the release
     // with anima-research/agent-framework#468), is that mount's: the reason
