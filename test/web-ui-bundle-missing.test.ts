@@ -45,7 +45,6 @@ describe('WebUiModule with a missing bundle', () => {
     expect(warnings[0]).toContain('In a clone, run `bun run build:web` in its root');
     expect(warnings[0]).toContain('an install from npm carries the bundle built, so there, install the package again');
 
-    // The server is a process singleton: a later start reuses it and says nothing more.
     expect(await startCapturingWarnings(root)).toHaveLength(0);
 
     const res = await fetch(`http://127.0.0.1:${__getSharedServerPortForTests()}/`);

@@ -6,7 +6,6 @@ import { strategyMessageCap } from './framework-strategy.js';
 
 type RetrievalRecipeConfig = Exclude<RecipeModules['retrieval'], boolean | undefined>;
 
-/** Translate the recipe's retrieval block into the module's runtime config. */
 export function buildRetrievalModuleConfig(
   membrane: Membrane,
   retrieval: RecipeModules['retrieval'],

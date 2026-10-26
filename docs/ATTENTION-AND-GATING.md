@@ -130,8 +130,7 @@ check is conservative, so no warning isn't proof of safety.
 - **Not `workspace--edit _config/gate.json`.** If your recipe sets
   `modules.workspace.configMount: true`, the gate's files in the config
   directory, `gate.json`, `gate.js` and `gate.recipe.json` (the recipe a
-  start last applied, which agent-framework writes from
-  anima-research/agent-framework#677 on), also appear in the `_config/` mount, which holds only files with those names,
+  start last applied, which agent-framework writes from 0.27.0), also appear in the `_config/` mount, which holds only files with those names,
   at any depth, and their changes on disk are versioned into your
   chronicle.
   But that mount doesn't write through: a workspace edit stays chronicle-side and
