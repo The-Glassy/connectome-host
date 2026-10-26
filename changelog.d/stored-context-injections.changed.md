@@ -83,3 +83,9 @@
   - The instructions module, set off `system`, marks its injection to be
     placed at each compile as before, since stored instructions would
     drift back into history as the conversation grew past them.
+  - **Cache:** the `hud` tool's description changes, and tools come first
+    in a request. So for each agent given the subagent module's tools, on
+    any provider whose prompt cache covers the tools, the whole cached
+    prompt is written again once, at its first call after upgrading from
+    0.14.0. Upgrading from a 0.13 release, that falls in the same
+    first-call write as 0.14.0's.
