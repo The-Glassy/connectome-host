@@ -40,6 +40,13 @@ export function buildRetrievalModuleConfig(
   };
 }
 
+export function retrievalModuleConfig(membrane: Membrane, recipe: Recipe): RetrievalModuleConfig {
+  return {
+    ...buildRetrievalModuleConfig(membrane, recipe.modules?.retrieval, recipe.agent.provider),
+    maxMessageTokens: retrievalMessageCap(recipe),
+  };
+}
+
 export function retrievalMessageCap(recipe: Recipe): number | undefined {
   const caps = [strategyMessageCap(recipe), recipe.modules?.subagents ? SUBAGENT_MESSAGE_CAP : undefined]
     .filter((cap): cap is number => cap !== undefined && cap > 0);

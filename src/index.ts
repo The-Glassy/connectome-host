@@ -53,7 +53,7 @@ import { SubagentModule } from './modules/subagent-module.js';
 import { historyModuleOptions, assertSemanticSearchRegistered } from './history-semantic.js';
 import { LessonsModule } from './modules/lessons-module.js';
 import { RetrievalModule } from './modules/retrieval-module.js';
-import { buildRetrievalModuleConfig, retrievalMessageCap } from './retrieval-config.js';
+import { retrievalModuleConfig } from './retrieval-config.js';
 import { TuiModule } from './modules/tui-module.js';
 import { TimeModule } from './modules/time-module.js';
 import { waitToBeListed } from './fleet-begin.js';
@@ -364,10 +364,7 @@ async function createFramework(
   // configured retrieval-model calls), which adds per-turn context churn.
   // Enable explicitly only when an agent actually curates a lesson library.
   if (modules.retrieval && lessonsModule) {
-    moduleInstances.push(new RetrievalModule({
-      ...buildRetrievalModuleConfig(membrane, modules.retrieval, recipe.agent.provider),
-      maxMessageTokens: retrievalMessageCap(recipe),
-    }));
+    moduleInstances.push(new RetrievalModule(retrievalModuleConfig(membrane, recipe)));
   }
 
   // History browsing (native chronicle indexes + summary-backed overview).

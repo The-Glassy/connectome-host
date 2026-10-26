@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { Membrane } from '@animalabs/membrane';
 import { validateRecipe } from '../src/recipe.js';
-import { buildRetrievalModuleConfig, retrievalMessageCap } from '../src/retrieval-config.js';
+import { buildRetrievalModuleConfig, retrievalMessageCap, retrievalModuleConfig } from '../src/retrieval-config.js';
 import { SUBAGENT_MESSAGE_CAP } from '../src/modules/subagent-module.js';
 
 const membrane = {} as Membrane;
@@ -97,5 +97,24 @@ describe('the cap retrieval fits its block under', () => {
     expect(capOf({ strategy: { type: 'autobiographical', maxMessageTokens: -5 } })).toBeUndefined();
     expect(capOf({ strategy: { type: 'my-strategy', maxMessageTokens: 3_000 } }, { subagents: true })).toBe(3_000);
     expect(capOf({ strategy: { type: 'my-strategy' } })).toBeUndefined();
+  });
+});
+
+describe('the config a host builds its retrieval module from', () => {
+  const host = (modules: Record<string, unknown>) => validateRecipe({
+    name: 'x',
+    agent: { systemPrompt: 'sys', provider: 'anthropic', strategy: { type: 'autobiographical', maxMessageTokens: 20_000 } },
+    modules: { lessons: true, retrieval: { model: 'test-model', maxInjected: 3 }, ...modules },
+  });
+
+  test('carries the cap the block is fitted under beside the recipe\'s retrieval settings', () => {
+    expect(retrievalModuleConfig(membrane, host({ subagents: true }))).toEqual({
+      membrane,
+      retrievalModel: 'test-model',
+      retrievalReasoning: undefined,
+      maxInjectedLessons: 3,
+      maxMessageTokens: 10_000,
+    });
+    expect(retrievalModuleConfig(membrane, host({})).maxMessageTokens).toBe(20_000);
   });
 });
