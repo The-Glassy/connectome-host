@@ -160,7 +160,7 @@ describe('subagent allowed-tools inheritance', () => {
           expect(accepted.success).toBe(true);
           expect(h.subagent.getConcurrencyStatus()).toMatchObject({ active: 1, queued: 1 });
           const pending = (h.subagent as unknown as { asyncHandles: Map<string, { promise: Promise<unknown> }> }).asyncHandles.get('queued-worker')!.promise;
-          // Observe rejection immediately so the red run has no unhandled promise.
+          // Observed at once: bun test fails on a rejection with no handler yet, even one handled later.
           const settled = pending.then(() => null, error => error);
           if (caller.agent.allowedTools !== 'all') caller.agent.allowedTools.push('probe--denied');
           caller.agent.allowedTools = 'all';
@@ -189,7 +189,7 @@ describe('subagent allowed-tools inheritance', () => {
       } finally { unblock(); await blocker?.catch(() => {}); await h.cleanup(); }
     });
 
-    test(`${kind} retry reuses admission tools after ephemeral caller exit`, async () => {
+    test(`${kind} retry reuses admission tools after ephemeral caller exit, untouched by what the first attempt and the caller changed`, async () => {
       const h = await harness('all', 3, 1);
       try {
         await h.framework.start();

@@ -74,8 +74,8 @@ const PKG = {
 
 const HOLD = { number: 300, title: "DefaultErrorPolicy sleeps the provider's retryAfterMs uncapped" };
 
-/** Runs `file` with `args` and only the environment given, so a CI
- *  runner's own GITHUB_REPOSITORY or token can't reach it. */
+/** Runs `file` with only the environment given, so a CI runner's own
+ *  GITHUB_REPOSITORY or token can't reach it. */
 function exec(
   file: string,
   args: string[],

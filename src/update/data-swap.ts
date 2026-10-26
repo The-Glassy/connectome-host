@@ -1,8 +1,4 @@
 /**
- * What the launcher does to an install's data (contract.ts): copy it, and put
- * one set of an item's contents in place of another, so that a start cut off
- * anywhere leaves a state the next start can finish, in either direction.
- *
  * An item is a directory, such as a data directory, or a file, such as an
  * MCPL settings file. A directory item may be a mount point, so nothing here
  * renames the item itself: its entries move, inside its own filesystem, into
@@ -28,11 +24,7 @@ export function syncPath(path: string): void {
 }
 
 /** Sync the entries of a directory found there, passing over one this
- *  process may not open: no attempt could ever sync it, so a stop there would
- *  last until someone changed its mode, while only an entry that an earlier
- *  attempt made or removed, and that stopped on this very sync, is left to a
- *  power cut. A directory this attempt has just changed is synced with
- *  syncPath, which passes over nothing. */
+ *  process may not open: no attempt could ever sync it. */
 export function syncEntries(dir: string): void {
   try {
     syncPath(dir);
@@ -99,11 +91,13 @@ export function copyTree(from: string, to: string): void {
 
 /** The bytes a copy of `path` writes where it can't clone: each file's size,
  *  rounded up to a 4 KiB block, over what copyTree copies. */
+const BLOCK_BYTES = 4096;
+
 export function spaceTaken(path: string): number {
   const stat = lstatSync(path);
-  if (stat.isFile()) return Math.ceil(stat.size / 4096) * 4096;
+  if (stat.isFile()) return Math.ceil(stat.size / BLOCK_BYTES) * BLOCK_BYTES;
   if (!stat.isDirectory()) return 0;
-  let total = 4096;
+  let total = BLOCK_BYTES;
   for (const name of readdirSync(path)) {
     if (name !== ITEM_UPDATE_DIR) total += spaceTaken(join(path, name));
   }
@@ -123,11 +117,9 @@ function moveEntries(from: string, to: string, item: string): void {
       throw new ContractError(`${target} is already there, so ${source} can't be moved to it without losing one of them.`);
     }
     // Moving a directory to another parent rewrites its `..`, which a
-    // directory this process can't write refuses, so one it owns gets owner
-    // write for the rename and its mode back after, even when the rename
-    // fails; a cut between the two leaves that one bit. One another owns
-    // can't be given write, and the launcher refuses a request that would
-    // move one before it changes anything.
+    // directory this process can't write refuses, so one it owns gets
+    // owner write for the rename and its mode back after, even when the
+    // rename fails.
     try {
       renameSync(source, target);
     } catch (error) {
@@ -285,7 +277,7 @@ function openForWriting(file: string, mode: number): number {
  *  in its directory, which is made too if something removed it. When `made`,
  *  the file wasn't there before the restore's first attempt, so each attempt
  *  syncs its directory, as the first would have. */
-export function writeFileInPlace(file: string, source: string, mode: number, made: boolean): void {
+export function writeFileInPlace(file: string, source: string, mode: number, absentBefore: boolean): void {
   makeDirs(dirname(file));
   const there = exists(file);
   const same = there && sameContent(file, source);
@@ -312,12 +304,11 @@ export function writeFileInPlace(file: string, source: string, mode: number, mad
   } finally {
     if (input !== null) closeSync(input);
   }
-  if (made || !there) syncPath(dirname(file));
+  if (absentBefore || !there) syncPath(dirname(file));
 }
 
-/** Remove `path` and everything under it, if it's there. A copy keeps each
- *  directory's mode, and a directory its owner can't write can't have its
- *  entries removed, so each directory is first made its owner's to change. */
+/** A directory its owner can't write can't have its entries removed, so
+ *  each directory is first made its owner's to change. */
 export function removeTree(path: string): void {
   let stat;
   try {
@@ -393,8 +384,9 @@ export function replaceFile(file: string, source: string | null, keep: FileKeep,
   }
   // A file that was there keeps its own mode, as its keep holds it, unless
   // the caller knows it better; one the restore makes takes the source's.
-  const made = exists(keep.absent);
-  writeFileInPlace(file, source, made ? lstatSync(source).mode & 0o7777 : ownMode ?? lstatSync(keep.kept).mode & 0o7777, made);
+  const absentBefore = exists(keep.absent);
+  writeFileInPlace(file, source,
+    absentBefore ? lstatSync(source).mode & 0o7777 : ownMode ?? lstatSync(keep.kept).mode & 0o7777, absentBefore);
 }
 
 /** Put back in `file`'s place what `kept` holds of it, its content or its

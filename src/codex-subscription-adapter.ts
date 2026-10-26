@@ -1,10 +1,7 @@
 /**
- * ChatGPT-subscription-backed OpenAI Responses adapter.
- *
- * Authentication is deliberately delegated to `codex app-server`: it owns
- * ChatGPT OAuth, refresh-token rotation, and the device-code login ceremony.
- * The resulting access token and account id are read from CODEX_HOME/auth.json
- * and used only for the Codex subscription Responses transport.
+ * `codex app-server` owns ChatGPT OAuth, refresh-token rotation and the
+ * device-code login. The access token and account id are read from
+ * CODEX_HOME/auth.json.
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -65,8 +62,7 @@ export interface CodexAppServerAuthConfig {
 }
 
 /**
- * Minimal JSON-RPC client for the documented Codex app-server auth surface.
- * It forces file credential storage because the inference adapter needs to
+ * Forces file credential storage, because the inference adapter needs to
  * read the refreshed access token; permissions on auth.json remain Codex's.
  */
 export class CodexAppServerAuth implements CodexAuthProvider {
@@ -397,11 +393,10 @@ export class CodexAppServerAuth implements CodexAuthProvider {
 
 /**
  * `CODEX_GATE_TOKEN`: the ChatGPT logins live in an inference gate (the
- * gate's `/codex` leg holds, refreshes and picks them), so this host runs no
- * Codex CLI and holds no login — it authenticates to the gate with a static
- * gate token. `CODEX_BASE_URL` must name that gate: a gate token must never
- * travel to the ChatGPT backend. The account id is the gate's to choose.
- * Returns undefined when no gate token is configured.
+ * gate's `/codex` leg holds, refreshes and picks them), so this host runs
+ * no Codex CLI and holds no login — it authenticates to the gate with a
+ * static gate token. `CODEX_BASE_URL` must name that gate: a gate token
+ * must never travel to the ChatGPT backend.
  */
 export function codexGateAuth(env: NodeJS.ProcessEnv = process.env): CodexAuthProvider | undefined {
   const token = env.CODEX_GATE_TOKEN?.trim();

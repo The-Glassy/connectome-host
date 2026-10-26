@@ -15,6 +15,8 @@ import { buildHelloIdentity } from './observer-identity.js';
 
 export type ConnectionStatus = 'connecting' | 'open' | 'reconnecting' | 'closed';
 
+const OBSERVER_REFUSED_CLOSE_CODE = 4401;
+
 /**
  * Observer-auth state (docs/observability.md, browser side).
  *   'none'        — basic-auth / open server; historical behavior
@@ -117,9 +119,9 @@ export function createWireClient(opts: WireOptions = {}): WireClient {
         void respondToAuthRequired(socket, parsed.host);
       } else if (parsed.type === 'observer-ack') {
         ackedThisSocket = true;
-        // Session cookie lets the SPA hit /debug/* and /healthz over HTTP.
-        // It's set before the state changes, since what reacts to the state
-        // runs inside that change and may read /healthz at once.
+        // The cookie is set before the state changes: Solid runs what
+        // reacts to the state inside that change, and that may read /healthz
+        // at once.
         document.cookie = `fkm_obs=${parsed.sessionToken}; path=/; SameSite=Lax; max-age=${12 * 3600}`;
         setObserverState('observer');
         setObserver({ label: parsed.label, scopes: parsed.scopes });
@@ -141,7 +143,7 @@ export function createWireClient(opts: WireOptions = {}): WireClient {
         setStatus('closed');
         return;
       }
-      if (ev.code === 4401) {
+      if (ev.code === OBSERVER_REFUSED_CLOSE_CODE) {
         // Observer auth rejected — reconnect loops would spam the server;
         // hold until the user acts (grant lands / password). The server also
         // closes never-authenticated connections with 4401 on timeout, so

@@ -491,6 +491,12 @@ function candidateMatches(concepts: string[], lesson: Lesson): RetrievalCandidat
   return matches;
 }
 
+function stripPayloadARunMayHold(trace: RetrievalTrace): void {
+  const id = trace.id;
+  for (const key of Object.keys(trace)) Reflect.deleteProperty(trace, key);
+  Object.assign(trace, { id });
+}
+
 /**
  * Mutable handle for one retrieval run. Every mutation is guarded so tracing
  * can never make retrieval fail; a malformed trace is less important than the
@@ -784,8 +790,7 @@ export class RetrievalTraceStore {
         // A still-running RetrievalTraceRun may retain this object. Strip its
         // payload as part of eviction so concurrent active runs cannot bypass
         // the store's memory bound; the ID remains available for provenance.
-        for (const key of Object.keys(oldest)) Reflect.deleteProperty(oldest, key);
-        Object.assign(oldest, { id: evictedId });
+        stripPayloadARunMayHold(oldest);
       } while (this.traces.length > this.capacity || this.totalEncodedBytes() > this.byteBudget);
       if (evicted.size === 0) break;
       this.rewriteEvictedProvenance(evicted);

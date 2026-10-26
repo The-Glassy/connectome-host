@@ -83,7 +83,8 @@ describe('gateTelemetryHeaders', () => {
     const h = fn!({ lane: 'stream' });
     expect(h['x-gate-channel']).toBeNull();
     expect(h['x-gate-counterparty']).toBeNull();
-    // and what IS sent can always be put in real Headers (Fetch ByteString rule)
+    // Fetch's Headers throws on a value that isn't a ByteString, so what's sent
+    // must fit one.
     const ok = gateTelemetryHeaders(env, debt, () => wake)!({ lane: 'stream' });
     const sendable = Object.fromEntries(Object.entries(ok).filter(([, v]) => v !== null).map(([k, v]) => [k, String(v)]));
     expect(() => new Headers(sendable)).not.toThrow();

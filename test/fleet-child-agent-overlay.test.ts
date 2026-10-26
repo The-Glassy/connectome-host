@@ -42,9 +42,7 @@ async function withChild(home: string, name: string, dataDir: string, then: (rec
 describe("a fleet child's agent overlay", () => {
   test('a new child gets an empty overlay of its own in its data directory, its owner\'s alone whatever the working directory\'s mode, and every reader of the overlay takes its path', async () => {
     const { home, overlay, text } = parentHome();
-    // The working directory's overlay as the host writes it under a common
-    // umask, readable by others; and no umask now, so the mode the seed asks
-    // for is the mode the file gets.
+    // With no umask, the mode the seed asks for is the mode the file gets.
     const umask = process.umask(0);
     try {
       chmodSync(overlay, 0o644);

@@ -1,49 +1,6 @@
 /**
- * InstructionsModule — injects a shared, living instructions document into
- * every agent's context on every turn.
- *
- * The document is a CLAUDE.md analogue maintained in a workspace mount:
- * operators (or the agents themselves, on a read-write mount) edit one file,
- * and the current content reaches the resident agent AND every ephemeral
- * subagent via the framework's gatherContext hook before each inference.
- * Nothing is persisted to Chronicle — position 'system' injections are
- * per-turn overlays, so edits take effect on the next turn and stale copies
- * never accumulate in history.
- *
- * Fail-open by design: a missing mount, missing file, any read error, or a
- * read that hasn't finished within its budget yields no injection (never a
- * blocked inference). An agent running without its instructions must not be
- * a silent state, so each distinct reason is logged and raised once as an
- * `instructions-unavailable` ops alert, which the TUI, the ops webhook and
- * the status channels show. Once the file loads again,
- * `instructions-unavailable-clear` stands it down, and a later loss alerts
- * afresh, whatever its reason.
- *
- * One read is in flight at a time in each session. A turn that comes while
- * it's pending waits on it rather than starting another, until its budget,
- * counted from the read's start, runs out; a turn after that injects nothing
- * at once. So a read that never finishes (a FIFO at the path, which
- * agent-framework 0.22.3 opens and waits on) leaves agents without their
- * instructions until it finishes, the session is switched or the host
- * restarts, and no further read starts in that session. A stop can't cancel
- * the read, since readFileFromDisk takes no signal: the module lets go of
- * it, and the next session's first turn starts a read of its own.
- *
- * The host keeps one instance across session switches, as it keeps the
- * notices module, so an alert raised in one session is stood down in the
- * next once the file loads there.
- *
- * Requires the workspace module: the configured path is a mount-prefixed
- * workspace path ("<mountName>/<relativePath>"). validateRecipe enforces the
- * pairing. The file is read through WorkspaceModule.readFileFromDisk, which,
- * unless its mount follows links (off unless the recipe sets
- * followSymlinks), refuses a file that is itself a link and, from
- * agent-framework's release with anima-research/agent-framework#468, one
- * reached through a linked directory too, and reads a file only if its
- * canonical path lies inside the mount, which it checks after opening the
- * file.
- *
- * Reads ask readFileFromDisk for at most maxBytes, which it keeps for a file
+ * readFileFromDisk takes no signal, so a stop can't cancel a read: the
+ * module lets go of one under way. It keeps at most maxBytes, for a file
  * that grows while it's read too.
  */
 
@@ -109,11 +66,10 @@ export const DEFAULT_INSTRUCTIONS_MAX_BYTES = 32768;
 export class InstructionsModule implements Module {
   readonly name = 'instructions';
 
-  // gatherContext is one file read. A modest explicit budget keeps a wedged
-  // filesystem from eating the registry-wide 15s default before inference
-  // proceeds without us. The read's own budget is three quarters of it
-  // (readBudgetMs), so a read that hangs raises the alert before the
-  // registry gives up on the turn with only a line on stderr.
+  // agent-framework's registry skips a module whose gatherContext answers
+  // after its budget, 15 s unless the module declares one. The read's own
+  // budget is three quarters of this one (readBudgetMs), so a read that hangs
+  // raises the alert before the registry gives up on the turn.
   readonly contextTimeoutMs: number = 2000;
 
   private readonly path: string;
@@ -339,17 +295,15 @@ export class InstructionsModule implements Module {
       return `"${this.path}" leads outside its mount through a link, the file itself or a directory on its path: ` +
         'move the file into the mount, so that neither it nor a directory on its path is a link that leads out';
     }
-    // Any other code is given in the read's own words, which name the path
-    // or, for a mount that's unavailable, the mount.
-    // That includes `parent_symlink`, from agent-framework's release with
-    // anima-research/agent-framework#468, for a link among the path's
-    // directories that leads neither out of the mount nor into a nested
-    // mount's directory: its message names the link and, where it leads
-    // somewhere, its target, and for a linked directory the mount's
-    // followSymlinks setting, so a remedy of the host's own would be wrong
-    // for some of them. It includes `other_mount` too, for a path in, or
-    // reached through a link into, a nested mount's directory, whose message
-    // names that mount and the path to use there.
+    // Any other code is given in the read's own words, which name the path or,
+    // for a mount that's unavailable, the mount. That includes
+    // `parent_symlink`, for a link among the path's directories that leads
+    // neither out of the mount nor into a nested mount's directory: its message
+    // names the link and, where it leads somewhere, its target, and for a
+    // linked directory the mount's followSymlinks setting, so a remedy of the
+    // host's own would be wrong for some of them. It includes `other_mount`
+    // too, for a path in, or reached through a link into, a nested mount's
+    // directory, whose message names that mount and the path to use there.
     return error instanceof Error ? error.message : String(error);
   }
 
@@ -365,8 +319,8 @@ export class InstructionsModule implements Module {
     this.notifyOps('instructions-unavailable', `no instructions injected: ${reason}`);
   }
 
-  /** Through the context object, which the real ModuleContext's notifyOps
-   *  reads as `this`; absent on a framework without it. */
+  /** Called on the context object: the real ModuleContext's notifyOps reads
+   *  `this`. */
   private notifyOps(kind: string, message: string): void {
     this.ctx?.notifyOps?.(kind, this.agentName, message);
   }

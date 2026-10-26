@@ -1,8 +1,4 @@
 /**
- * A load's repair of an agent's summaries, in the words its keeper reads: the
- * host's ops alert (index.ts), and the Web UI's Health tab, which imports it
- * as `@conhost/web/load-repair-alert`.
- *
  * context-manager repairs an agent's summary state each time it loads it, and
  * that repair can drop summaries: ones whose sources or range can't be read,
  * or whose links to other summaries are broken, with the summaries above
@@ -31,9 +27,7 @@ export interface LoadRepairDroppedSummary {
 
 /**
  * The report context-manager makes for a load whose repair dropped a summary
- * holding text, as its `LoadRepairReport` gives it. Declared here as well, as
- * the quarantine status is, so a context-manager without the report leaves
- * the host's alert unwired rather than failing its build.
+ * holding text, as its `LoadRepairReport` gives it.
  */
 export interface LoadRepairReport {
   namespace: string;
@@ -214,10 +208,9 @@ function removedText(report: Pick<LoadRepairReport, 'dropped'>): string {
     : `some of your summaries were removed, among them ones from ${days} (UTC).`;
 }
 
-/** Where the old summaries are, and how to read them back: from a copy taken
- *  while the host is stopped. Chronicle's open takes an exclusive lock, so a
- *  running host's store can't be opened beside it, and whether a copy taken
- *  while the host runs reads older sequences consistently isn't known. */
+/** Chronicle's open takes an exclusive lock, so a running host's store
+ *  can't be opened beside it: the old summaries are read back from a copy
+ *  taken while the host is stopped. */
 export function loadRepairReadBack(report: Pick<LoadRepairReport, 'branch' | 'stateId' | 'sequenceBefore'>, storePath?: string): string {
   const store = storePath ? `a copy of ${storePath}` : "a copy of the agent's store";
   // An observer without the ops scope gets the report with its branch
@@ -266,10 +259,8 @@ const HOST_POINTER = 'The message is in failures.log; the Health tab shows the l
  *  Health tab and /healthz never hold it. */
 export const AUDIT_POINTER = "The message is in failures.log and among the update's audit lines.";
 
-/** What the host sends through the framework's ops-alert channel for one
- *  load-repair report: its message in the keeper's words, ending with where
- *  to read the rest (`pointer`), since agent-framework's webhook keeps only a
- *  long message's start and end, and the report's fields as its data. */
+/** agent-framework's webhook keeps only a long message's start and end, so
+ *  the message ends with where to read the rest (`pointer`). */
 export function loadRepairAlert(
   report: LoadRepairReport, agent: string, storePath?: string, pointer: string = HOST_POINTER,
 ): { kind: string; message: string; data: Record<string, unknown> } {

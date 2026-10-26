@@ -14,6 +14,8 @@ import {
   trialPlaces, unfinishedTrial, unsyncedText, writeJsonAtomic, writeMark, type CopyLabel, type GoBackList, type JournalLine, type Mark,
 } from '../src/update/contract.js';
 
+const NAME_MAX = 255;
+
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'update-contract-')); });
 afterEach(() => { rmSync(root, { recursive: true, force: true }); });
@@ -89,7 +91,8 @@ describe('the update contract', () => {
   test('a temporary file or link a crash left behind is replaced by the next write', () => {
     const paths = installPaths(root);
     // Longer than the record written next, so a temporary file that kept its old bytes would show.
-    writeFileSync(`${paths.mark}.tmp`, `{ "v": 1, "id": "half a record from a crash", "note": "${'x'.repeat(400)}`);
+    const longerThanTheRecordWrittenNext = 'x'.repeat(400);
+    writeFileSync(`${paths.mark}.tmp`, `{ "v": 1, "id": "half a record from a crash", "note": "${longerThanTheRecordWrittenNext}`);
     symlinkSync(join('releases', '0.9.0'), `${paths.current}.tmp`);
     writeJsonAtomic(paths.mark, mark);
     moveCurrent(root, '0.10.2');
@@ -101,7 +104,7 @@ describe('the update contract', () => {
   test("a link a crash left that can't be removed is the filesystem's own error, and current stays", () => {
     const { current } = installPaths(root);
     moveCurrent(root, '0.10.2');
-    // A directory where the link was: no unlink removes it.
+    // A directory where the link was, which no unlink removes.
     mkdirSync(`${current}.tmp`);
     expect(() => moveCurrent(root, '0.11.0')).toThrow(expect.objectContaining({ syscall: 'unlink' }));
     expect(readCurrent(root)).toBe('0.10.2');
@@ -414,7 +417,7 @@ describe('the update contract', () => {
     const leftover = `${installPaths(root).current}.tmp`;
     symlinkSync(join('releases', '0.9.0'), leftover);
     // 256 bytes, in ASCII and in two-byte characters, which are only 128.
-    for (const bad of ['', '.', '..', '../x', 'a/b', 'a\0b', 'x'.repeat(256), '\u00e9'.repeat(128)]) {
+    for (const bad of ['', '.', '..', '../x', 'a/b', 'a\0b', 'x'.repeat(NAME_MAX + 1), '\u00e9'.repeat((NAME_MAX + 1) / 2)]) {
       expect(() => releaseDir('/r', bad)).toThrow(release(bad));
       expect(() => moveCurrent(root, bad)).toThrow(release(bad));
       expect(() => setAsideDir('/r', bad)).toThrow(markId(bad));
@@ -425,20 +428,20 @@ describe('the update contract', () => {
     // The host's ids name one directory each, and an entry's name may take 255 bytes.
     expect(setAsideDir('/r', mark.id)).toBe(`/r/set-aside/${mark.id}`);
     expect(itemSetAsideDir('/srv/data', mark.id)).toBe(`/srv/data/.connectome-update/set-aside/${mark.id}`);
-    expect(releaseDir('/r', 'x'.repeat(255))).toBe(`/r/releases/${'x'.repeat(255)}`);
-    expect(releaseDir('/r', `${'\u00e9'.repeat(127)}x`)).toBe(`/r/releases/${'\u00e9'.repeat(127)}x`);
+    expect(releaseDir('/r', 'x'.repeat(NAME_MAX))).toBe(`/r/releases/${'x'.repeat(NAME_MAX)}`);
+    expect(releaseDir('/r', `${'\u00e9'.repeat((NAME_MAX - 1) / 2)}x`)).toBe(`/r/releases/${'\u00e9'.repeat((NAME_MAX - 1) / 2)}x`);
   });
 
   test('copy item names start with their position, so no two fold into one name, and each fits one entry', () => {
     expect(copyItemName(0, '/srv/host/data')).toBe('0-data');
     expect(copyItemName(1, '/srv/host/mcpl-servers.json')).toBe('1-mcpl-servers.json');
     expect(copyItemName(2, '/srv/fleet/child-a/data/')).toBe('2-data');
-    // Folding case and Unicode form, as a default macOS volume does, keeps them apart.
+    // A default macOS volume folds case and Unicode form.
     const names = [copyItemName(0, '/a/Data'), copyItemName(1, '/b/data'), copyItemName(10, '/c/DATA')];
     expect(new Set(names.map((name) => name.normalize('NFD').toLowerCase())).size).toBe(3);
     // A long last part is cut to fit one entry, 255 bytes, at the end of a character.
-    expect(copyItemName(0, `/srv/${'a'.repeat(300)}`)).toBe(`0-${'a'.repeat(253)}`);
-    expect(copyItemName(10, `/srv/${'a'.repeat(300)}`)).toBe(`10-${'a'.repeat(252)}`);
+    expect(copyItemName(0, `/srv/${'a'.repeat(300)}`)).toBe(`0-${'a'.repeat(NAME_MAX - '0-'.length)}`);
+    expect(copyItemName(10, `/srv/${'a'.repeat(300)}`)).toBe(`10-${'a'.repeat(NAME_MAX - '10-'.length)}`);
     const long = copyItemName(0, `/srv/${'\u{1F600}'.repeat(80)}`);
     expect(long).toBe(`0-${'\u{1F600}'.repeat(63)}`);
     expect(Buffer.byteLength(long)).toBe(254);
@@ -507,7 +510,7 @@ describe('the update contract', () => {
       [item('0-data', 'srv/host/data')],
       // Each name is its own position's, so two items can't share an entry, nor one be the label.
       [item('data')], [item('copy.json')], [item('0-data'), item('0-data', '/srv/host/child/data')],
-      [item('0-a/b')], [item('0-a\0b')], [item(`0-${'a'.repeat(254)}`)], [item(`0-${'\u00e9'.repeat(127)}`)],
+      [item('0-a/b')], [item('0-a\0b')], [item(`0-${'a'.repeat(NAME_MAX + 1 - '0-'.length)}`)], [item(`0-${'\u00e9'.repeat((NAME_MAX + 1 - '0-'.length) / 2)}`)],
       // The position and its "-": position 1 can't take position 10's name.
       [item('0data')], [item('0-data'), item('10-data', '/srv/host/child/data')],
     ]) {

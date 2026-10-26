@@ -1,18 +1,6 @@
 /**
- * Ephemeral subagents must inherit the caller's proseRouting mode.
- *
- * AF's Agent defaults proseRouting to 'locus' (ambient locus capture
- * publishes plain prose to the open channel). Before this fix,
- * SubagentModule never passed proseRouting to createEphemeralAgent, so a
- * resident running proseRouting 'disabled' still spawned divers whose
- * between-tool-calls prose leaked into its live Zulip topic as parent
- * speech — field-confirmed on a deployed resident, 2026-08-26, and
- * reproduced again after the recipe adopted 'disabled' (the recipe value
- * reached only the resident, never the divers).
- *
- * Harness follows subagent-async-timeout.test.ts: real framework + mock
- * membrane, runEphemeralToCompletion stubbed — here to capture the
- * ephemeral Agent it receives so the test can read its proseRouting.
+ * agent-framework's Agent defaults proseRouting to 'locus', which publishes
+ * plain prose, where 'disabled' publishes none.
  */
 import { describe, test, expect } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';

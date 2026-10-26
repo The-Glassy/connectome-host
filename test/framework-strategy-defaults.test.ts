@@ -278,7 +278,7 @@ describe('carrierPolicy passthrough', () => {
       );
       expect(configView(strategy).carrierPolicy).toBe(value);
     }
-    // Omission resolves to Context Manager's own default ('full'), not to a host guess.
+    // context-manager's own default carrierPolicy is 'full'.
     const omitted = buildFrameworkStrategy(recipe({ name: 'Mira' }), 'some-model', 'America/Los_Angeles');
     expect(configView(omitted).carrierPolicy).toBe('full');
   });

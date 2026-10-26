@@ -1,30 +1,16 @@
 /**
- * Anthropic OAuth (subscription) credential source.
- *
  * Membrane resolves the bearer per request through a CredentialResolver and
- * retries a 401 once with `forceRefresh`; what it never does is ACQUIRE a
- * credential (membrane's src/ has no node: imports). This is the host half:
- * where the token comes from, whether it can rotate, and how to check it
- * without spending inference.
+ * retries a 401 once with `forceRefresh`.
  *
- * Two shapes of credential:
- *   - a bare token (`ANTHROPIC_AUTH_TOKEN`, typically `claude setup-token`):
- *     no refresh token, no expiry ⇒ not rotatable; the operator pastes a new
- *     one (`/auth token …`, WebUI "Paste new token").
- *   - a credentials FILE (`ANTHROPIC_OAUTH_CREDENTIALS_FILE`) in the shape
- *     Claude Code writes — `{ claudeAiOauth: { accessToken, refreshToken,
- *     expiresAt } }` — or the same three keys flat. With a refresh token the
- *     host can rotate at the vendor's token endpoint and writes the new pair
- *     back to the SAME file.
+ * A credentials file (`ANTHROPIC_OAUTH_CREDENTIALS_FILE`) is in the shape
+ * Claude Code writes, `{ claudeAiOauth: { accessToken, refreshToken,
+ * expiresAt } }`, or holds the same three keys flat. With a refresh token the
+ * host can rotate at the vendor's token endpoint, and it writes the new pair
+ * back to the SAME file.
  *
  * Point the file variable at a COPY, never at `~/.claude/.credentials.json`
  * itself: refresh tokens may be single-use, so two processes refreshing from
  * one file invalidate each other.
- *
- * Rotation is operator-driven by default: `forceRefresh` from membrane's
- * 401 retry returns the same token unless `autoRefresh` is on, so an expired
- * credential becomes an alert with a "Refresh token" action rather than a
- * silent rotation (the operator asked for click-to-act first).
  */
 
 import { readFileSync, renameSync, openSync, writeSync, closeSync, unlinkSync, fsyncSync } from 'node:fs';
@@ -32,7 +18,7 @@ import type { CredentialResolver, CredentialContext } from '@animalabs/membrane'
 import type { CredentialSource } from './credential-state.js';
 import { parseHandWrittenJson } from './hand-written-json.js';
 
-/** Claude Code's public OAuth client id (it ships in the CLI binary). */
+/** Claude Code's public OAuth client id. */
 export const CLAUDE_CODE_OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 export const ANTHROPIC_OAUTH_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
 
@@ -268,10 +254,9 @@ export class AnthropicOAuthCredentials implements CredentialSource {
   }
 
   /**
-   * Write the live credential to the file. The in-memory credential is the
-   * source of truth and is already updated when this runs: after a refresh
-   * the OLD pair may be dead (rotated refresh tokens), so a failed write must
-   * not roll memory back. The failure is recorded for the action outcome.
+   * The in-memory credential is the source of truth and is already updated
+   * when this runs: after a refresh the OLD pair may be dead (rotated
+   * refresh tokens), so a failed write must not roll memory back.
    */
   private persist(): void {
     if (!this.file) return;
@@ -290,8 +275,7 @@ export class AnthropicOAuthCredentials implements CredentialSource {
       ...(this.refreshToken ? { refreshToken: this.refreshToken } : {}),
       ...(this.expiresAtMs !== undefined ? { expiresAt: this.expiresAtMs } : {}),
     };
-    // Preserve the file's other keys (Claude Code keeps scopes etc. there)
-    // but never the stale token triple.
+    // Preserve the file's other keys (Claude Code keeps scopes etc. there).
     let existing: Record<string, unknown> = {};
     try {
       existing = parseHandWrittenJson(readFileSync(file, 'utf8')) as Record<string, unknown>;

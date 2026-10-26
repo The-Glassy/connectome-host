@@ -1,38 +1,7 @@
 /**
- * TtsRelayModule — streams the agent's live generation to a melodeus-tts-relay
- * server so voice clients (Melodeus, the iOS app) can speak it as it's born.
- *
- * Pure trace-bus tap (docs/observability.md spirit: traces are the outbound
- * wire, they never drive agent logic). The module subscribes to the framework's
- * existing streaming traces and re-emits the relay's bot-side protocol
- * (melodeus-tts-relay/PROTOCOL.md) over one outbound WebSocket:
- *
- *   inference:started                  → activation_start
- *   inference:tokens                   → chunk        (visible = blockType 'text')
- *   inference:content_block            → block_start / block_complete
- *   inference:completed / :turn_ended  → activation_end reason 'complete'
- *   inference:aborted                  → activation_end reason 'abort'
- *   inference:failed / :exhausted      → activation_end reason 'error'
- *
- * Channel tagging rides the turn-frozen locus the framework already stamps on
- * those traces (`channelId`, the MCPL composite id). The relay speaks raw
- * Discord snowflakes, so the composite's last segment is what goes on the wire.
- * `block_complete.content` is reconstructed here by accumulating that block's
- * chunks — the trace deliberately doesn't duplicate block content.
- *
- * Interruptions (the one inbound message): a voice client reports the words
- * actually voiced before the user spoke over them. Unlike ChapterX — which
- * aborts the in-flight stream and substitutes spokenText as the completion —
- * connectome posts prose at tool-round boundaries, so the message is usually
- * already on Discord. We therefore EDIT it down to the voiced words (matching
- * the interruption against the messages recent `inference:published` traces
- * report, each with its channelId + messageId + text) via the discord MCPL's
- * edit_message tool, and drop a note into the agent's context so she knows
- * she was cut off — the next turn shouldn't believe the full paragraph
- * landed.
- *
- * Nothing here touches the host loop: remove the recipe block and the tap is
- * gone. No tools are exposed to the agent (v1).
+ * Speaks the bot side of melodeus-tts-relay's protocol (its PROTOCOL.md)
+ * over one outbound WebSocket. The relay takes raw Discord channel ids, so
+ * the MCPL composite id's last segment goes on the wire.
  */
 
 import type {
@@ -188,7 +157,7 @@ class RelayBotClient {
     };
 
     ws.onerror = () => {
-      // onclose follows and owns the reconnect; nothing to do here.
+      // close follows, and onclose reconnects.
     };
   }
 
@@ -350,11 +319,8 @@ export class TtsRelayModule implements Module {
   private onTraceEvent(event: TraceEvent): void {
     switch (event.type) {
       case 'inference:published': {
-        // Remember what the agent's prose posted where, so an interruption
-        // can find its edit target: each published message, with the id its
-        // server returned. `mcpl:speech-routed` also reports publishes that
-        // aren't this prose, such as the `sleep` tool's announcement and a
-        // subconscious's `speak_in_channel`, which no interruption edits.
+        // mcpl:speech-routed also reports publishes that aren't this prose, so the
+        // edit targets come from inference:published.
         this.published.push({
           rawChannelId: rawChannelId(event.channelId),
           mcplChannelId: event.channelId,
@@ -369,8 +335,7 @@ export class TtsRelayModule implements Module {
       }
 
       case 'inference:started': {
-        // A context-budget restart re-emits inference:started mid-turn; the
-        // existing activation (announced or not) simply carries on.
+        // A context-budget restart emits inference:started again mid-turn.
         const st = this.activation(event.agentName);
         this.adoptChannel(st, event.agentName, traceChannelId(event));
         break;
@@ -407,8 +372,7 @@ export class TtsRelayModule implements Module {
         if (event.phase === 'block_start') {
           this.client?.emit('block_start', base);
         } else {
-          // Reconstructed from this block's chunks — the trace itself
-          // deliberately omits block content.
+          // inference:content_block carries no content.
           const content = st.blocks.get(event.blockIndex) ?? '';
           st.blocks.delete(event.blockIndex);
           this.client?.emit('block_complete', { ...base, content });

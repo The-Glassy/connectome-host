@@ -20,13 +20,14 @@
  *     api.registerModule((ctx) => new ZkFeederModule(config));
  *   }
  *
- * Design constraint: this loader is deliberately dumb. It resolves nothing,
- * fetches nothing, and negotiates no versions — it imports a local path and
- * calls `register`. The invariant "this path exists and is compatible with
- * the host's dependency tree" is established at install time by build
- * tooling (connectome-cook), not here. Extensions run in-process and share
- * the host's node_modules, so `extends AutobiographicalStrategy` resolves
- * against the exact @animalabs/* versions the host ships.
+ * It resolves nothing, fetches nothing, and negotiates no versions — it
+ * imports a local path and calls `register`. The invariant "this path
+ * exists and is compatible with the host's dependency tree" is established
+ * at install time by build tooling (connectome-cook), not here. Extensions
+ * run in-process. One whose imports resolve to the host's node_modules
+ * gets the exact @animalabs/* versions the host ships, so `extends
+ * AutobiographicalStrategy` resolves against them; nothing here checks
+ * that they do.
  *
  * `kind` declares the extension's primary purpose. It gates recipe
  * validation (a non-built-in `agent.strategy.type` is only accepted when at
@@ -46,8 +47,7 @@ import type { Recipe, RecipeExtension, RecipeStrategy } from './recipe.js';
 
 export interface StrategyFactoryContext {
   /** The recipe's `agent.strategy` block verbatim — including keys the
-   *  built-in schema doesn't know about, so custom strategies can define
-   *  their own knobs without upstream schema changes. */
+   *  built-in schema doesn't know about. */
   config: RecipeStrategy & Record<string, unknown>;
   /** Resolved agent model id (recipe/env fallback chain already applied). */
   model: string;

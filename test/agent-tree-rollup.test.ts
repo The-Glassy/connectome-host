@@ -12,7 +12,7 @@ import type { AgentNode } from '../src/state/agent-tree-reducer.js';
 type ActivePhase = 'sending' | 'streaming' | 'invoking' | 'executing';
 
 /** Reference implementation of the rollup. Mirrors tui.ts:rollupActivePhase. */
-function rollupActivePhase(nodes: AgentNode[]): ActivePhase | null {
+function referenceRollupActivePhase(nodes: AgentNode[]): ActivePhase | null {
   const PRIORITY: Record<ActivePhase, number> = {
     streaming: 5,
     invoking: 4,
@@ -42,14 +42,14 @@ describe('phase rollup for fleet-child header status', () => {
     const r = new AgentTreeReducer();
     r.applyEvent({ type: 'inference:started', agentName: 'a', timestamp: t(0) });
     r.applyEvent({ type: 'inference:completed', agentName: 'a', durationMs: 5, timestamp: t(1) });
-    expect(rollupActivePhase(r.getNodes())).toBeNull();
+    expect(referenceRollupActivePhase(r.getNodes())).toBeNull();
   });
 
   test('returns the agent phase when one agent is mid-stream', () => {
     const r = new AgentTreeReducer();
     r.applyEvent({ type: 'inference:started', agentName: 'a', timestamp: t(0) });
     r.applyEvent({ type: 'inference:tokens', agentName: 'a', content: 'hi', timestamp: t(1) });
-    expect(rollupActivePhase(r.getNodes())).toBe('streaming');
+    expect(referenceRollupActivePhase(r.getNodes())).toBe('streaming');
   });
 
   test('streaming wins over executing when multiple agents are busy', () => {
@@ -64,7 +64,7 @@ describe('phase rollup for fleet-child header status', () => {
     r.applyEvent({ type: 'tool:started', callId: 'c1', tool: 'x', module: 'm', timestamp: t(2) });
     // Now agent 'a' is in 'executing'. Add agent 'b' that starts streaming.
     r.applyEvent({ type: 'inference:tokens', agentName: 'b', content: 'hi', timestamp: t(3) });
-    expect(rollupActivePhase(r.getNodes())).toBe('streaming');
+    expect(referenceRollupActivePhase(r.getNodes())).toBe('streaming');
   });
 
   test('done and idle do not register as active', () => {
@@ -72,7 +72,7 @@ describe('phase rollup for fleet-child header status', () => {
     r.applyEvent({ type: 'inference:started', agentName: 'a', timestamp: t(0) });
     r.applyEvent({ type: 'inference:completed', agentName: 'a', durationMs: 5, timestamp: t(1) });
     r.seedFrameworkAgents(['idle-agent']); // phase=idle by default
-    expect(rollupActivePhase(r.getNodes())).toBeNull();
+    expect(referenceRollupActivePhase(r.getNodes())).toBeNull();
   });
 
   test('invoking and executing rank between sending and streaming', () => {
@@ -94,16 +94,16 @@ describe('phase rollup for fleet-child header status', () => {
       }
       return r;
     };
-    expect(rollupActivePhase(reduce('streaming').getNodes())).toBe('streaming');
-    expect(rollupActivePhase(reduce('invoking').getNodes())).toBe('invoking');
-    expect(rollupActivePhase(reduce('executing').getNodes())).toBe('executing');
-    expect(rollupActivePhase(reduce('sending').getNodes())).toBe('sending');
+    expect(referenceRollupActivePhase(reduce('streaming').getNodes())).toBe('streaming');
+    expect(referenceRollupActivePhase(reduce('invoking').getNodes())).toBe('invoking');
+    expect(referenceRollupActivePhase(reduce('executing').getNodes())).toBe('executing');
+    expect(referenceRollupActivePhase(reduce('sending').getNodes())).toBe('sending');
   });
 
   test('failed agents do not count as active (the activity rolled up is *current* work, not historical state)', () => {
     const r = new AgentTreeReducer();
     r.applyEvent({ type: 'inference:started', agentName: 'a', timestamp: t(0) });
     r.applyEvent({ type: 'inference:failed', agentName: 'a', error: 'boom', timestamp: t(1) });
-    expect(rollupActivePhase(r.getNodes())).toBeNull();
+    expect(referenceRollupActivePhase(r.getNodes())).toBeNull();
   });
 });

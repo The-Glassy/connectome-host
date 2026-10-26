@@ -160,9 +160,8 @@ class SubagentFailure extends Error {
 /** setTimeout's longest delay; a longer one fires at once. */
 const MAX_TIMER_MS = 2_147_483_647;
 const timerDelay = (ms: number): number => Math.min(MAX_TIMER_MS, Math.max(0, ms));
-/** How early a timer may fire, by Date.now(): Node's timers can fire up to
- *  1 ms before the time they were set for (Bun 1.4.3's didn't, in a probe
- *  of 2,000). */
+/** How early a timer may fire, by Date.now(): Node's timers can fire up
+ *  to 1 ms before the time they were set for. */
 const TIMER_SLACK_MS = 2;
 
 /** How long a running subagent may show no activity, with no stream, tool
@@ -210,9 +209,8 @@ const GIVE_MISSING: Record<string, Record<string, string>> = {
  *  text, a number, a boolean, and one list, `tools`, of names. */
 type DeclaredType = 'string' | 'number' | 'boolean' | 'array';
 
-/** Whether `value` is of the type its schema declares. A number JSON can't
- *  hold (a JSON 1e400 parses as Infinity) isn't one, and the list holds
- *  names, so text. */
+/** JSON.parse reads a number too large to hold, such as 1e400, as
+ *  Infinity. */
 function isDeclaredType(value: unknown, declared: DeclaredType): boolean {
   switch (declared) {
     case 'string': return typeof value === 'string';
@@ -251,9 +249,7 @@ function stopLabel(reason: SubagentTerminated['reason']): string {
   }
 }
 
-/** The number every agent name the module makes ends in: the time in ms, or
- *  one past the last name's number once that has caught up with the time.
- *  agent-framework refuses to create an agent under a name it has seen in
+/** agent-framework refuses to create an agent under a name it has seen in
  *  the framework's life, and a retry, or a new run under a name an earlier
  *  run used, can start in the same millisecond as an earlier attempt. */
 let lastNameStamp = 0;
@@ -394,13 +390,9 @@ export function buildIntentionFramedForkResult(
 }
 
 /**
- * Everything in a fork's intention-framed result before the restated
- * intention: the dual-stream framing, the depth, the orientation and the
- * return instruction. A stream's message cap keeps a message's beginning,
- * so this part leads the result, and it must reach the stream whole: a cut
- * anywhere in it refuses the launch. Only the restated intention can be cut
- * without that, since the fork's own call (a tool call, which the cap
- * passes whole) carries all of it.
+ * The part of a fork's result that must reach the stream whole, so it leads
+ * the result: the message cap keeps a message's beginning, and passes the
+ * fork's own call, which carries the whole intention, whole.
  */
 export function intentionFramedHead(
   depth: number,
@@ -435,6 +427,7 @@ const SUBAGENT_STRATEGY = {
   maxMessageTokens: 10_000,
 } as const;
 const SUBAGENT_STREAM_TOKENS = 500_000;
+const FRAMEWORK_DEFAULT_MAX_TOKENS = 4096;
 
 const UNNAMED_LAUNCHER = 'agent';
 
@@ -447,28 +440,11 @@ const FLEET_HEADING = /^\[Fleet Status(, as of [^\]]*)?\]$/;
 export const SUBAGENT_MESSAGE_CAP = SUBAGENT_STRATEGY.maxMessageTokens;
 
 /**
- * What a launch must deliver to its stream, in the shape it composed it.
- * Each message in a stream's context is capped alone (SUBAGENT_STRATEGY's
- * maxMessageTokens): the cap counts its text and string tool results and
- * keeps its beginning; past the budget it cuts or drops text, and cuts a
- * string tool result or replaces it with an omission notice, while tool
- * calls and structured results pass whole. So what was stored can still be
- * missing from what the stream reads. A launch's check compiles the stream's
- * context the way its first inference will: the launch sets no context
- * budget, so both use the context manager's default, and both cap and
- * select the stored messages before any injection is added. What it reads
- * is the launch's own compile. Between the two, only the stream's own
- * compression can change what's selected, and it can reach a fork's call
- * and result only when their result message, with what's added after it
- * before the first request, is longer than the stream's recent window,
- * which context-manager 0.14.1 counts newest-first in its store's
- * estimates, raw until the stream's first call calibrates them
- * (getUnheldRecentWindowStart). agent-framework 0.22.3 adds up to two such
- * messages at the stream's first start: the prose-routing primer under
- * explicit or hybrid routing (maybePrimeProseMode), and a one-line routing
- * notice under locus or hybrid routing once the stream's channel resolves
- * (announceLocusIfChanged). A fork's restated task nearly as long as the
- * window would make that so.
+ * context-manager caps each message in a stream's context alone
+ * (SUBAGENT_STRATEGY's maxMessageTokens) and keeps its beginning: past the
+ * budget it cuts or drops text, and cuts a string tool result or replaces it
+ * with an omission notice, while tool calls and structured results pass
+ * whole. So what was stored can still be missing from what the stream reads.
  */
 export type LaunchDelivery =
   /** A spawn's or a parentless fork's own first messages: the orientation,
@@ -513,16 +489,11 @@ export function undeliveredLaunchParts(
       ? (result.content as Array<{ type?: unknown; text?: unknown }>)
           .map((c) => (c.type === 'text' && typeof c.text === 'string' ? c.text : '')).join('')
       : '';
-  // A fork's call and its result arrive or go together in a launch's first
-  // compile (context-manager 0.14.1): the head window doesn't end between a
-  // tool call and its result (getHeadWindowEnd, whose anchorHeadToCoverage
-  // keeps that boundary while nothing owns a message, as in a launch's new
-  // store), the recent window doesn't start at a tool result
-  // (getUnheldRecentWindowStart) and drops a leading result whose call it
-  // left out (emitRecentNewestFirst), and the cap passes a tool call whole
-  // and keeps every tool result, cut or replaced by an omission notice. So
-  // only the cap cuts a result that is there, and a result that isn't there
-  // is the call's part to say.
+  // In a launch's first compile, from a new store, context-manager keeps a
+  // fork's call and its result together: its head window doesn't end, nor its
+  // recent window start, between a tool call and its result, and its cap
+  // passes a tool call whole and keeps every tool result, cut or replaced by
+  // an omission notice. So only the cap cuts a result that is there.
   if (result !== undefined && !resultText.startsWith(delivery.head)) cut.push('orientation');
   const call = blocks.find((b) => {
     const block = b as { type?: unknown; id?: unknown };
@@ -538,10 +509,9 @@ type ProseRouting = 'locus' | 'explicit' | 'hybrid' | 'disabled';
 
 /** What each prose-routing mode does with a stream's plain text, as
  *  agent-framework documents the mode (AgentConfig.proseRouting). As terse
- *  as AF's own mode primer, since a spawn's orientation is a user-role
- *  message: explicit's is the primer's own (agent-framework 0.22.3
- *  proseModePrimer), whose prose_help pointer proseRoutingEffect adds only
- *  for a stream that is shown the tool. */
+ *  as its own mode primer (proseModePrimer), since a spawn's orientation is
+ *  a user-role message too, where agent-framework found the full grammar
+ *  drew a provider's refusal. */
 const PROSE_ROUTING_EFFECT: Record<ProseRouting, string> = {
   locus: 'plain text is published to the channel the framework infers for each turn, if there is one',
   explicit: 'plain text is delivered only with a destination prefix line, such as ">>#channel"',
@@ -718,12 +688,11 @@ export function agentSettingsOf(agent: {
   };
 }
 
-/** A clock setting as the orientation names it: its interval, in minutes
- *  when it is whole minutes, else in seconds, since `Agent.clock` keeps only
- *  seconds and the unit the recipe gave can't be told; and ", read to the
- *  second" where its precision is seconds at a whole-minute interval, the one
+/** `Agent.clock` keeps only seconds, so the unit the recipe gave can't be
+ *  told: an interval reads in minutes when it is whole minutes, else in
+ *  seconds. Seconds precision at a whole-minute interval is the one
  *  precision that isn't its interval's default (agent-framework's
- *  resolveClockConfig). */
+ *  resolveClockConfig), so only it is named. */
 function clockRows(clock: { intervalSeconds: number; precision?: string }): string {
   const seconds = clock.intervalSeconds;
   if (seconds % 60 !== 0) return `every ${seconds === 1 ? '1 second' : `${seconds} seconds`}`;
@@ -904,9 +873,8 @@ export function describeSubagentLaunch(launch: SubagentLaunch): string {
   const explicit = launch.proseRouting === 'explicit';
   // prose_help isn't on the board: explicit prose routing shows it to a
   // stream whose rules allow it (agent-framework's
-  // availableToolsForPresentation checks canUseTool), so a
-  // stream gets it though the process doesn't offer it at the call. The
-  // depth limit's rules, built from what the process offers, never hold it.
+  // availableToolsForPresentation checks canUseTool), so a stream gets
+  // it though the process doesn't offer it at the call.
   const shownHelp = explicit && allowed !== 'all' && allowed.includes('prose_help');
 
   // The stream runs its caller's prose routing, so with a calling stream it
@@ -1536,18 +1504,8 @@ export class SubagentModule implements Module {
       clearInterval(this.reaperTimer);
       this.reaperTimer = null;
     }
-    // End every run left, such as one waiting for a slot, a retry back-off or
-    // a rate-limit cooldown, so none tries again once its wait ends. A live
-    // attempt was rejected before this, by framework.stop(), which rejects
-    // every ephemeral run before it stops modules, and its run ended on that
-    // while ctx was still set. A run queued behind it is admitted as that
-    // run fails, and its own attempt meets the framework's refusal before
-    // this runs, so it ends as a failure too. The runs this ends settle in a
-    // later microtask, once ctx is null, so a background run's result isn't
-    // delivered (deliverAsyncResult) and its end isn't persisted
-    // (persistState): restoreFromStore reads one that had started as
-    // interrupted, as before stop() ended it, and one still queued for a
-    // slot left no record.
+    // framework.stop() rejects every ephemeral run before it stops modules,
+    // so no attempt is live here.
     for (const name of [...this.cancellationHandles.keys()]) this.stopTree(name, 'killed');
     this.ctx = null;
   }
@@ -1796,10 +1754,9 @@ export class SubagentModule implements Module {
     // the orchestrator's context.
     const allowed = this.scopeOf(agentName);
 
-    // agent-framework stores this injection where the compile placed it, and
-    // again only when the agent's last request didn't render the same text
-    // from the store; while it holds the agent's window it places the status
-    // rather than storing it (anima-research/context-manager#155 part 5).
+    // agent-framework stores this status in the agent's window, and stores it
+    // again only when its text differs from the newest copy: one a start stored
+    // that no request has sent, or else what the last request rendered.
     const lines: string[] = [];
     const scoped = [...this.activeSubagents.values()].filter((sa) => allowed.has(sa.name));
     let latestChange: number | undefined;
@@ -2233,13 +2190,10 @@ export class SubagentModule implements Module {
     return { summary, findings: [], issues: [], toolCallsCount: 0 };
   }
 
-  /** The words the classifiers read: the failure's message without the
-   *  ephemeral agent's name, which the framework quotes in its own messages
-   *  ("Ephemeral agent \"spawn-migrate-…\" failed to start inference …") and
-   *  which holds the name the agent chose. agent-framework 0.22.3 gives an
-   *  ephemeral run's failure no other structure to read: it rejects with an
-   *  Error carrying the text, apart from its ProviderWaitNotSleptError,
-   *  which isUnsleptProviderWait reads by name. */
+  /** agent-framework quotes the ephemeral agent's name in its own messages
+   *  ("Ephemeral agent \"spawn-migrate-…\" failed to start inference …"), and
+   *  the name is the agent's choice, so it's taken out before the classifiers
+   *  read the words. */
   private classifiedText(err: Error, agentName?: string): string {
     const text = agentName ? err.message.split(agentName).join('') : err.message;
     return text.toLowerCase();
@@ -2259,13 +2213,9 @@ export class SubagentModule implements Module {
       || /too many (\w+ )?requests/.test(msg);
   }
 
-  /** The framework ended the run rather than sleep the stated wait of a
-   *  retryable failure: one longer than an ephemeral run sleeps, or one it
-   *  can't read as a number. Either way the provider asked for a wait the
-   *  run won't sit out, so a restart would only call it again too soon.
-   *  agent-framework 0.22.3 rejects such a run with its
-   *  `ProviderWaitNotSleptError`, read here by its name, which a second copy
-   *  of the package gives its own class too. */
+  /** agent-framework rejects a run whose provider asked for a wait it won't
+   *  sleep with its ProviderWaitNotSleptError, read here by its name, which a
+   *  second copy of the package gives its own class too. */
   private isUnsleptProviderWait(err: Error): boolean {
     return err.name === 'ProviderWaitNotSleptError';
   }
@@ -2552,10 +2502,9 @@ export class SubagentModule implements Module {
     let messageCount = 0;
     let lastMessageSnippet = '';
     try {
-      // A dry compile: a peek only reads, so it mustn't commit the stream's
-      // fold state or queue its compression, as a real compile would. A plan
-      // over the budget it compiles at is returned, where a real compile
-      // refuses it.
+      // A dry compile: unlike a real one, it commits none of the stream's fold
+      // state, queues no compression, and returns a plan over the budget it
+      // compiles at rather than refusing it.
       const compiled = await live.contextManager.compile(undefined, undefined, { dryRun: true });
       const said = compiledWithoutStoredInjections(compiled);
       messageCount = said.length;
@@ -2622,18 +2571,13 @@ export class SubagentModule implements Module {
       const parent = this.framework?.getAgent(parentName);
       if (parent) return parent.maxTokens;
     }
-    return 4096;
+    return FRAMEWORK_DEFAULT_MAX_TOKENS;
   }
 
-  /** Race an attempt against its run's time limit: `limitMs` long, ending
-   *  at `deadline`, so every attempt shares one limit. At the deadline,
-   *  `stop` ends the run itself, and the error is the module's own, which
-   *  the retry loop doesn't retry. A stop that throws is logged, and the
-   *  limit still ends the attempt. The framework's startup watchdog for the
-   *  attempt ends at the deadline too (watchdogsFor), and its timer can
-   *  fire first, so a failure that ends the attempt at the deadline is
-   *  reported as the time limit, whichever settled it. The timer ends with
-   *  the attempt, so a finished run is never stopped late. */
+  /** agent-framework's startup watchdog for an attempt ends no later than the
+   *  deadline (watchdogsFor), and its timer can fire before this one, so a
+   *  failure at the deadline is reported as the time limit, whichever settled
+   *  it. */
   private withTimeout<T>(promise: Promise<T>, name: string, kind: 'spawn' | 'fork', limitMs: number | undefined, deadline: number | undefined, stop: () => void): Promise<T> {
     if (limitMs === undefined || deadline === undefined) return promise;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -2661,11 +2605,10 @@ export class SubagentModule implements Module {
     );
   }
 
-  /** The framework's watchdogs for an attempt of a run with a deadline: its
-   *  startup watchdog no later than the deadline, so a run whose inference
-   *  hasn't started by then (held behind a provider wait, say) is dropped by
-   *  the framework rather than started after the run was reported timed
-   *  out. Without a deadline, the framework's own. */
+  /** agent-framework rejects an attempt whose inference hasn't started within
+   *  its startup watchdog, 30 s unless given, so one held past the deadline
+   *  (behind a provider wait, say) is rejected rather than started after the
+   *  run was reported timed out. */
   private watchdogsFor(deadline: number | undefined): { startupTimeoutMs: number } | undefined {
     if (deadline === undefined) return undefined;
     return { startupTimeoutMs: Math.max(1, Math.min(30_000, deadline - Date.now())) };
@@ -2765,8 +2708,7 @@ export class SubagentModule implements Module {
     } catch { /* a strategy that can't be read reports nothing */ }
     const parentRuntime = parentAgent?.getRuntimeSettings();
 
-    // Agent defaults to 'locus'. A resolved caller's mode is inherited, so
-    // children of a 'disabled' caller can't leak prose into its live channel.
+    // Without a caller, the stream takes agent-framework's default, 'locus'.
     const proseRouting = parentAgent?.proseRouting;
     return {
       kind,
@@ -2789,7 +2731,7 @@ export class SubagentModule implements Module {
         // names it (canUseTool tests membership).
         ...(allowed !== 'all' ? { granted: [...new Set(allowed)].filter((name) => name === 'subagent--return' || offered.has(name)) } : {}),
         // filterToolNames' own threshold.
-        depthLimited: callerDepth + 1 >= this.maxDepth,
+        depthLimited: this.atDepthLimit(callerDepth),
       },
       parent: parentAgent
         ? {
@@ -2831,20 +2773,12 @@ export class SubagentModule implements Module {
   }
 
   /**
-   * The tools an ephemeral stream is shown, as the board stands when the
-   * launch composes its first context. The framework reads the board again
-   * when it assembles the first request, so a server that changes its tools
-   * in between isn't reflected here; the request's own tool list is what
-   * the stream can call. The framework builds that surface
-   * (agentToolSurface) from the shared board filtered by the agent's own
-   * permissions, plus prose_help under explicit
-   * prose routing when those permissions allow it (agent-framework 0.22.3's
-   * availableToolsForPresentation). An ephemeral agent has no presentation
-   * and isn't the subconscious, so nothing else applies, and it isn't
-   * registered until its run starts, so listToolClasses can't be asked yet.
-   * The orientation tests set this against listToolClasses once the stream
-   * is registered, and against the request it sends, so a change in the
-   * framework's rule fails them.
+   * agent-framework builds an agent's tool surface from the shared board
+   * filtered by its permissions, leaving out `utils` when they permit no
+   * utility, plus prose_help under explicit prose routing when they allow it
+   * (availableToolsForPresentation). It reads the board again when it
+   * assembles the first request, and it lists an ephemeral agent only once its
+   * run starts, so listToolClasses can't be asked yet.
    */
   private streamSurface(agent: { canUseTool(name: string): boolean; proseRouting: ProseRouting }): string[] {
     const names = this.getFramework().getAllTools()
@@ -3136,8 +3070,7 @@ export class SubagentModule implements Module {
       say(launcher === this.config.parentAgentName ? '' : `, for '${shown}'`, launcher);
       return launcher;
     }
-    // agent-framework lists no attempt of a run between its attempts, or while
-    // the next is being set up (registerLive comes before it lists the agent),
+    // agent-framework lists an attempt's agent only while that attempt runs,
     // and refuses a write for an agent it doesn't list.
     const run = this.runOfAttempt.get(launcher);
     if (run !== undefined) {
@@ -3411,23 +3344,16 @@ export class SubagentModule implements Module {
         this.registerLive(input.name, agentName, launch.systemPrompt, contextManager);
 
         try {
-          // What this stream runs on (the launch as resolved at the call,
-          // and the tool surface it actually has now), then the task, each
-          // its own message: the cap applies to each message alone, so each
-          // has all of it. The native formatter merges the two into one user
-          // turn after the cap; the anthropic-xml and openai-responses
-          // formatters send them as two consecutive user turns. The delivery
-          // check below refuses a stream that wouldn't read either whole.
+          // The orientation, then the task, each its own message: the cap
+          // applies to each message alone, so each has all of it.
           const orientation = this.orientationFor(launch, agent, { kind: 'none', reason: 'spawn' });
           contextManager.addMessage('user', [{ type: 'text', text: orientation }]);
           contextManager.addMessage('user', [{ type: 'text', text: input.task }]);
 
-          // The stream must read what the launch promises: refuse it when
-          // its orientation or its whole task isn't in the launch's compile
-          // of its first context. It's a real compile, not a dry one: a dry
-          // compile returns an over-budget plan where a real one refuses it,
-          // and the stream's context is fresh, so its first request's compile
-          // starts from what this one leaves.
+          // A real compile, not a dry one: a dry compile returns an
+          // over-budget plan where a real one refuses it, and the stream's
+          // context is fresh, so its first request's compile starts from what
+          // this one leaves.
           const { messages } = await Promise.race([contextManager.compile(), cancel.promise]);
           // The race takes compile's result when compiling settles first, so
           // a cancel that lands just after is thrown here: the run ends
@@ -3657,13 +3583,9 @@ export class SubagentModule implements Module {
           // plus a synthetic intention-framed fork tool_use/tool_result.
           if (parentAgent) {
             const parentCM = parentAgent.getContextManager();
-            // A dry compile: the fork reads the parent's context as a real
-            // compile would give it, without committing the parent's fold
-            // state or queuing its compression on the parent's behalf. A plan
-            // over the budget it compiles at, the manager's default, is
-            // returned, where a real compile refused it and failed the fork;
-            // the fork's own launch check, a real compile of its own context,
-            // still refuses a first context the fork can't use.
+            // A dry compile: unlike a real one, it commits none of the
+            // parent's fold state, queues no compression on its behalf, and
+            // returns a plan over the budget rather than refusing it.
             const compiled = compiledWithoutStoredInjections(await Promise.race([
               parentCM.compile(undefined, undefined, { dryRun: true }),
               cancel.promise,
@@ -3729,13 +3651,8 @@ export class SubagentModule implements Module {
               };
             }
           } else {
-            // No parent stream: nothing to inherit, and no fork call to
-            // answer. The stream still gets its intention and its
-            // orientation as its first message, rather than starting with an
-            // empty context and no task at all.
-            // The orientation and the return instruction, then the task alone,
-            // each its own message, as for a spawn, so each has the whole cap
-            // and the task check measures the task itself.
+            // The orientation and the task, each its own message as for a
+            // spawn, since the cap applies to each message alone.
             const orientation = `${orient({ kind: 'none', reason: 'no-parent' })}\n\n` +
               'When this intention is complete, return your findings via subagent--return. Your intention for this stream follows.';
             contextManager.addMessage('user', [{ type: 'text', text: orientation }]);
@@ -3743,11 +3660,8 @@ export class SubagentModule implements Module {
             delivery = { kind: 'message', orientation, taskBlock: input.task };
           }
 
-          // The stream must read what the launch promises: refuse it when
-          // its orientation or its whole task isn't in the launch's compile
-          // of its first context. A fork with a call reads its whole task in
-          // that call. It's a real compile, as a spawn's is, so an over-budget
-          // first context is refused here, before the run starts.
+          // A real compile, as a spawn's is, so an over-budget first context is
+          // refused here, before the run starts.
           const { messages } = await Promise.race([contextManager.compile(), cancel.promise]);
           // The race takes compile's result when compiling settles first, so
           // a cancel that lands just after is thrown here: the run ends
@@ -3905,6 +3819,10 @@ export class SubagentModule implements Module {
    * Inherits or narrows the caller's tools. At the depth limit it keeps only
    * the tools the process offers now, less the subagent tools.
    */
+  private atDepthLimit(callerDepth: number): boolean {
+    return callerDepth + 1 >= this.maxDepth;
+  }
+
   private filterToolNames(requestedTools: string[] | undefined, callerDepth: number, parent: Agent | null): 'all' | string[] {
     const inheritedTools = parent?.allowedTools ?? 'all';
     const allowedTools = inheritedTools === 'all'
@@ -3919,7 +3837,7 @@ export class SubagentModule implements Module {
       list.includes('subagent--return') ? [...list] : [...list, 'subagent--return'];
 
     // Use per-agent depth (from caller) rather than the module's static depth
-    if (callerDepth + 1 >= this.maxDepth) {
+    if (this.atDepthLimit(callerDepth)) {
       const filtered = [...this.offeredNames()].filter(name => !name.startsWith('subagent--'));
       if (allowedTools) {
         const allowed = new Set(allowedTools);

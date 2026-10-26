@@ -3,19 +3,20 @@
  * Evacuator: compose a conhost revival recipe from a claude.ai data export.
  *
  * Walks the operator through five interactive steps, checkpointing state to
- * disk after each so an interrupted session resumes where it stopped:
+ * disk after each, so `--resume` picks up an interrupted session where it
+ * stopped:
  *
- *   1. Detect model from chat_messages (or accept --model)
+ *   1. Detect model from conversations.json (or accept --model)
  *   2. Fetch the leaked system prompt for that model
- *   3. Optionally run Sonnet to adjust the prompt for the transplant context
+ *   3. Optionally have that model adjust the prompt for the transplant context
  *   4. $EDITOR opens the system prompt; operator finalizes
- *   5. $EDITOR opens memories.json's persistent_memory block; operator finalizes
+ *   5. $EDITOR opens memories.json's conversations_memory entries; operator
+ *      finalizes
  *   → Compose final recipe and write it
  *   → Optionally chain into warmup-session.ts
  *
- * The collapse to "open in $EDITOR" is deliberate: save = include verbatim,
- * empty buffer = omit, anything else = edited. No custom include/omit/edit
- * menu.
+ * In each editor pass, save = include verbatim and anything else = edited; an
+ * empty buffer aborts at step 4 and omits the memories at step 5.
  *
  * Run:
  *   bun scripts/evacuator.ts <export-dir>
@@ -42,11 +43,8 @@ import { SessionManager, type SessionMeta } from '../src/session-manager.js';
 import { resolveAgentName } from '../src/agent-name.js';
 import { parseHandWrittenJson } from '../src/hand-written-json.js';
 
-// ---------------------------------------------------------------------------
-// Known leaked-prompt URLs keyed by model ID. New models: add an entry.
-// Values are raw-content URLs (githubusercontent.com / similar), not the
-// HTML page URL.
-// ---------------------------------------------------------------------------
+// Values are raw-content URLs (githubusercontent.com or similar): a page URL
+// would fetch the page's HTML as the prompt.
 
 export const MODEL_PROMPT_SOURCES: Record<string, string> = {
   // x1xhlol
@@ -252,11 +250,8 @@ function loadState(dataDir: string): State {
   }
 }
 
-/**
- * Write-and-rename so an interrupted run leaves either the prior good state
- * file or no change — never a half-written file. POSIX rename is atomic on
- * the same filesystem; we put the temp file in the same dir for that reason.
- */
+/** rename(2) replaces atomically only within one filesystem, so the temp file
+ *  sits beside the state file. */
 function saveState(dataDir: string, state: State): void {
   mkdirSync(dataDir, { recursive: true });
   const final = statePath(dataDir);

@@ -15,9 +15,8 @@ type Block = { type: string; text?: string; signature?: string; id?: string; too
 const blocksOf = (m: unknown) => (m as { content: Block[] }).content;
 const roleOf = (m: unknown) => (m as { role: string }).role;
 
-// An assistant turn that ran a web search: membrane keeps each Anthropic
-// server-tool block on a zero-width carrier, and inference through its
-// Anthropic API adapter sends the blocks back in that turn.
+// membrane keeps each Anthropic server-tool block on a zero-width text
+// carrier (`rawItem`).
 const searchTurn: NormalizedMessage[] = [
   { participant: 'Lari', content: [{ type: 'text', text: 'what changed?' }] },
   { participant: 'agent', content: [
@@ -53,12 +52,9 @@ describe('buildCountTokensPayload', () => {
     expect(payload.system).toEqual(reference.systemContent);
   });
 
-  // The name rides in the message's own text, never as a block of its own,
-  // and the first text block carries it: that much any formatter must keep,
-  // and the test pins it. Which later blocks carry the name too is the
-  // formatter's choice: membrane 0.5.86 prefixes every one, and membrane's
-  // main (f857fff) only the first. So for the rest, the payload must equal
-  // the formatter's own output.
+  // Which text blocks after the first carry the participant's name is the
+  // formatter's choice, and differs between membrane releases, so the payload
+  // must equal the formatter's own output.
   test('prefixes a named user message in place, as the formatter does — no standalone name block', () => {
     const messages: NormalizedMessage[] = [{ participant: 'Lari', content: [{ type: 'text', text: 'one' }, { type: 'text', text: 'two' }] }];
     const payload = buildCountTokensPayload({ messages }, 'agent');
@@ -118,12 +114,8 @@ describe('buildCountTokensPayload', () => {
     expect(payload.system).toBeUndefined();
   });
 
-  // An anthropic-xml agent's count takes that formatter's path, prefill or
-  // not (buildContextMakeup), and the whole payload must equal its own build:
-  // system, messages and tools. The formatter sends the prefill first, in
-  // place of its default opener, whenever its request would otherwise open
-  // with the assistant's turn (the transcript), and so must the count; an
-  // image goes in a user turn of its own, so an image-first request gets none.
+  // The XML formatter sends the prefill first, in place of its default opener,
+  // whenever its request would otherwise open with the assistant's turn.
   const xmlOptions = {
     participantMode: 'multiuser' as const, assistantParticipant: 'agent', toolMode: 'xml' as const,
     promptCaching: false, cacheMarkers: 'membrane-system' as const,
@@ -179,10 +171,8 @@ describe('buildCountTokensPayload', () => {
     expect(JSON.stringify(payload)).not.toContain('PREFILL SCAFFOLD');
   });
 
-  // Since membrane 0.5.87 the native formatter uses prefillUserMessage as the
-  // synthetic user turn it puts before assistant-first history (it used to be
-  // `[continuing]` whatever the caller passed), so a native agent's count
-  // carries the prefill exactly where inference sends it.
+  // membrane's native formatter uses prefillUserMessage as the synthetic user
+  // turn it puts before assistant-first history.
   test('a native agent\'s count carries a prefill where the native formatter puts it: the leading user turn', () => {
     const messages: NormalizedMessage[] = [
       { participant: 'agent', content: [{ type: 'text', text: 'earlier reply' }] },
@@ -313,7 +303,9 @@ test("a subagent's context count places its tools as the primary agent's model d
   const messages: NormalizedMessage[] = Array.from({ length: 30 }, (_, i) => ({
     participant: i % 2 === 1 ? 'sub' : 'user', content: [{ type: 'text', text: `message ${i}` }],
   }));
-  const models: Record<string, string> = { agent: 'anthropic.claude-sonnet-4-5-20250929-v1:0', sub: 'anthropic.claude-3-opus-20240229-v1:0' };
+  const cachingOnBedrock = 'anthropic.claude-sonnet-4-5-20250929-v1:0';
+  const cachingOffBedrock = 'anthropic.claude-3-opus-20240229-v1:0';
+  const models: Record<string, string> = { agent: cachingOnBedrock, sub: cachingOffBedrock };
   const app = {
     recipe: { agent: { name: 'agent', formatter: 'anthropic-xml', provider: 'bedrock', systemPrompt: 'You are agent.' } },
     framework: {

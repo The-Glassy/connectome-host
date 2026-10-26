@@ -1,21 +1,7 @@
 /**
- * Two compiles the subagent module makes for no request of their own are dry
- * runs: a peek's compile of a stream's context, and a fork's compile of its
- * parent's context, from which the fork's seed is built. A dry compile gives
- * what a real compile would, and commits no fold resolutions or chunk records,
- * queues no compression and leaves what the next compile and its observers
- * read (context-manager's SelectOptions.dryRun), though it still releases a
- * compression hold past its deadline, as any compile does.
- *
- * Each launch's check of its stream's first context stays a real compile: a
- * dry compile returns an over-budget plan where a real one refuses it, and the
- * check exists to refuse a first context the stream can't use before the run
- * starts.
- *
- * The fork and spawn cases wrap the context managers' compile to record
- * whether each call was dry and what it returned, and run the real
- * runEphemeralToCompletion against the mock provider, so the request a stream
- * sends is the provider's. The peek case reads a stand-in context manager.
+ * context-manager's dry compile (SelectOptions.dryRun) commits nothing a later
+ * compile or an observer reads, though it releases a compression hold past its
+ * deadline, and it returns an over-budget plan where a real compile refuses it.
  */
 import { describe, test, expect } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';

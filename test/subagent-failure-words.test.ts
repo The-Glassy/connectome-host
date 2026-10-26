@@ -144,7 +144,8 @@ describe('every input is checked against the type its schema declares', () => {
       expect(h.subagent.getConcurrencyStatus()).toMatchObject({ configured: 5, effective: 5 });
       expect(sub.returnedResults.has('scout')).toBe(false);
       // A tool the module doesn't have is answered as that, whatever its input.
-      expect((await h.subagent.handleToolCall(call('constructor', 'x'))).error).toStartWith('There\'s no tool "subagent--constructor"');
+      const aNameObjectPrototypeHasToo = 'constructor';
+      expect((await h.subagent.handleToolCall(call(aNameObjectPrototypeHasToo, 'x'))).error).toStartWith('There\'s no tool "subagent--constructor"');
     } finally { await h.cleanup(); }
   });
 

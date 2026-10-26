@@ -59,17 +59,12 @@ export interface ObserversModuleConfig {
  *  or an offset as +HH:MM or +HHMM. */
 const EXPIRY_FORM = /^(\d{4})-(\d{2})-(\d{2})(?:[Tt ](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)([Zz]|[+-]\d{2}:?\d{2})?)?$/;
 
-/** An expiry given in the form (EXPIRY_FORM), written in ECMAScript's own
- *  form: T before the time, Z, and an offset with its colon, a time without
- *  a zone staying without one. The grant checks this text, so the check
- *  reads what the registry later reads (liveScopes, verifyHello). Bun
- *  1.4.3's Date.parse reads a date with a space before the time leniently:
- *  an offset out of range is read anyway, and a year below 100 moves into
- *  the 1900s or 2000s. ECMAScript's own form it reads as written, a date
- *  alone as UTC and a time without a zone in the host's time zone, or not
- *  at all, apart from a day the month doesn't have, which it moves into the
- *  next month (daysIn). `timed` says whether the text has a time, and
- *  `zoned` whether it names its zone. */
+/** Bun's Date.parse reads a date with a space before the time leniently:
+ *  an offset out of range is read anyway, and a year below 100 can move into
+ *  the 1900s or 2000s. ECMAScript's own form (T before the time) it reads as
+ *  written, a date alone as UTC and a time without a zone in the host's time
+ *  zone, or not at all, apart from a day the month doesn't have, which it
+ *  moves into the next month. */
 function ecmaExpiry(typed: string): { text: string; year: number; month: number; day: number; timed: boolean; zoned: boolean } | null {
   const form = EXPIRY_FORM.exec(typed);
   if (!form) return null;
@@ -212,16 +207,9 @@ export class ObserversModule implements Module {
             `the scopes are ${OBSERVER_SCOPES.join(', ')}`,
           );
         }
-        // Absent, null and "" all mean no end. Anything else must be a date
-        // in the ISO form (EXPIRY_FORM) that the registry reads as still to
-        // come, by its own rule (liveScopes, verifyHello): one that has
-        // passed it would never admit. It's read as ECMAScript's own form
-        // writes it (ecmaExpiry), so an offset or a time out of range reads
-        // as no date, and a year below 100 as itself. Text in any
-        // other form is refused, though Date.parse reads much of it, since
-        // its lenient parser reads "3600." as the year 3600 and "05/06/2026"
-        // as May 6. So is a day the month doesn't have, which Date.parse
-        // moves on ("2026-02-30" is March 2).
+        // Date.parse reads much text outside the ISO form, such as "3600." as the
+        // year 3600 and "05/06/2026" as May 6, and moves a day the month doesn't
+        // have on ("2026-02-30" is March 2).
         const raw = input.expires;
         const typed = typeof raw === 'string' && raw !== '' ? raw : null;
         const expiry = typed === null ? null : ecmaExpiry(typed);
@@ -243,10 +231,8 @@ export class ObserversModule implements Module {
           );
         }
         if (problems.length > 0) return err(`Nothing was granted: ${problems.join('; ')}.`);
-        // What's stored is what was read: ECMAScript's form, apart from a time
-        // without a zone, which is stored as the instant this host read it as,
-        // in UTC, so the registry reads that instant whatever zone, tzdata or
-        // host it runs under later. A date alone is UTC wherever it's read.
+        // A time without a zone is stored as the UTC instant this host read it as,
+        // so a later read under another zone or tzdata gives the same instant.
         const instant = expiry === null ? null : new Date(at).toISOString().replace('.000Z', 'Z');
         const expires = expiry === null ? null : expiry.timed && !expiry.zoned ? instant : expiry.text;
 
@@ -384,9 +370,8 @@ function isEntry(g: unknown): g is ObserverGrant {
   return typeof g === 'object' && g !== null;
 }
 
-/** Failures of the file that are this host's own rather than the file's:
- *  too many files open, in this process (EMFILE) or the system (ENFILE).
- *  Nothing about the file needs fixing, and the failure can pass. */
+/** EMFILE and ENFILE: too many files open, in this process or in the
+ *  system. */
 const OWN_FAILURES = new Set(['EMFILE', 'ENFILE']);
 
 /** What to do after a failure of the host's own (OWN_FAILURES): call the

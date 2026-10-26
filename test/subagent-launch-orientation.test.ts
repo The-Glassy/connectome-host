@@ -30,10 +30,8 @@ import {
   SubagentModule, type SubagentModuleConfig, type SubagentLaunch, agentSettingsOf, describeSubagentStart, toolDifferences, undeliveredLaunchParts,
 } from '../src/modules/subagent-module.js';
 
-// Most tests here build subagent harnesses and run launches through them,
-// which is CPU work that a busy machine can slow many times over. The limit
-// is there to catch a hang, not slowness, so it's longer than bun's 5 s
-// default. bun applies it to every test in this file, and to no other file.
+// bun's default test timeout is 5 s, and setDefaultTimeout sets this file's
+// alone.
 setDefaultTimeout(20_000);
 
 interface Run {
@@ -57,7 +55,7 @@ interface Run {
    *  fork's tool_result message, or a spawn's or parentless fork's own
    *  messages (its orientation, then its task). Tests of what arrives read
    *  the provider's request instead. */
-  firstContext: string;
+  launchAsStored: string;
   /** All of the child's context, for inheritance checks. */
   allText: string;
   /** What the framework reports the child is shown, once registered. */
@@ -159,7 +157,7 @@ async function makeHarness(opts: {
         maxMessageTokens: (a.getContextManager().getStrategy() as { maxMessageTokens?: number }).maxMessageTokens,
         strategyConfig: strategyConfigOf(a.getContextManager().getStrategy()),
         allowedTools: a.allowedTools,
-        firstContext: launchText(messages),
+        launchAsStored: launchText(messages),
         allText: messages.map((m) => textOf(m.content)).join('\n'),
         surface: framework.listToolClasses(a.name).map((t) => t.tool),
       });
@@ -183,8 +181,8 @@ async function makeHarness(opts: {
     /** Hold the next run inside the stub; resolves once it is held. */
     holdNextRun: () => new Promise<void>((resolve) => { holdNext = resolve; }),
     releaseHeld: () => { for (const r of holds.splice(0)) r(); },
-    /** Unregister an agent, as the framework does when an ephemeral
-     *  parent's run ends (there is no public removal API). */
+    /** Unregister an agent, as agent-framework does when an ephemeral run ends;
+     *  it has no public way to. */
     unregister: (name: string) => { fw.agents.delete(name); },
     asyncPromise: (name: string) =>
       (subagent as unknown as { asyncHandles: Map<string, { promise: Promise<unknown> }> })
@@ -298,9 +296,9 @@ describe('fork orientation', () => {
       expect(run.strategyConfig).toStrictEqual({
         headWindowTokens: 2_000, recentWindowTokens: 80_000, compressionModel: 'mock-alt', autoTickOnNewMessage: true,
       });
-      expect(run.firstContext).toContain('Two parallel streams of you continue from this point');
-      expect(run.firstContext).toContain(block);
-      const start = startSection(run.firstContext);
+      expect(run.launchAsStored).toContain('Two parallel streams of you continue from this point');
+      expect(run.launchAsStored).toContain(block);
+      const start = startSection(run.launchAsStored);
       expect(start).toContain(CUT_AT_EXCHANGE);
       expect(start).toContain("- Context budget: 100,000 tokens (the parent's at the call: 100,000 tokens).");
       expect(start).toContain(`- Tools: ${run.surface.length} available to this stream, the same set the parent stream has now.`);
@@ -330,7 +328,7 @@ describe('fork orientation', () => {
       );
       expect(block).toContain('- Strategy: a fresh knowledge instance, the same type as the parent\'s.');
       expect(block).toContain("- Recent window: 80,000 tokens, the same as the parent's.");
-      expect(h.runs[0]!.firstContext).toContain(block);
+      expect(h.runs[0]!.launchAsStored).toContain(block);
     } finally {
       await h.cleanup();
     }
@@ -382,7 +380,7 @@ describe('fork orientation', () => {
       const missing = parentTools.filter((n) => !run.surface.includes(n));
       expect(missing).toContain('prose_help');
       expect(missing.length).toBeGreaterThan(1);
-      const tools = line(startSection(run.firstContext), '- Tools:');
+      const tools = line(startSection(run.launchAsStored), '- Tools:');
       expect(tools).toStartWith(`- Tools: ${run.surface.length} available to this stream. Compared with what the parent stream has now, it doesn't have `);
       for (const name of missing) expect(tools).toContain(name);
     } finally {
@@ -411,7 +409,7 @@ describe('fork orientation', () => {
     }
   });
 
-  test('a fork with no parent stream gets its task and an orientation that says so', async () => {
+  test('a fork with no parent stream gets an orientation that says so, then its task', async () => {
     const h = await makeHarness({ parent: null });
     try {
       const res = await h.subagent.handleToolCall(call('fork', 'toolu_fork_5', { name: 'orphan', task: 'list the files' }, null));
@@ -426,11 +424,11 @@ describe('fork orientation', () => {
       // Before this change a parentless fork started with an empty context.
       // The orientation comes first and the task last: the stream's message
       // cap keeps a message's start, and the orientation is usually short.
-      expect(run.firstContext).toStartWith("Launch of fork 'orphan'");
-      expect(run.firstContext).toContain('When this intention is complete, return your findings via subagent--return. Your intention for this stream follows.\n');
-      expect(run.firstContext).toEndWith('\nlist the files');
-      expect(run.firstContext).toContain(block);
-      const start = startSection(run.firstContext);
+      expect(run.launchAsStored).toStartWith("Launch of fork 'orphan'");
+      expect(run.launchAsStored).toContain('When this intention is complete, return your findings via subagent--return. Your intention for this stream follows.\n');
+      expect(run.launchAsStored).toEndWith('\nlist the files');
+      expect(run.launchAsStored).toContain(block);
+      const start = startSection(run.launchAsStored);
       expect(start).toContain('- Inherited: nothing; there is no parent stream.');
       expect(run.proseRouting).toBe('locus');
       expect(start).toContain(`- Prose routing: locus, the framework's default: ${ROUTING_EFFECT.locus}.`);
@@ -461,7 +459,7 @@ describe('fork orientation', () => {
       await h.asyncPromise('blind');
       const run = h.runs[0]!;
       expect(run.allText).toContain('BEFORE_THE_CALL');
-      expect(startSection(run.firstContext)).toContain(
+      expect(startSection(run.launchAsStored)).toContain(
         "- Inherited: the parent's whole compiled context as it was when this stream started, because the fork call had no id to cut at. It can include turns that came after the call.",
       );
     } finally {
@@ -504,7 +502,7 @@ describe('fork orientation', () => {
       await h.subagent.handleToolCall(call('fork', 'toolu_fork_unread', input));
       await h.asyncPromise('unsure');
       const run = h.runs[0]!;
-      const start = startSection(run.firstContext);
+      const start = startSection(run.launchAsStored);
       expect(start).toContain(`- Tools: ${run.surface.length} available to this stream: `);
       expect(start).toContain(" The parent stream's tools couldn't be read for comparison.");
       expect(start).not.toContain('Compared with');
@@ -523,7 +521,7 @@ describe('fork orientation', () => {
       const data = done.data as { summary: string; launch: string };
       expect(data.summary).toBe('done');
       expect(data.launch).toContain("Launch of fork 'quick'");
-      expect(h.runs[0]!.firstContext).toContain(data.launch);
+      expect(h.runs[0]!.launchAsStored).toContain(data.launch);
 
       const held = h.holdNextRun();
       const slowInput = { name: 'slow', task: 'a long thing', sync: true, timeoutMs: 50 };
@@ -535,7 +533,7 @@ describe('fork orientation', () => {
       // The detach fires on its timer, whether or not the run has reached the
       // stub yet, so wait for the run itself.
       await held;
-      expect(h.runs[1]!.firstContext).toContain(launchBlock(text));
+      expect(h.runs[1]!.launchAsStored).toContain(launchBlock(text));
       h.releaseHeld();
       await h.asyncPromise('slow');
     } finally {
@@ -559,7 +557,7 @@ describe('fork orientation', () => {
         expect(line(block, '- Against the parent at the call')).toContain('prose routing and tool rules.');
         const run = h.runs[0]!;
         expect(run.proseRouting).toBe(mode);
-        expect(run.firstContext).toContain(block);
+        expect(run.launchAsStored).toContain(block);
       } finally {
         await h.cleanup();
       }
@@ -585,10 +583,10 @@ describe('spawn orientation', () => {
       expect(input.tools).toEqual(['time--now']); // the caller's array is not mutated
       const run = h.runs[0]!;
       expect(run.proseRouting).toBe('disabled');
-      expect(run.firstContext).toStartWith("Launch of spawn 'probe'");
-      expect(run.firstContext).toEndWith('\nprobe the harness');
-      expect(run.firstContext).toContain(block);
-      const start = startSection(run.firstContext);
+      expect(run.launchAsStored).toStartWith("Launch of spawn 'probe'");
+      expect(run.launchAsStored).toEndWith('\nprobe the harness');
+      expect(run.launchAsStored).toContain(block);
+      const start = startSection(run.launchAsStored);
       expect(start).toContain('- Inherited: nothing; a spawn starts from its task.');
       // time--now isn't on this harness's board, so only subagent--return is.
       expect(start).toContain('- Tools: 1 available to this stream: subagent--return.');
@@ -870,7 +868,7 @@ describe('what a launch block says beyond the settings it compares', () => {
       seedForkCall(h.framework, 'toolu_plain', input);
       await h.subagent.handleToolCall(call('fork', 'toolu_plain', input));
       await h.asyncPromise('plain');
-      const start = startSection(h.runs.find((r) => r.name.startsWith('plain-'))!.firstContext);
+      const start = startSection(h.runs.find((r) => r.name.startsWith('plain-'))!.launchAsStored);
       const settings = line(start, '- Agent settings');
       expect(settings).toStartWith(
         "- Agent settings not carried from the parent stream, so the framework's defaults apply: " +
@@ -898,7 +896,7 @@ describe('what a launch block says beyond the settings it compares', () => {
         seedForkCall(h.framework, 'toolu_timed', input);
         await h.subagent.handleToolCall(call('fork', 'toolu_timed', input));
         await h.asyncPromise('timed');
-        const start = startSection(h.runs.find((r) => r.name.startsWith('timed-'))!.firstContext);
+        const start = startSection(h.runs.find((r) => r.name.startsWith('timed-'))!.launchAsStored);
         expect(line(start, '- Agent settings')).toStartWith(
           "- Agent settings not carried from the parent stream, so the framework's defaults apply: " +
             `clock rows off (the parent stream's: every ${every}). The rest match: `,
@@ -916,7 +914,7 @@ describe('what a launch block says beyond the settings it compares', () => {
       const input = { name: 'timed', systemPrompt: 'p', task: 't' };
       await h.subagent.handleToolCall(call('spawn', 'toolu_timed_spawn', input));
       await h.asyncPromise('timed');
-      const start = startSection(h.runs[0]!.firstContext);
+      const start = startSection(h.runs[0]!.launchAsStored);
       expect(line(start, '- Agent settings')).toStartWith(
         "- Agent settings not carried from the calling stream, so the framework's defaults apply: " +
           "clock rows off (the calling stream's: every 10 minutes). The rest match: ",
@@ -933,7 +931,7 @@ describe('what a launch block says beyond the settings it compares', () => {
       seedForkCall(h.framework, 'toolu_same', input);
       await h.subagent.handleToolCall(call('fork', 'toolu_same', input));
       await h.asyncPromise('same');
-      const start = startSection(h.runs.find((r) => r.name.startsWith('same-'))!.firstContext);
+      const start = startSection(h.runs.find((r) => r.name.startsWith('same-'))!.launchAsStored);
       expect(line(start, '- Agent settings')).toStartWith(
         "- Agent settings: the framework's defaults, the same as the parent stream's now (extended thinking, provider parameters, ",
       );
@@ -1076,9 +1074,9 @@ describe('a queued launch', () => {
       await h.asyncPromise('second');
 
       const run = h.runs.find((r) => r.name.startsWith('second-'))!;
-      expect(run.firstContext).toContain(block); // the call's inputs, not 777,000
+      expect(run.launchAsStored).toContain(block); // the call's inputs, not 777,000
       expect(run.allText).not.toContain('POST_CALL_ARRIVAL');
-      const start = startSection(run.firstContext);
+      const start = startSection(run.launchAsStored);
       expect(start).toContain(CUT_AT_EXCHANGE);
       expect(start).toContain("- Context budget: 100,000 tokens (the parent's at the call: 220,000 tokens).");
       expect(run.surface).toContain('gauge--t1');
@@ -1139,9 +1137,9 @@ describe('a queued launch', () => {
       await h.asyncPromise('second');
 
       const run = h.runs.find((r) => r.name.startsWith('second-'))!;
-      expect(run.firstContext).toContain(block);
+      expect(run.launchAsStored).toContain(block);
       expect(run.allText).toContain('POST_CALL_ARRIVAL');
-      expect(startSection(run.firstContext)).toContain(
+      expect(startSection(run.launchAsStored)).toContain(
         "- Inherited: the parent's whole compiled context as it was when this stream started, because the fork call wasn't in that context. It can include turns that came after the call. An exact repeat of an earlier message is dropped, and this stream's own strategy caps and selects what remains as it does every message.",
       );
     } finally {
@@ -1216,9 +1214,9 @@ describe('a queued launch', () => {
       // The parent resolved at the call is the one the fork compiles, though
       // it's no longer registered: its context, through the call's exchange.
       expect(run.allText).toContain('please look into it');
-      expect(run.firstContext).toContain(block);
-      expect(run.firstContext).toEndWith('Your intention for this stream: outlive the caller');
-      const start = startSection(run.firstContext);
+      expect(run.launchAsStored).toContain(block);
+      expect(run.launchAsStored).toEndWith('Your intention for this stream: outlive the caller');
+      const start = startSection(run.launchAsStored);
       expect(start).toContain("- Inherited: the parent's compiled context through the fork call's exchange.");
       expect(line(start, '- Agent settings')).toStartWith("- Agent settings: the framework's defaults, the same as the parent stream's now");
       expect(start).toContain(`- Tools: ${run.surface.length} available to this stream: `);
@@ -1255,7 +1253,7 @@ describe('a queued launch', () => {
       await h.asyncPromise('child');
 
       const run = h.runs.find((r) => r.name.startsWith('child-'))!;
-      const start = startSection(run.firstContext);
+      const start = startSection(run.launchAsStored);
       expect(start).toContain("The parent stream's tools couldn't be read for comparison.");
       expect(start).not.toContain('Compared with what the parent stream has now');
     } finally {
@@ -1645,9 +1643,8 @@ describe('what a stream first reads is what its launch promises', () => {
         const cm = h.framework.getAgent('parent')!.getContextManager();
         cm.addMessage('user', [{ type: 'text', text: 'begin' }]);
         if (path === 'structural') {
-          // As agent-framework 0.22.3 stores an XML round: each call carries
-          // the round's raw text, a sibling fork's included, and each result
-          // is named, in call order.
+          // As agent-framework stores an XML round: each call carries the round's raw
+          // text, a sibling fork's included, and each result is named.
           const sibling = { name: 'sibling', task: 'SIBLING-TASK' };
           const raw = '<function_calls>\n<invoke name="files--read">\n<parameter name="path">notes</parameter>\n</invoke>\n' +
             `<invoke name="subagent--fork">\n<parameter name="task">${sibling.task}</parameter>\n</invoke>\n` +

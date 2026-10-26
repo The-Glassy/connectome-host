@@ -5,12 +5,9 @@
  */
 
 /**
- * The entry under `key` in one of the snapshot's maps, such as an agent's
- * entry in a per-agent section, or a section in an agent's readFailures.
  * The maps come from JSON.parse, so they have Object.prototype: this reads
  * an own key only, so an agent named `constructor` or `__proto__` that's
- * missing from a section reads as missing. A missing or null map has no
- * entries.
+ * missing from a section reads as missing.
  */
 export function healthEntry<T>(map: Record<string, T> | null | undefined, key: string): T | undefined {
   return map != null && Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined;

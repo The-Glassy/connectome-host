@@ -333,7 +333,7 @@ describe('a save reads the shared file again and merges it in', () => {
   });
 });
 
-describe('an entry without a named id is kept in the file, and isn\'t loaded', () => {
+describe('an entry without a named id (text, not empty, held once at most in the file and once at most on this host) is kept in the file, and isn\'t loaded', () => {
   // Each case: what the module's state and the shared file hold at start. A
   // named id is non-empty text that at most one entry of the file and at most
   // one of the module's lessons holds. Some of these, the start merge on main
@@ -1031,8 +1031,7 @@ describe('a save replaces the file whole where it can', () => {
   for (const r of refusals) {
     test(`a rename refused with ${r.code} ${r.inPlace ? 'writes the file in place, and says so once' : 'leaves the file as it was, and is named once'}`, async () => {
       const h = host();
-      // As the runtime's errors do, the text names both paths, the
-      // temporary file's new at each write.
+      // As the runtime's rename errors do, the text names both paths.
       const spy = spyOn(fs, 'renameSync').mockImplementation(((a: fs.PathLike, b: fs.PathLike) => {
         throw Object.assign(new Error(`${r.code}: refused, rename '${a}' -> '${b}'`), { code: r.code });
       }) as typeof fs.renameSync);
@@ -1107,7 +1106,8 @@ describe('a save replaces the file whole where it can', () => {
   test('a file whose name is near the longest a directory takes still saves, since the temporary file\'s name doesn\'t grow with it', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'lessons-shared-'));
     try {
-      // 225 bytes: 41 more, as the file's name and a UUID, would pass 255.
+      // A name holds at most 255 bytes: this one is 225, and 41 more (a dot, a
+      // UUID and .tmp after it) would pass that.
       const h = host(join(dir, `${'l'.repeat(220)}.json`));
       writeFileSync(h.path, JSON.stringify({ lessons: [lesson('theirs', 'from another host')] }));
       await h.start();

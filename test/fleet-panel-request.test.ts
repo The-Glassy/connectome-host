@@ -54,7 +54,7 @@ describe('FleetModule.requestPanel', () => {
     expect(result.data).toEqual({ op: 'settings', echo: { agent: 'clerk' } });
   });
 
-  test('concurrent requests correlate independently', async () => {
+  test('concurrent requests correlate independently, and once answered neither waits on the connection\'s close', async () => {
     const [a, b] = await Promise.all([
       fleet.requestPanel('panelkid', 'health', { n: 1 }),
       fleet.requestPanel('panelkid', 'pins', { n: 2 }),

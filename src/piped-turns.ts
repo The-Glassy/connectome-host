@@ -1,23 +1,21 @@
 /**
  * Piped mode's view of the agent's turns (`--no-tui`, or batch mode when
  * stdin isn't a TTY): it prints every agent's prose and each tool call as
- * they stream, and waits for the turn an input line started before it reads
- * the next line. Kept apart from the framework so tests can drive it with
- * traces.
+ * they stream, and waits for the turn an input line started before it
+ * takes the next line.
  *
  * The wait follows the primary agent alone, by the name the framework's
  * agent was created with: a sync subagent streams inside the primary's
  * turn, and its end isn't the end of the line's turn. The wait ends at one
- * of the primary's TURN_SETTLED_TRACES (state/turn-trace.ts). At
- * `inference:failed` it prints the error and keeps waiting, since the
- * framework may retry the turn, or hold it and run it again, and either
- * answers the line. The wait's cap still bounds it: a turn held longer than
- * the cap lets the next line go in, with a line on stderr saying so, and
- * that turn's answer prints if it comes while piped mode still runs; after
- * a batch's last line, the host goes on to its teardown.
- * The framework's traces don't say which events started a turn, so the wait
- * can't tell its line's turn from another turn of the primary's, such as a
- * wake's.
+ * of the primary's TURN_SETTLED_TRACES. At `inference:failed` it prints
+ * the error and keeps waiting, since the framework may retry the turn, or
+ * hold it and run it again, and either answers the line. The wait's cap
+ * still bounds it: a turn held longer than the cap lets the next line go
+ * in, with a line on stderr saying so, and that turn's answer prints if it
+ * comes while piped mode still runs; after a batch's last line, the host
+ * goes on to its teardown. The framework's traces don't say which events
+ * started a turn, so the wait can't tell its line's turn from another turn
+ * of the primary's, such as a wake's.
  */
 
 import { STREAM_END_TRACES, TURN_SETTLED_TRACES, traceError } from './state/turn-trace.js';
@@ -120,9 +118,8 @@ export function createPipedTurns(primaryAgentName: string, out: PipedOutput): Pi
 
   function waitForTurn(capMs = PIPED_TURN_CAP_MS): Promise<void> {
     return new Promise((resolve) => {
-      // The timer only caps the wait. Clear it once the turn settles: a
-      // pending timer held the event loop open, so a batch run sat out the
-      // cap after `Done.` before the process exited.
+      // A pending timer holds the event loop open, so it's cleared once the turn
+      // settles.
       const timer = setTimeout(() => {
         if (settle !== done) return;
         settle = null;

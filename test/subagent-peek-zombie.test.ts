@@ -69,8 +69,7 @@ function makeModuleWithSubagent(opts: {
     opts.displayName,
     live,
   );
-  // activeSubagents is `readonly` (re-binding the Map is what's forbidden), so
-  // mutating it directly is fine.
+  // `readonly` stops re-binding the field, not changes to the Map it holds.
   mod.activeSubagents.set(`entry-${opts.displayName}`, entry);
   return mod;
 }

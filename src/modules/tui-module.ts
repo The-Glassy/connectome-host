@@ -39,13 +39,9 @@ export class TuiModule implements Module {
     const triggerInference = (event as { triggerInference?: boolean }).triggerInference;
     const targetAgents = (event as { targetAgents?: string[] }).targetAgents;
 
-    // IPC/headless wakes carry no channel locus: the wake clears any
-    // active-channel routing, so a plain-prose reply is NOT delivered to the
-    // sender — it either falls back to the agent's home/default publish
-    // channel (possibly the wrong audience) or strands in the chronicle
-    // (routeSpeech: "no locus"). Agents can't see that from the message
-    // itself, so tell them explicitly; otherwise they write replies into the
-    // void (labclaude's stranded "Ack, ops" reply, 2026-07-09).
+    // agent-framework routes plain prose by channel, and an IPC wake carries
+    // none: a turn it opens takes the agent's home or default publish channel as
+    // its locus, or none, and a wake during an open turn keeps that turn's locus.
     const blocks: Array<{ type: 'text'; text: string }> = [{ type: 'text', text }];
     if (source === 'headless') {
       blocks.push({

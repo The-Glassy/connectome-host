@@ -15,6 +15,7 @@
 const DB_NAME = 'fkm-observer';
 const STORE = 'keys';
 const KEY_ID = 'device-key';
+const PRIVATE_KEY_EXTRACTABLE = false;
 
 interface DeviceKey {
   keyPair: CryptoKeyPair;
@@ -58,7 +59,7 @@ async function fingerprintOf(publicKey: CryptoKey): Promise<string> {
   return `ed25519:${b64url(raw)}`;
 }
 
-/** Ed25519 support probe — false on insecure contexts and old browsers. */
+/** crypto.subtle is absent outside a secure context (https or localhost). */
 export function observerCryptoAvailable(): boolean {
   return typeof crypto !== 'undefined' && !!crypto.subtle && typeof indexedDB !== 'undefined';
 }
@@ -75,7 +76,7 @@ export async function ensureDeviceKey(): Promise<DeviceKey | null> {
     }
     const keyPair = (await crypto.subtle.generateKey(
       { name: 'Ed25519' } as AlgorithmIdentifier,
-      false, // non-extractable — the private key never leaves the browser
+      PRIVATE_KEY_EXTRACTABLE,
       ['sign', 'verify'],
     )) as CryptoKeyPair;
     await idbPut(db, KEY_ID, keyPair);

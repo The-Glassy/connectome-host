@@ -1,30 +1,5 @@
 /**
- * Agent identity — the agent's own archipelago-home principal (connectome
- * docs/home-node.md §4).
- *
- * Two audiences, deliberately separated:
- *
- * HOST-FACING (this module's public methods): the deployment holds an
- * ed25519 keypair in the data dir; `accessFor(audience)` exchanges a
- * key-proof at the home node for a short-lived aid1 token, and
- * `httpAuthFor(audience)` wraps it for HTTP. This is plumbing other host
- * pieces call — the MCPL transport's per-dial credential provider, future
- * HTTP helpers. Credentials live and die HERE.
- *
- * AGENT-FACING (utilities, via the `utils` meta-tool): deliberately small
- * and deliberately boring — `status` ("who am I registered as, where is
- * that recognized") and `accept_invite` ("register with an invitation code
- * from your operator"). No tokens, keys, proofs, or signing in any
- * agent-visible name, description, or result: the agent asks for access by
- * name (`mcpl_deploy … access: "eidoverse"`); the host does the rest. This
- * is both hygiene (credentials never enter model context, so they never
- * enter chronicles, compression, or channels) and framing (an agent
- * narrating credential mechanics reads as exfiltration to safety
- * classifiers — so it simply never has them to narrate).
- *
- * Utilities-only module: enrollment is one-time; it costs no tool slots.
- * Wire statements per the home-node spec (archipelago-home
- * src/statements.ts is the source of truth — re-copy, don't fork).
+ * The wire statements follow archipelago-home's src/statements.ts.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -47,22 +22,12 @@ import {
 } from '@animalabs/agent-framework';
 import { unknownToolResult } from './unknown-tool.js';
 
-/** A disk read's refusal that means disk has no file at the path, where
- *  the workspace's own copy stands in: not_found with ENOENT (nothing there,
- *  or a link that leads nowhere), ENOTDIR (a parent that's a file) or
- *  ENAMETOOLONG (a name disk can't hold), and mount_unavailable with ENOENT
- *  or ENOTDIR (the mount's directory gone, or a file in its place). A gone
- *  mount directory reaches agent-framework 0.22.3's read as not_found with
- *  ENOENT, since it lstats the path before it resolves the root, and a read
- *  that resolves the root first reports it as mount_unavailable with ENOENT.
- *  mount_unavailable with any other errno, or none, is a root the read
- *  couldn't resolve or trust, where disk may hold a file it couldn't reach,
- *  so the upload is refused. On a mount that doesn't follow links,
- *  agent-framework 0.22.3 reads a link among the path's directories that
- *  leads nowhere or to a file as not_found (ENOENT or ENOTDIR), so the
- *  workspace's copy stands in, and its release with
- *  anima-research/agent-framework#468 refuses either as parent_symlink, so
- *  the upload is refused there. */
+/** agent-framework's disk read reports a file disk lacks as not_found with
+ *  ENOENT (nothing there, or a link that leads nowhere), ENOTDIR (a parent
+ *  that's a file) or ENAMETOOLONG, and a mount whose directory is gone, or
+ *  has a file in its place, as mount_unavailable with ENOENT or ENOTDIR.
+ *  mount_unavailable with another errno, or none, is a root it couldn't
+ *  resolve or trust. */
 function diskHasNoFile(error: WorkspaceReadError): boolean {
   const gone = ['ENOENT', 'ENOTDIR'];
   if (error.code === 'mount_unavailable') return gone.includes(error.errno ?? '');
@@ -470,12 +435,8 @@ export class IdentityModule implements Module {
 
   // ── key material ──
 
-  /** The key, as loadOrCreateKey gives it, or an IdentityError: the log gets
-   *  the key file's path and the whole error. The agent gets neither, nor the
-   *  error's code, since it can't act on any of them: the fix is the host's.
-   *  A key file missing beside a registration this host records or holds is
-   *  refused, not made anew: the service holds that registration under the
-   *  old key, and would refuse every access signed with a new one. */
+  /** archipelago-home's /token finds a registration by its key, so a key made
+   *  anew beside a registration gets no access. */
   private identityKey(): { privateKey: KeyObject; id: string } {
     if (!existsSync(this.config.keyPath)) {
       const rec = this.record();
@@ -523,10 +484,7 @@ export class IdentityModule implements Module {
     let privateKey: KeyObject;
     if (existsSync(this.config.keyPath)) {
       privateKey = createPrivateKey(readFileSync(this.config.keyPath, 'utf8'));
-      // The identity service's ids and proofs are ed25519's, so a key of
-      // another type is refused where it loads, which status meets too,
-      // rather than where it signs. The file is the operator's to replace:
-      // nothing is made over it or beside it.
+      // archipelago-home's ids and proofs are ed25519's.
       if (privateKey.asymmetricKeyType !== 'ed25519') {
         throw new Error(`it holds a key of type ${privateKey.asymmetricKeyType}, not ed25519`);
       }
@@ -823,10 +781,8 @@ export class IdentityModule implements Module {
       const contentType = typeof input.contentType === 'string' && input.contentType
         ? input.contentType
         : guessContentType(input.fromFile);
-      // fetch refuses a header value it can't send (a line break, a NUL, a
-      // character past Latin-1) before it connects, which the catch below
-      // would word as no reply. The runtime's own Headers refuses the same
-      // values, so asking it first keeps the rule the runtime's.
+      // Headers refuses a value with a line break, a NUL or a character past
+      // Latin-1, and so does fetch, before it connects.
       try {
         new Headers({ 'content-type': contentType });
       } catch {
@@ -900,9 +856,9 @@ export class IdentityModule implements Module {
 
       if (saveAs !== undefined && workspace) {
         const written = await workspace.writeBinary(saveAs, bytes, contentType);
-        // A file the workspace stored, with only its copy on disk failed, is
-        // saved: the workspace's tools read it from the store. The receipt
-        // says what disk lacks, as agent-framework's save_recent_image does.
+        // agent-framework's writeBinary answers inChronicle: true for a file the
+        // store took in whose later step failed, such as its copy on disk; the
+        // workspace's tools read it from the store.
         const stored = written.success || (written.data as { inChronicle?: boolean } | undefined)?.inChronicle === true;
         if (!stored) {
           return fail(`${answered}, but its response couldn't be saved to "${saveAs}": ${sentence(written.error ?? 'no reason given')}${copySent}${changed}`);
@@ -1024,23 +980,8 @@ export class IdentityModule implements Module {
     return null;
   }
 
-  /**
-   * The bytes `fromFile` names, for an upload. Disk first, store second. An
-   * upload is egress: reading it through the append-only store would retain
-   * every byte forever and refuse anything binary or over the mount's
-   * maxFileSize, which is most media; disk has neither problem. The disk read
-   * is readFileFromDisk, which keeps the mount's link policy and reads only
-   * inside the mount (it checks the canonical path it opened), so an upload
-   * sends only what the mount allows, and its errors name the mount-prefixed
-   * path, never the host's. The store's copy stands in only where disk has no
-   * file (diskHasNoFile), such as one the resident wrote through the workspace
-   * and never materialized, one removed from disk after the workspace took it
-   * in, or one whose mount's directory is gone. Any other
-   * refusal (a link the mount refuses or one leading out of it, a directory,
-   * a file disk can't read) stops the upload, since the store's copy can
-   * differ from disk's: an upload never sends another file than the one the
-   * agent named without saying so, and `from` says which copy went.
-   */
+  /** agent-framework's store keeps every byte read through it, and its mount's
+   *  maxFileSize applies, so an upload reads disk first. */
   private async readUpload(
     workspace: WorkspaceModule,
     path: string,
@@ -1061,13 +1002,9 @@ export class IdentityModule implements Module {
       if (!(err instanceof WorkspaceReadError)) throw err;
       onDisk = err;
     }
-    // A path no mount holds, or one leading out of its mount, has no copy
-    // anywhere. One in another mount's directory nested in it, or reached
-    // through a link into one (`other_mount`, from
-    // anima-research/agent-framework#460, and for a link from the release
-    // with anima-research/agent-framework#468), is that mount's: the reason
-    // names the mount and the path to use there, so the outer mount's
-    // workspace isn't offered in its place.
+    // agent-framework's read reports a path in another mount's directory nested
+    // in this one, or reached through a link into one, as other_mount, naming
+    // that mount and the path to use there.
     if (['unknown_mount', 'traversal', 'outside_include', 'other_mount'].includes(onDisk.code)) {
       return { refusal: `${nothingSent} ${sentence(onDisk.message)}` };
     }
@@ -1099,13 +1036,8 @@ export class IdentityModule implements Module {
         'and `name`, the name to register as, each as text.',
       );
     }
-    // One registration at a time: a second call while one is under way
-    // would be refused by the service, or register this host twice. The
-    // first call's answer goes to that call, which a session switch leaves in
-    // the stopped session, so the refusal says what status shows instead:
-    // never the outcome itself, which status can't show when it's unknown.
-    // The call ends within IDENTITY_TIMEOUT_MS, the limit its fetch is given,
-    // the reply's body included.
+    // A fetch's timeout signal bounds reading its reply's body too, so a
+    // registration under way ends within IDENTITY_TIMEOUT_MS.
     if (this.state.enrolling) {
       return fail(
         'Nothing was sent: a registration is already under way on this host, and its answer goes to the call that ' +
@@ -1142,12 +1074,8 @@ export class IdentityModule implements Module {
           `this host is unknown; if it holds this registration, record it by hand. ${this.recordByHand(name, null, timestamp)}`,
       );
     };
-    // No reply, or a fault on the service's side: the registration may have
-    // gone through first (archipelago-home adds the principal and uses the
-    // invite before the step that can still fail), and the host then has no
-    // record of it. A retry with the same code and name is then refused for
-    // its invite or its name, which /enroll checks before the key, so no one
-    // refusal marks that case.
+    // archipelago-home adds the principal and uses the invite before a step
+    // that can still fail, and checks the invite and the name before the key.
     const unknownOutcome = (what: string): ToolResult => {
       unknownToOperator(what);
       return fail(
@@ -1176,11 +1104,9 @@ export class IdentityModule implements Module {
       );
     }
     if (status === 400) {
-      // A 400 comes before the service registers anything (a malformed
-      // request, a name it doesn't take, a stale timestamp) or after it:
-      // archipelago-home answers "no audience configured" once it has added
-      // the principal and used the invite. The status can't tell which, so
-      // the agent reads the reason, and the operator is asked to check.
+      // archipelago-home answers 400 before it registers anything (a malformed
+      // request, a name it doesn't take, a stale timestamp) or after: "no audience
+      // configured" comes once it has added the principal and used the invite.
       unknownToOperator(`answered with 400: ${error}`);
       return fail(
         `The identity service at ${home} answered the registration with 400: ${error}. A 400 can come after the ` +
@@ -1189,15 +1115,8 @@ export class IdentityModule implements Module {
         'whether the service holds this registration, and if it does, to record it on this host by hand.',
       );
     }
-    // Any other answer: archipelago-home's are 403s, each before it registers
-    // anything (the invite, the proof, the name, the key). Worded as the
-    // service's answer all the same, with its reason for the agent to read,
-    // and logged with it, since a reason such as "key already enrolled" is
-    // the operator's to act on. Both allow for an earlier call whose outcome
-    // was unknown, which may have registered this host: an operator often
-    // reads the log from its last line, and after such a call this refusal is
-    // that line. The host keeps no note of earlier outcomes, so the log points
-    // to that call's line for the record to write.
+    // archipelago-home's 403s each come before it registers anything (the
+    // invite, the proof, the name, the key).
     console.error(
       `[identity] registering this host as ${JSON.stringify(name)} with ${home}: the service answered ${status}: ${error}. ` +
         'If an earlier call got no reply, a fault of the service\'s own, or a 400 not about the name, it may have ' +
@@ -1213,15 +1132,8 @@ export class IdentityModule implements Module {
     );
   }
 
-  /**
-   * Keep a registration the identity service answered 200 for. The service
-   * holds it from then on, so registering again would be refused. When this
-   * host can't record it (the record can't be saved, or no id could be read
-   * from the reply), it holds the registration in memory until the host
-   * restarts, across session switches, so status and access work until
-   * then, and the operator is asked to record it. A record they write is
-   * what the host reads from then on (record).
-   */
+  /** archipelago-home holds a registration it answered 200 for, so registering
+   *  again is refused. */
   private registered(name: string, sub: string | null, enrolledAt: string): ToolResult {
     const home = this.config.home;
     const holding =
@@ -1263,8 +1175,8 @@ export class IdentityModule implements Module {
     console.error(
       `[identity] registered this host as ${JSON.stringify(name)} with ${home} (${sub}), recorded at ${this.recordPath}.`,
     );
-    // Note what is NOT returned: the first token the home node minted. The
-    // host fetches its own, fresh, per use — the agent never holds one.
+    // archipelago-home's /enroll answers with a first token, which isn't passed
+    // on.
     return ok({
       registeredAs: name,
       id: sub,

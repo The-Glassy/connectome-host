@@ -1,23 +1,12 @@
 /**
  * Report-only audit of subagents/lessons/retrieval opt-ins across recipes.
  *
- * Background: published v0.7.2 and earlier treated these three modules as
- * opt-OUT (an omitted `modules` key meant enabled), and DEFAULT_RECIPE
- * enabled all three explicitly. Current main treats them as opt-IN
- * (a4bd9fd). That flip is the right default, but it leaves existing
- * deployments with two things only a human can settle:
- *
- *   1. A source recipe that explicitly says `lessons: true` stays enabled
- *      after upgrade — intentionally. Whether that `true` was a real choice
- *      or boilerplate copied from the old onboarding guide is not something
- *      a defaults change (or this script) can infer. It gets reported;
- *      the operator decides.
- *   2. A persisted `data/.recipe.json` is a resolved snapshot of whatever
- *      was in effect at launch — under the old defaults that includes
- *      `subagents/lessons/retrieval: true` the operator never wrote. It is
- *      not necessarily the authoritative source recipe, so it's reported
- *      separately, as a pointer back to the source, never as a finding in
- *      itself.
+ * Releases after 0.7.2 treat these three modules as opt-in (omitted =
+ * disabled), where 0.7.2 and earlier treated them as opt-out. A source
+ * recipe's explicit enable stays enabled after the upgrade, so each is
+ * reported for the operator to decide whether it was a real choice. A
+ * persisted `data/.recipe.json` is a launch snapshot, not the source recipe,
+ * so it's listed separately and never counted as a finding.
  *
  * This script reads and reports. It never modifies a file, and it has no
  * flag that would make it modify a file.
@@ -26,12 +15,12 @@
  *   bun scripts/audit-module-optins.ts <recipe.json | directory> [...more]
  *
  * Directories are scanned recursively for *.json (including .recipe.json
- * snapshots; node_modules/.git skipped). Fleet children referenced by
- * local path are followed automatically.
+ * snapshots; node_modules, .git and web skipped). Fleet children referenced
+ * by local path are followed automatically.
  *
  * Exit codes: 0 = nothing needs an operator decision; 2 = explicit enables
- * (or inert-retrieval combinations) found — review the report; 1 = a path
- * argument could not be read.
+ * (or inert-retrieval combinations) found in a source recipe — review the
+ * report; 1 = a path argument could not be read.
  */
 
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';

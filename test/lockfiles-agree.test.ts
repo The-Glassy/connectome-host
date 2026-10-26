@@ -170,7 +170,7 @@ test("a copy placed differently that every importer resolves the same way agrees
   assert.equal(result.code, 0, result.stderr);
 });
 
-test("a stack package one lockfile has and the other lacks is named", async () => {
+test("a stack package one lockfile has and the other lacks is named, and a root install doesn't stand in for its import", async () => {
   const npm: Tree = {
     ...STACK,
     "@animalabs/agent-framework": { version: "0.22.1", deps: ["@animalabs/chronicle", "@animalabs/context-manager", "@animalabs/membrane"] },
@@ -222,10 +222,8 @@ test("a missing, damaged or shapeless lockfile fails, naming it", async () => {
   assert.equal(shapeless.stderr, "lockfiles-agree: couldn't read the lockfiles: bun.lock has no packages map\n");
 });
 
-// From main's lockfiles at 065b034 (Sep 10 to 14), which pinned membrane to a
-// commit: bun.lock writes `github:antra-tess/membrane#18a86e9`, with its
-// metadata second, and package-lock.json the git source and membrane's own
-// version, 0.5.84.
+// bun.lock writes a GitHub pin as `github:<repo>#<sha7>`, its metadata
+// second, and package-lock.json the git source and the package's own version.
 const MEMBRANE_PIN = "antra-tess/membrane#18a86e9eda277378acd982b07c7fe7c187721119";
 const PINNED: Tree = {
   ...STACK,
@@ -279,11 +277,10 @@ test("npm's ssh form of a GitHub pin, and a repository named in another case, co
   assert.equal(inCase.code, 0, inCase.stderr);
 });
 
-// As each lockfile writes a dependency on a tarball URL (npm 11.17.0 and
-// bun 1.4.3, October 17): package-lock.json the URL as its source, beside
-// the package's own version, and bun.lock `<name>@<url>`, its metadata
-// second. For the registry's own tarball, package-lock.json writes what it
-// writes for a version range.
+// As each lockfile writes a dependency on a tarball URL: package-lock.json
+// the URL as its source, beside the package's own version, and bun.lock
+// `<name>@<url>`, its metadata second. For the registry's own tarball,
+// package-lock.json writes what it writes for a version range.
 const REGISTRY_TARBALL = "https://registry.npmjs.org/@animalabs/chronicle/-/chronicle-0.4.0.tgz";
 const CODELOAD = "https://codeload.github.com/antra-tess/membrane/tar.gz/18a86e9eda277378acd982b07c7fe7c187721119";
 

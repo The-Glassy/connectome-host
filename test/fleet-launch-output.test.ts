@@ -226,8 +226,7 @@ describe('a failed launch quotes the child\'s own output', () => {
     expect(long.error).toEndWith(
       `\nThe end of the child's output during this launch (the rest is in ${log}):\n  ${'x'.repeat(1_991)}the end`,
     );
-    // 3,001 code units: the 1,998 that fit begin with the second half of an
-    // emoji, which goes.
+    // An emoji is two UTF-16 code units, so the cut lands inside one, which goes.
     const astral = await launch({ stderr: `${'\u{1F600}'.repeat(1_500)}z\n`, crashBeforeSocket: true });
     expect(astral.error).toEndWith(
       `\nThe end of the child's output during this launch (the rest is in ${log}):\n  ${'\u{1F600}'.repeat(998)}z`,
@@ -283,8 +282,7 @@ describe('a failed launch quotes the child\'s own output', () => {
   });
 
   // A spawn that fails, such as for a runtime that isn't there, starts no
-  // process: its pid stays undefined and no exit comes for it (Bun 1.3.14 and
-  // 1.4.3), so there's nothing to stop, wait for or quote.
+  // process: its pid stays undefined and no exit comes for it.
   test('a launch whose spawn started no process says so, without a stop, and leaves no starting record', async () => {
     const { fleet, log } = setup();
     const api = internal(fleet);
@@ -395,10 +393,8 @@ describe('a failed launch quotes the child\'s own output', () => {
     }
   });
 
-  // A header that doesn't fit, as on a full disk, goes in a short write and
-  // then a failed one, and the child's writes would fail the same way. A
-  // file-size limit stands in for the full disk, with SIGXFSZ ignored so the
-  // write fails with EFBIG; the launch runs in a process of its own under it.
+  // A file-size limit stands in for a full disk: with SIGXFSZ ignored, a write
+  // past it fails with EFBIG.
   test('a launch whose header can\'t be written gives the child no file, and says why', () => {
     const dir = mkdtempSync(join(tmpdir(), 'fleet-launch-output-'));
     dirs.push(dir);
@@ -439,8 +435,7 @@ describe('a failed launch quotes the child\'s own output', () => {
     expect(open).toEqual([]);
   }, 20_000);
 
-  // Bun's spawn throws for a NUL byte in an argument, such as a mistyped
-  // childIndexPath; the parent's copy of the descriptor closes all the same.
+  // Bun's spawn throws for a NUL byte in an argument.
   test.skipIf(process.platform !== 'linux')('a spawn that throws leaves no descriptor open on startup.log', async () => {
     const { fleet, launch, log } = setup({}, `${join(import.meta.dir, 'mock-fleet-lifecycle-child.ts')}\0`);
     const result = await launch({});
@@ -562,8 +557,8 @@ describe('a launch whose spawn starts no process', () => {
     test(`a runtime that ${kind} fails the launch at once with its code, for whoever runs the host to fix`, async () => {
       const { fleet, launch, saved } = await started({ childRuntimePath: runtime() });
       const result = await launch({});
-      // The reason is the spawn's error, so the socket wait ended on it, not
-      // at its timeout (10 s here, past the test's own 5 s).
+      // The socket wait's 10 s is past bun:test's default 5 s timeout, so a pass
+      // shows the wait ended on the spawn's error.
       expect(result.error).toStartWith(`Child 'leaf' didn't start (launch failed: its runtime couldn't be started: `);
       expect(result.error).toContain(code);
       expect(result.error).toEndWith('): no process started for it, so there\'s nothing to stop and no output to ' +

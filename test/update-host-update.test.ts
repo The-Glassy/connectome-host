@@ -172,8 +172,7 @@ test("the suite runs with the notice off, so the hosts its tests start don't rea
 });
 
 
-/** Make the first directory sync after a rename onto `path` fail, as a disk
- *  might once the rename has put the file in place. */
+/** A disk can fail a directory's sync once a rename has put the file in place. */
 function failSyncAfterRenameTo(path: string) {
   const rename = fs.renameSync;
   const fsync = fs.fsyncSync;
@@ -369,7 +368,7 @@ describe('Update', () => {
 });
 
 describe('Restart', () => {
-  test('quiesces, and once drained writes the mark and stops the host', async () => {
+  test('quiesces, and once drained writes the mark and stops the host, for the newest exact version whose host is in place', async () => {
     const { root, dataDir } = install('0.12.1', ['0.13.0', '0.13.0-rc.1', '0.11.0']);
     // A newer entry whose host isn't in place there is no release to switch
     // to, and an entry not named by an exact version is no release at all.
@@ -599,7 +598,7 @@ describe('Restart', () => {
 
   test("the busy lines and try later's say what each host's own answer says", async () => {
     const { root, dataDir } = install('0.12.1', ['0.13.0']);
-    // Undrained with no agent listed: a wake parked on provider admission.
+    // agent-framework is undrained with no agent listed while a wake is parked on provider admission.
     const { framework } = fakeFramework({ holders: [], drainAfter: Infinity, resumeFails: new Error('a resume is under way') });
     const fleet: SwitchFleet = {
       runningChildren: () => [{ name: 'kid' }, { name: 'busy' }, { name: 'gone' }],

@@ -58,8 +58,7 @@ beforeAll(async () => {
   mkdirSync(sibling, { recursive: true });
   writeFileSync(join(sibling, 'secret.txt'), 'pwned');
 
-  // Bun.serve supports port=0 → OS picks a free port; we read it back from
-  // the server. Avoids collisions when the test harness retries.
+  // Port 0 has the OS pick a free port, which is read back from the server.
   webUiModule = new WebUiModule({
     port: 0,
     host: '127.0.0.1',
@@ -191,7 +190,7 @@ describe('WebUiModule HTTP', () => {
     expect(log.slice(-3)).toEqual(['follow old', 'unfollow old', 'follow new']);
   });
 
-  test('bound retrieval JSON is no-store, redacted by default, and inputs require exact 1', async () => {
+  test('bound retrieval JSON is no-store, redacted by default, and inputs require exact 1, and its viewer inlines no trace data', async () => {
     let observedOptions: { limit?: number; includeInputs?: boolean } | undefined;
     const malicious = '</script><img src=x onerror="globalThis.pwned=true">';
     const retrieval = {
@@ -445,9 +444,8 @@ describe('WebUiModule HTTP', () => {
 
 describe('WebUiModule WebSocket', () => {
   test('upgrade rejects mismatched Origin with 403', async () => {
-    // Browsers always send Origin on WS upgrades; an attacker page would
-    // send its own origin, not the host's. With creds present (so we hit
-    // the actual Origin check) the server must reply 403 before auth runs.
+    // A browser sends its page's Origin on a WebSocket upgrade, so a page
+    // elsewhere sends its own.
     const res = await fetch(`http://127.0.0.1:${handle.port}/ws`, {
       headers: {
         authorization: basicAuthHeader(BASIC_USER, BASIC_PASS),
@@ -476,9 +474,8 @@ describe('WebUiModule WebSocket', () => {
 
   test('round-trips a ping with same-origin creds', async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${handle.port}/ws`, {
-      // Bun's WebSocket constructor takes a `headers` option in the second
-      // arg as an object; emulate the browser by sending Origin from
-      // 127.0.0.1:<port> and tacking on Authorization.
+      // Bun's WebSocket takes a headers option, which stands in for the browser's
+      // Origin here.
       headers: {
         origin: `http://127.0.0.1:${handle.port}`,
         authorization: basicAuthHeader(BASIC_USER, BASIC_PASS),

@@ -65,10 +65,8 @@ describe('recipe agent.refusalHandling', () => {
       const parsed = validateRecipe(recipe(undefined));
       (parsed.agent as Record<string, unknown>).refusalHandling = value;
       const config = buildFrameworkAgentConfig(parsed, 'agent', 'model', { kind: 'strategy' } as never);
-      // The constructor checks its switches before anything else, so its
-      // refusal names the setting; anything else it throws with these stubs
-      // comes later and isn't about refusalHandling. The setting's name, not
-      // the framework's wording, decides it.
+      // agent-framework's Agent constructor checks its switches before anything
+      // else, so a refusal with these stubs that names the setting is that check's.
       const framework = /refusalHandling/.test(thrown(() => new Agent(config, {} as never, {} as never)) ?? '');
       expect({ value, refused: host }).toEqual({ value, refused: framework });
     }

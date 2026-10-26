@@ -35,11 +35,9 @@ import { processEnded, waitForEnd } from './process-ended.js';
 
 const MODEL = { complete: async () => ({ stopReason: 'end_turn', content: [{ type: 'text', text: 'x' }] }) } as never;
 const INDEX_PATH = join(import.meta.dir, '..', 'src', 'index.ts');
-// context-manager's own build, the `main` its package names: another copy of
-// the library than the host's, which Bun loads from its source, as an
-// extension's own would be. The package is found where Bun resolves it from
-// here, in this checkout's node_modules or one above it, as a hoisted or
-// linked install leaves it.
+// context-manager's `main` build is another copy of the library than the
+// host's, which Bun loads from its source through the package's `bun` export,
+// as an extension's own copy would be.
 const CONTEXT_MANAGER = ((): string => {
   let dir = dirname(Bun.resolveSync('@animalabs/context-manager', import.meta.dir));
   while (!existsSync(join(dir, 'package.json')) && dirname(dir) !== dir) dir = dirname(dir);
@@ -60,10 +58,8 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-/** A store whose namespace holds 40 messages. With `crossed`, it also holds a
- *  level-2 summary whose leaves aren't contiguous in store order, made as
- *  context-manager's own topology tests make one, so an open under the
- *  default topology policy refuses it. */
+/** context-manager's default topology policy, 'reject', refuses at open a
+ *  summary whose leaves aren't contiguous in store order. */
 async function makeStore(path: string, namespace: string, crossed: boolean): Promise<void> {
   const seed = new AutobiographicalStrategy({ adaptiveResolution: true, hierarchical: true, autoTickOnNewMessage: false });
   const manager = await ContextManager.open({ path, namespace, strategy: seed, membrane: MODEL });
@@ -88,12 +84,8 @@ async function makeStore(path: string, namespace: string, crossed: boolean): Pro
   manager.close();
 }
 
-/** A store of 120 messages in `agents/agent` whose summary L2-x merges an L1
- *  over 40..49 with one over 60..69, and no record owns 50..59 (Effie-2289's
- *  case, room-203 #164796). A start chunks that run before its topology
- *  check, which gives L2-x holes, unless the messages are ones a start's view
- *  leaves out. The seed opens with `auditOnly` only so that adding the messages
- *  makes no chunk records. */
+/** The seed opens with auditOnly, which never chunks the uncovered frontier,
+ *  so adding the messages makes no chunk records. */
 async function makeSpanStore(path: string, run?: 'tuned-out' | 'injected' | 'own-injected'): Promise<void> {
   const seed = new AutobiographicalStrategy({ adaptiveResolution: true, hierarchical: true, autoTickOnNewMessage: false, auditOnly: true });
   const manager = await ContextManager.open({ path, namespace: 'agents/agent', strategy: seed, membrane: MODEL });
@@ -119,9 +111,8 @@ async function makeSpanStore(path: string, run?: 'tuned-out' | 'injected' | 'own
   manager.close();
 }
 
-/** A store whose agent's namespace opens and whose subconscious's context
- *  log holds a null where an entry should be, which the subconscious's open
- *  can't index (context-manager ContextLog.rebuildSourceIndex). */
+/** context-manager's ContextLog reads each entry's fields to index it
+ *  (rebuildSourceIndex), so a null entry fails the open. */
 async function makeBrokenSubconsciousStore(path: string): Promise<void> {
   await makeStore(path, 'agents/agent', false);
   const store = JsStore.openOrCreate({ path });
@@ -135,8 +126,7 @@ async function makeBrokenSubconsciousStore(path: string): Promise<void> {
 async function makeDataDirWith(name: string, makers: Array<(store: string) => Promise<void>>): Promise<{ dir: string; stores: string[] }> {
   const dir = join(root, name);
   const manager = new SessionManager(dir);
-  // An id of digits alone would be listed before the others, as an integer
-  // key is, so the sessions' order would no longer be the makers'.
+  // An object lists a key that reads as an array index before its other keys.
   const made = makers.map(() => {
     for (;;) {
       const session = manager.createSession();
@@ -200,9 +190,8 @@ async function entry(dirs: string[], options: { holdAfter?: string; env?: Record
   return { status, stdout, stderr };
 }
 
-/** A recipe whose strategy extension `type` is made by the factory `source`
- *  gives, as a module's text, written to a file of the data directory's own,
- *  since a module is loaded once per path. */
+/** A module is loaded once per path, so each data directory's extension is a
+ *  file of its own. */
 function withStrategy(dir: string, type: string, source: string): void {
   const extension = join(root, `${basename(dir)}-${type}-strategy.ts`);
   writeFileSync(extension, source);
@@ -404,8 +393,7 @@ describe('the store audit', () => {
     const line = (said: unknown) => `--fleet-child load repair ${JSON.stringify(said)}`;
     const taken = (r: unknown) => fleetChildRepair(line({ store: '/s', agent: 'Kid', report: r }));
     expect(fleetChildRepair(line({ store: '/s', agent: 'Kid', report }))).toEqual({ store: '/s', agent: 'Kid', report } as never);
-    // What context-manager may send: nulls where a value couldn't be read,
-    // and fields a later version adds.
+    // context-manager's report holds null where a value couldn't be read.
     for (const r of [
       { ...report, dropped: [{ ...drop, level: null, tokens: null, sourceRange: null }] },
       { ...report, dropped: [{ ...drop, sourceRange: { ...range, firstAt: null, lastAt: null } }] },
@@ -539,8 +527,7 @@ describe('the store audit', () => {
 
   test("the audit's subconscious view answers as the filter agent-framework opens a named subconscious with", async () => {
     // agent-framework doesn't export createSubconsciousAgent's filter, so this
-    // takes the one it passes to ContextManager.open for the subconscious's
-    // namespace, and asks it and the audit's copy about the same rows.
+    // takes the one it passes to ContextManager.open.
     const { stores } = await makeDataDirWith('framework-subconscious', [(store) => makeStore(store, 'agents/agent', false)]);
     let frameworkView: ((message: never) => boolean) | undefined;
     const open = ContextManager.open.bind(ContextManager);
@@ -817,7 +804,7 @@ describe('the store audit', () => {
     expect(failed).toEqual([`Couldn't audit ${dir}: cannot build`]);
   });
 
-  test("each store's open gets a strategy of its own", async () => {
+  test("each store's open gets a strategy of its own, after the one built to check the recipe", async () => {
     const { dir } = await makeDataDir('data', [
       { namespace: 'agents/agent', crossed: false },
       { namespace: 'agents/agent', crossed: false },
@@ -990,8 +977,7 @@ describe('the store audit', () => {
       '}',
     ].join('\n'));
     const { status, lines } = await audit([dir]);
-    // Whichever store is opened first, as the index lists its sessions, meets
-    // the call; an id of digits alone is listed first.
+    // An object lists a key that reads as an array index before its other keys.
     const [first, second] = lines[0]!.startsWith("Couldn't audit") ? [lines[0]!, lines[1]!] : [lines[1]!, lines[0]!];
     const called = stores.find((store) => first === `Couldn't audit ${store}: ${MODEL_CALLED}`);
     expect(called, lines.join('\n')).toBeDefined();
@@ -1000,7 +986,7 @@ describe('the store audit', () => {
     expect(status).toBe(1);
   });
 
-  test("a strategy that can't be built for a later store leaves that store not audited, not refused", async () => {
+  test("a strategy that can't be built for a store, once the recipe check's build has worked, leaves that store not audited, not refused", async () => {
     const { dir, stores } = await makeDataDir('data', [{ namespace: 'agents/agent', crossed: false }]);
     // The first build, which checks the recipe, works; the one for the store doesn't.
     withStrategy(dir, 'fickle', [
@@ -1130,8 +1116,8 @@ describe('the store audit', () => {
       { namespace: 'agents/agent', crossed: true },
       { namespace: 'agents/agent', crossed: false },
     ]);
-    // An extension whose import starts a timer, which would keep a process
-    // that waits for its event loop to empty alive.
+    // A pending timer keeps a process that waits for its event loop to empty
+    // alive.
     const extension = join(root, 'lingering.ts');
     const started = join(root, 'timer-started');
     writeFileSync(extension, [
@@ -1214,7 +1200,7 @@ describe("what a strategy's open and an index can do", () => {
     ]);
     // The second session's entry, as one naming a store two levels up.
     const index = JSON.parse(readFileSync(join(dir, 'sessions.json'), 'utf8'));
-    // Not by position: a key of digits alone comes first in an object's keys.
+    // An object lists a key that reads as an array index before its other keys.
     const second = Object.keys(index.sessions).find((key) => key !== index.activeSessionId);
     const escaped = '../../escaped';
     index.sessions[escaped] = { ...index.sessions[second!], id: escaped };
@@ -1478,8 +1464,7 @@ describe("a fleet child's audit, in a process of its own", () => {
       ended = await waitForEnd(helper, 10_000);
       expect(ended).toBe(true);
     } finally {
-      // Only one that hasn't ended: an ended helper's pid may be another
-      // process's by now.
+      // An ended process's pid may be another process's by now.
       if (!ended) {
         try { process.kill(helper, 'SIGKILL'); } catch { /* it has ended since */ }
       }
@@ -1627,11 +1612,11 @@ describe("a fleet child's audit and what outlasts it", () => {
     leftovers.push(() => { if (before === undefined) delete process.env.CONNECTOME_FLEET_CHILD_AUDIT_MINUTES; else process.env.CONNECTOME_FLEET_CHILD_AUDIT_MINUTES = before; });
     const later = globalThis.setTimeout;
     const limits: number[] = [];
-    let others = 0;
+    let longTimersArmedOutsideTheAudit = 0;
     const timers = spyOn(globalThis, 'setTimeout').mockImplementation(((handler: () => void, ms?: number, ...rest: unknown[]) => {
       if (typeof ms === 'number' && ms >= 60_000) {
         if (armedByAudit()) limits.push(ms);
-        else others++;
+        else longTimersArmedOutsideTheAudit++;
       }
       return later(handler, ms, ...rest);
     }) as typeof setTimeout);
@@ -1647,13 +1632,12 @@ describe("a fleet child's audit and what outlasts it", () => {
       if (before === undefined) delete process.env.CONNECTOME_FLEET_CHILD_AUDIT_MINUTES;
       else process.env.CONNECTOME_FLEET_CHILD_AUDIT_MINUTES = before;
     }
-    // A billion minutes, or Infinity, is more than a timer holds, so it's the
-    // longest one does.
+    // A timer holds at most 2 ** 31 - 1 ms.
     expect(limits).toEqual([7.5 * 60_000, 2 ** 31 - 1, 2 ** 31 - 1, 5 * 60_000, 5 * 60_000, 5 * 60_000, 5 * 60_000]);
     // At least one long timer armed from outside the audit was left out, as
     // the parent's strategy arms one each time it's built; the count doesn't
     // say which caller armed it.
-    expect(others).toBeGreaterThan(0);
+    expect(longTimersArmedOutsideTheAudit).toBeGreaterThan(0);
   }, 90_000);
 
   test("a child's audit past its limit whose SIGKILL ends nothing is settled without it, and stays listed", async () => {
@@ -1840,10 +1824,11 @@ describe("which fleet children an audit follows, and how", () => {
     const recipe = childRecipe('kid', { extensions: { waiting: { kind: 'module', path: extension } } });
     const env: Record<string, string | undefined> = { ...process.env };
     for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_OAUTH_CREDENTIALS_FILE', 'DATA_DIR']) delete env[key];
-    // It leads its own group, as the audit that starts it makes it.
+    // Spawned detached, the child leads a process group of its own.
     const child = spawn('bun', [INDEX_PATH, '--audit-stores', '--fleet-child', '--recipe', recipe, dir], { env, stdio: ['pipe', 'ignore', 'pipe'], detached: true });
     // Told to begin, as the audit that starts it tells it.
-    child.stdin!.write('\n');
+    const tellItToBegin = '\n';
+    child.stdin!.write(tellItToBegin);
     let stderr = '';
     child.stderr!.on('data', (chunk) => { stderr += chunk; });
     const ended = new Promise<string>((done) => child.on('exit', (code, signal) => done(signal ?? `status ${code}`)));
@@ -1980,8 +1965,8 @@ describe("which fleet children an audit follows, and how", () => {
       PARENT_AT_IMPORT,
       "import { spawn } from 'node:child_process';",
       "import { existsSync, writeFileSync } from 'node:fs';",
-      // A helper in the audit's own group, which writes in the child's data
-      // directory once the test lets it.
+      // Spawned without detached, the helper stays in the audit's own process
+      // group.
       `const helper = spawn('sh', ['-c', 'while [ ! -e ${go} ]; do sleep 0.05; done; echo late > ${late}'], { stdio: 'ignore' });`,
       `writeFileSync(${JSON.stringify(helperPid)}, String(helper.pid));`,
       'helper.unref();',
@@ -2047,7 +2032,7 @@ describe("which fleet children an audit follows, and how", () => {
     const toldEnded = new Promise((done) => told.on('exit', done));
     for (let waited = 0; !existsSync(toldMark) && waited < 30_000; waited += 20) await Bun.sleep(20);
     expect(existsSync(toldMark), 'a child told to begin never loaded its extension').toBe(true);
-    const took = Date.now() - began;
+    const toldChildLoadMs = Date.now() - began;
     await toldEnded;
     const loaded = join(root, 'loaded');
     const child = start(loaded);
@@ -2055,7 +2040,7 @@ describe("which fleet children an audit follows, and how", () => {
     child.stderr!.on('data', (chunk) => { stderr += chunk; });
     const ended = new Promise<string>((done) => child.on('exit', (code, signal) => done(signal ?? `status ${code}`)));
     // Never told to begin: given three times as long, it has loaded none.
-    await Bun.sleep(Math.max(1_500, 3 * took));
+    await Bun.sleep(Math.max(1_500, 3 * toldChildLoadMs));
     expect(existsSync(loaded)).toBe(false);
     child.stdin!.end();
     const how = await Promise.race([ended, Bun.sleep(20_000).then(() => 'still running')]);
@@ -2100,8 +2085,7 @@ describe("which fleet children an audit follows, and how", () => {
       write.mockRestore();
     }
     expect(failing.failed).toEqual([`${listing}no space left on device`]);
-    // A write that replaced the file and then failed, as when the sync of
-    // its directory does: the entry it left is taken out.
+    // A directory's sync can fail after a write has replaced the file.
     const real = contract.writeJsonAtomic;
     const landed = spyOn(contract, 'writeJsonAtomic').mockImplementationOnce((path, value) => {
       real(path, value);
@@ -2327,9 +2311,7 @@ describe('which stores an audit opens, by where they lie', () => {
       { namespace: 'agents/agent', crossed: false },
       { namespace: 'agents/agent', crossed: false },
     ]);
-    // The first store's log moves out of the data directory, with three torn
-    // bytes after its last record, which an open would cut; the second's moves
-    // within it. A link takes each one's place.
+    // A store's open cuts torn bytes after its last record.
     const out = join(root, 'outside-log');
     renameSync(join(stores[0]!, 'records.log'), out);
     symlinkSync(out, join(stores[0]!, 'records.log'));
@@ -2550,7 +2532,7 @@ describe('a host on trial, before its commit', () => {
     } finally {
       opening.mockRestore();
     }
-    return { ...counts, opened, message: error === undefined ? undefined : error instanceof Error ? error.message : String(error) };
+    return { ...counts, openedInThisProcess: opened, message: error === undefined ? undefined : error instanceof Error ? error.message : String(error) };
   }
 
   test("audits every store it would open only after its commit under a place its fallback undoes, leaves its active session to its own start, and a store it can't open ends the start with `current` as it was", async () => {
@@ -2594,7 +2576,7 @@ describe('a host on trial, before its commit', () => {
     expect(result.stopped).toBe(1);
     expect(readCurrent(install)).toBe('0.10.2');
     // The child's stores are opened by its own process, not this one.
-    expect(result.opened).toEqual([stores[1]!]);
+    expect(result.openedInThisProcess).toEqual([stores[1]!]);
     const farLine = `Couldn't audit ${outside.dir}, ${dir}'s fleet child far's directory: it lies outside every place ` +
       "this trial's fallback puts back, where an update can't put back what opening its stores changes, so it wasn't " +
       `audited. To update, move it under ${dir} and point its fleet entry there, or declare it by running ` +
@@ -2630,7 +2612,7 @@ describe('a host on trial, before its commit', () => {
       } finally {
         log.mockRestore();
       }
-      expect(result.opened).toEqual([]);
+      expect(result.openedInThisProcess).toEqual([]);
       expect(result.started).toBe(0);
       expect(result.stopped).toBe(1);
       expect(result.message).toBe(said);
@@ -2650,7 +2632,7 @@ describe('a host on trial, before its commit', () => {
     } finally {
       log.mockRestore();
     }
-    expect(result.opened).toEqual([]);
+    expect(result.openedInThisProcess).toEqual([]);
     expect(result.message).toContain(`\n${outsideLine(stores[1]!, TRIAL_PLACES, true)}\n`);
   });
 
@@ -2821,8 +2803,7 @@ describe('a host on trial, before its commit', () => {
 
   test("through the host's entry, on a trial: an active session's store holding a link out of the places ends the start before anything opens it", async () => {
     const { dir, stores } = await makeDataDir('data', [{ namespace: 'agents/agent', crossed: false }]);
-    // The active store's log moves out of the data directory, with three torn
-    // bytes after its last record, which an open would cut.
+    // A store's open cuts torn bytes after its last record.
     const out = join(root, 'outside-log');
     renameSync(join(stores[0]!, 'records.log'), out);
     symlinkSync(out, join(stores[0]!, 'records.log'));
@@ -2838,8 +2819,7 @@ describe('a host on trial, before its commit', () => {
 
   test("through the host's entry, with no trial under way: a release `current` doesn't name ends its start having opened no store", async () => {
     const { dir, stores } = await makeDataDir('data', [{ namespace: 'agents/agent', crossed: false }]);
-    // Three torn bytes after the active store's last record, which an open
-    // would cut.
+    // A store's open cuts torn bytes after its last record.
     const log = join(stores[0]!, 'records.log');
     appendFileSync(log, 'xyz');
     const size = statSync(log).size;
@@ -2989,7 +2969,7 @@ describe('a host on trial, before its commit', () => {
       rmSync(join(install, 'current'));
       await expect(startFramework(framework, { root: install, release: '0.11.0' }, { dataDir: dir, activeStore: stores[0]!, places }))
         .rejects.toThrow('has no `current` to say which release it runs on');
-      // A `current` that isn't a link, which can't be read.
+      // readlink fails with EINVAL on a file that isn't a link.
       writeFileSync(join(install, 'current'), '0.10.2');
       await expect(startFramework(framework, { root: install, release: '0.11.0' }, { dataDir: dir, activeStore: stores[0]!, places }))
         .rejects.toThrow(new RegExp(`^This host couldn't read which release the install at ${install} runs on, so none of its agents started: EINVAL: .*\\. Each start reads \`current\` again before any agent starts\\.$`));

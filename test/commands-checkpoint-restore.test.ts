@@ -1,12 +1,9 @@
 import { describe, test, expect } from 'bun:test';
 import { handleCommand, createBranchState } from '../src/commands.js';
 
-// Regression tests for /checkpoint + /restore POSITION semantics. The
-// original bug: checkpoints stored only a branch name, so /restore switched
-// to the branch HEAD — including everything after the checkpoint — rolling
-// back nothing, silently. These tests run over a stub ContextManager that
-// mimics Chronicle's contract: branchAt resolves ids against the CURRENT
-// branch's view of the log and throws for unreachable ids.
+// The stub ContextManager mimics context-manager's branchAt: it resolves an id
+// against the current branch's messages and throws for an id that branch
+// can't reach.
 
 interface StubMessage { id: string; participant: string; content: unknown[] }
 

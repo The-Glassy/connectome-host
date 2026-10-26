@@ -44,10 +44,9 @@ import type {
 import { shown } from './shown.js';
 import { unknownToolResult } from './unknown-tool.js';
 
-/** What a refused channel_idle_limits can't say for the rest of its
- *  agent_settings call: agent-framework applies each settings extension in
- *  turn and then the core patch, so an extension's throw leaves the ones
- *  before it applied and the core patch not (0.22.3). */
+/** agent-framework applies each agent_settings extension in turn and then
+ *  the core patch, so an extension's throw leaves the ones before it applied
+ *  and the core patch not. */
 const OTHER_SETTINGS =
   'Other settings given in the same call may not all have been applied: agent_settings with action "get" shows each as it stands.';
 
@@ -139,14 +138,8 @@ export class SubscriptionGcModule implements Module {
     this.ctx = null;
   }
 
-  /** No agent-visible tools — idle limits live inside the framework's
-   *  `agent_settings` tool via getAgentSettingsExtension() below (same
-   *  consolidation as the reasoning controls). The former tools remain
-   *  ROUTABLE though undeclared (module tool routing is prefix-based), so
-   *  agent muscle memory keeps working. ChannelModeModule holds channels
-   *  open via the internal `subscription-gc--pin_channel_idle_limit` tool
-   *  — a separate layer from agent overrides, so agent_settings reset
-   *  can't break debounced mode's invariant. */
+  /** agent-framework routes a call by its module prefix whether or not the
+   *  tool is declared, so the former tools still answer here. */
   getTools(): ToolDefinition[] {
     return [];
   }
@@ -225,22 +218,8 @@ export class SubscriptionGcModule implements Module {
     }
   }
 
-  /**
-   * Declare idle limits as an agent_settings extension: the framework merges
-   * the field into the agent_settings tool and routes get/update/reset back
-   * here. Same pattern as SettingsModule's reasoning fields. Update semantics
-   * mirror the (undeclared but still routable) set_channel_idle_limit tool:
-   * per entry, a positive number sets an override, "off" disables auto-close
-   * for the channel, and "default"/null clears back to the global default.
-   * Entries not mentioned in a patch are left untouched, and a patch applies
-   * all-or-nothing: it is validated in full before any entry takes effect.
-   *
-   * `get` additionally reports read-only companions (the framework merges
-   * ext.get() into the response but only routes declared `keys` on update):
-   * `channel_idle_default`, live `channel_idle_counters`, and
-   * `channel_idle_pinned` — system pins held by other modules, which sit
-   * above these overrides and are not touched by update or reset.
-   */
+  /** agent-framework merges get()'s fields into agent_settings' answer, and
+   *  routes only the declared `keys` to update. */
   getAgentSettingsExtension(): {
     properties: Record<string, unknown>;
     keys: string[];
@@ -358,14 +337,9 @@ export class SubscriptionGcModule implements Module {
       // Cross the threshold → close and clear the counter.
       delete this.state.counters[channelId];
       this.persistNow();
-      // A CONFIGURED numeric budget for this channel is an explicit idle
-      // lease: someone chose a close-at-N budget for this specific channel,
-      // so the registry may close even an explicitly-opened one. The state
-      // does not record WHO configured it (agent via agent_settings,
-      // operator, or imported before these semantics existed), so nothing
-      // downstream may claim "agent-set" — receipts say 'configured-budget',
-      // actor unknown. The global default is not consent of any kind; the
-      // registry refuses machine closes of explicit opens under it (#5).
+      // agent-framework refuses a machine close of an explicitly opened channel
+      // unless the close certifies an idle lease, which a budget configured for
+      // the channel is, and refuses a tuned-out channel's close in any case.
       const hasConfiguredLease = typeof this.state.overrides[channelId] === 'number';
       const result = await this.ctx
         ?.callTool({
@@ -385,14 +359,8 @@ export class SubscriptionGcModule implements Module {
         }));
 
       if (result && result.success) {
-        // Operator-side receipt (privacy-minimal: ids and thresholds, no
-        // content) — a GC close changes durable listening state and must
-        // not look spontaneous from outside the transcript. Duck-typed
-        // against a framework that may not have ModuleContext.notifyOps yet
-        // (skipped there), and invoked THROUGH the context object: the real
-        // ModuleContextImpl.notifyOps reads `this`, so a detached
-        // `const f = ctx.notifyOps; f(...)` throws in production while
-        // passing against arrow-function mocks.
+        // ModuleContext.notifyOps is optional, and agent-framework's implementation
+        // reads `this`, so it's called through the context.
         const opsCtx = this.ctx as unknown as {
           notifyOps?: (kind: string, agent: string, message: string, data?: Record<string, unknown>) => void;
         } | null;

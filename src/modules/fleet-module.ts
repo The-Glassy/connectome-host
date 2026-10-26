@@ -1,22 +1,8 @@
 /**
- * FleetModule — orchestrates child connectome-host processes.
- *
  * Each child is spawned as a detached subprocess running `bun src/index.ts
  * <recipe> --headless`, with its own DATA_DIR and Chronicle store.  The
  * parent connects to the child's Unix socket at {dataDir}/ipc.sock and
  * exchanges JSONL envelopes (see `fleet-types.ts`, `docs/fleet-protocol.md`).
- *
- * Tools: launch / list / status / send / command / peek / kill / restart / relay / await.
- *
- * Naming note: this module's `launch` is deliberately NOT `spawn` — the
- * agent framework's SubagentModule already owns `subagent--spawn` for an
- * in-process ephemeral agent with a different identity and lifecycle.
- * `fleet--launch` means "start a separate recipe-driven child process"
- * and should not be confused with it.
- * Features: autoStart on framework start, allowedRecipes enforcement,
- * autoRestart with flap cap, Chronicle persistence of fleet state, and
- * adopt-on-restart (reattach to living children after parent restart).
- * Shutdown supports detach mode (leave children alive for next parent).
  */
 
 import type {
@@ -55,6 +41,8 @@ import { FLEET_BEGIN_ENV } from '../fleet-begin.js';
  * the wire just needs it for host-level observability.
  */
 const HOST_FORCED_TELEMETRY_EVENTS: readonly string[] = ['usage:updated'];
+export const CLOCK_SLACK_MS = 60_000;
+const ADOPTION_UNRESOLVED = 'adoption unresolved;';
 
 /**
  * Force the events the unified-tree reducer + host telemetry need into every
@@ -298,12 +286,10 @@ function withLaunchFailure(failure: string, exit: string): string {
   return `${failure} (exit: ${exit})`;
 }
 
-/** A spawn's error as a record and the agent read it, with its code. Node's
- *  and Bun's ERR_INVALID_ARG_* messages end with the value they refused
- *  (" Received …"), which for an env value may be a secret, and exitReason is
- *  persisted, so the text stops before it, or is the code alone. The store
- *  audit (src/update/audit-stores.ts) writes a child audit's spawn error by it
- *  too. */
+/** Node's and Bun's ERR_INVALID_ARG_* messages end with the value they
+ *  refused (" Received …"), which for an env value may be a secret, and
+ *  exitReason is persisted, so the text stops before it, or is the code
+ *  alone. */
 export function spawnErrorText(err: unknown): string {
   const code = (err as NodeJS.ErrnoException | null)?.code;
   const message = err instanceof Error ? err.message : String(err);
@@ -447,23 +433,8 @@ export class FleetModule implements Module {
     this.allowlist = [...(explicit ?? []), ...implicit];
   }
 
-  /**
-   * Synchronous SIGKILL of every live child this fleet owns. Invoked from
-   * the 'exit' listener installed in start(); also safe to call directly.
-   *
-   * Coverage and limits:
-   *  - Spawned children (proc handle present, no exit yet): their whole
-   *    process group, which the leader's id still names; proc.kill if that
-   *    signal fails.
-   *  - Adopted children (proc null, pid populated): their group while this
-   *    host's connection to the child is open, which only the child's own
-   *    process can hold, and otherwise the bare pid, as before. Without
-   *    this, adopt-on-restart cleanup is a no-op.
-   *  - Detach mode: skipped — those children are *meant* to survive for
-   *    the next parent to adopt.
-   *  - Hard-crash / SIGKILL of the parent: 'exit' does not fire, so this
-   *    cannot help. Detached children orphan to PID 1 in that path.
-   */
+  /** The 'exit' listener doesn't fire on a hard crash or a SIGKILL of the parent,
+   *  and detached children then orphan to PID 1. */
   private killAllOnExitSync(): void {
     if (this.detachMode) return;
     // Each child's whole group, since its exit can't be seen once this host
@@ -583,13 +554,8 @@ export class FleetModule implements Module {
     }
   }
 
-  /**
-   * Give the fleet what makes the parent's store durable now, such as the
-   * framework's store sync, which the host passes once the framework exists.
-   * A store write is otherwise durable only at the store's next sync or close,
-   * so the record of a child's spawn is synced at once: a parent killed while
-   * the child starts then leaves the record for its next start's adoption.
-   */
+  /** A Chronicle store write is durable only at the store's next sync or close,
+   *  so the record of a child's spawn is synced at once. */
   setStoreSync(sync: () => void): void {
     this.storeSync = sync;
   }
@@ -694,7 +660,7 @@ export class FleetModule implements Module {
     // Another writer's entry carries no start time, so one whose boot isn't
     // known is taken as this boot's: a hold the launcher names, rather than
     // data moved under a process still running.
-    const sameBoot = (bootId: string | null): boolean => bootId === null || thisBoot === null || bootId === thisBoot;
+    const mayBeSameBoot = (bootId: string | null): boolean => bootId === null || thisBoot === null || bootId === thisBoot;
     for (const c of this.children.values()) {
       listedDirs.add(resolve(c.dataDir));
       // One whose leader is gone without this host ending its group, as when
@@ -714,7 +680,7 @@ export class FleetModule implements Module {
       // Another writer's entry, such as a store audit's, stays while its pid
       // or the group it leads may have a process.
       const running = child.pid !== null && (this.pidInUse(child.pid) || this.groupInUse(child.pid)) &&
-        sameBoot(child.bootId);
+        mayBeSameBoot(child.bootId);
       if (listedDirs.has(resolve(child.dataDir))) {
         if (running && !knownPids.has(child.pid!)) children.push(child);
       } else {
@@ -793,9 +759,9 @@ export class FleetModule implements Module {
           const inUse = this.fromThisBoot(p) && this.pidInUse(p.pid);
           orphan.status = inUse ? 'starting' : 'crashed';
           orphan.exitReason = inUse
-            ? `adoption unresolved; its pid (${p.pid}) is still in use, so this host starts no other copy of it, and ` +
+            ? `${ADOPTION_UNRESOLVED} its pid (${p.pid}) is still in use, so this host starts no other copy of it, and ` +
               'fleet--restart of it reattaches once it answers on its socket'
-            : 'adoption unresolved; fleet--restart of it, or fleet--launch with its recipe and ' +
+            : `${ADOPTION_UNRESOLVED} fleet--restart of it, or fleet--launch with its recipe and ` +
               'dataDir, probes it again';
           this.children.set(name, orphan);
           continue;
@@ -859,9 +825,6 @@ export class FleetModule implements Module {
     };
     // Resolved env values may contain secrets. Chronicle stores historical
     // snapshots, so env is runtime-only and legacy persisted env is ignored.
-    // Re-read the current configuration for the same child, including entries
-    // with autoStart:false. Name alone must not transfer secrets to a different
-    // recipe or data directory that happens to reuse the name.
     const recipeIdentity = (recipe: string): string =>
       /^https?:\/\//.test(recipe) ? recipe : resolve(recipe);
     const configured = this.autoStartChildren.find((c) =>
@@ -897,7 +860,7 @@ export class FleetModule implements Module {
     return p.status === 'crashed' && (
       p.exitReason?.startsWith('adopt failed:') === true ||
       p.exitReason === 'orphaned (parent restarted; child not alive)' ||
-      p.exitReason?.startsWith('adoption unresolved;') === true
+      p.exitReason?.startsWith(ADOPTION_UNRESOLVED) === true
     );
   }
 
@@ -912,17 +875,9 @@ export class FleetModule implements Module {
     return true;
   }
 
-  /**
-   * Connect to the child's Unix socket and treat the adopted connection as
-   * if we just spawned the child.  The child's headless runtime closes the
-   * previous client (if any) and re-emits lifecycle:ready for us.
-   *
-   * PID-reuse guard: the process.kill(pid,0) pre-check in probeLiveness
-   * only verifies *some* process owns the PID, which after a reboot can be
-   * an unrelated process.  We verify the first lifecycle:ready event's pid
-   * matches the persisted pid; if it doesn't, another process serves the
-   * socket, and we abort the adoption.
-   */
+  /** process.kill(pid, 0) shows only that some process holds the pid, which
+   *  after a reboot can be an unrelated one, so the first lifecycle:ready's pid
+   *  must match the persisted pid. */
   private async reattachToLivingChild(p: PersistedChild): Promise<FleetChild> {
     const child = this.reconstructOrphan(p);
     child.status = 'starting';  // transitions to 'ready' via the lifecycle event once reattached
@@ -972,29 +927,11 @@ export class FleetModule implements Module {
   }
 
   /**
-   * Signal what is left of the process group a child led, as soon as this
-   * host sees its leader end: its exit event, a failed launch that finds the
-   * exit shown before that event has run, or, for an adopted child this host
-   * is stopping, its process gone while the host's connection to it was open
-   * when the stop began. A child leads a group of its own (it's spawned
-   * detached), and a helper it started there, such as a server, could go on
-   * writing in its data directory after it. The group's id is the leader's
-   * pid, which isn't reused while the group has a member, so the signal
-   * reaches what the child left. It's sent at once, so the only window in
-   * which a pid freed with the group's last member could be taken by another
-   * process's group is between the leader's end and this signal: the exit
-   * event's own callback, or an adopted stop's poll, every 100 ms. Where this
-   * host didn't see the end, as for a child that ended while no host ran, it
-   * signals nothing, since the group may have emptied and its id been taken
-   * since. Either way the child is listed while its group has a member, and
-   * retired once it's found empty: by this signal finding no process in it,
-   * by a stop's wait (settleGroup), or by any write of an ended child
-   * (persistState), since a signal sent isn't one received: a member can be
-   * still ending, or one the signal couldn't reach. One that fails other
-   * than for a group that's gone, such as one not permitted, is said, and
-   * recorded for the note (groupLeftNote). It's sent once for each
-   * generation: two stops of one adopted child can both see its end, and a
-   * second signal could find the group's id taken since.
+   * A child leads a process group of its own, since it's spawned detached, and
+   * the group's id is its pid, which isn't reused while the group has a member.
+   * A pid freed with the group's last member can be taken by another process's
+   * group, so the signal goes as soon as the leader's end is seen, and once for
+   * each generation.
    */
   private endGroupOf(child: FleetChild, pid: number | null): void {
     if (pid === null || !Number.isSafeInteger(pid) || pid <= 0) return;
@@ -1043,11 +980,9 @@ export class FleetModule implements Module {
     }
   }
 
-  /** Whether the group a child led, whose own process has ended, may still
-   *  have a member: a group with its id has one, and no process holds the
-   *  pid itself. A pid isn't handed out while a group with that id has a
-   *  member, so a process holding it now is another's, and the child's group
-   *  has ended, whatever group that process leads. */
+  /** A pid isn't handed out while a group with that id has a member, so a
+   *  process holding it now is another's, and the child's group has ended,
+   *  whatever group that process leads. */
   private groupLeftBy(pid: number | null): boolean {
     return this.groupInUse(pid) && !this.pidInUse(pid);
   }
@@ -1070,16 +1005,12 @@ export class FleetModule implements Module {
     return false;
   }
 
-  /** Whether a child's record is from this boot. No process outlives a
-   *  boot, so a record from an earlier boot has none, whatever holds its pid
-   *  now. The boot id tells, where the record and this host both have one,
-   *  whatever the clock has done since. Otherwise the record's start time is
-   *  read against the machine's uptime, with a minute of slack for a clock
-   *  that moved a little. */
+  /** No process outlives a boot, so a record from an earlier boot has none,
+   *  whatever holds its pid now. */
   private fromThisBoot(c: { bootId?: string | null; startedAt: number }): boolean {
     const thisBoot = this.bootId();
     if (typeof c.bootId === 'string' && thisBoot !== undefined) return c.bootId === thisBoot;
-    return c.startedAt >= Date.now() - uptime() * 1000 - 60_000;
+    return c.startedAt >= Date.now() - uptime() * 1000 - CLOCK_SLACK_MS;
   }
 
   /** This machine's boot id, where Linux gives one. It changes at every
@@ -1115,8 +1046,8 @@ export class FleetModule implements Module {
   }
 
   /** Bun 1.3 reports ENOENT for Unix refusals; 1.4 also maps EMFILE to
-   * ECONNREFUSED. The already-required Node runtime preserves the actual error.
-   * Missing Node, spawn failure, timeout, live or unknown endpoints fail closed. */
+   *  ECONNREFUSED. The already-required Node runtime preserves the
+   *  actual error. */
   private socketRefusesConnection(socketPath: string): Promise<boolean> {
     const probe = `const {connect}=require('node:net');
       const socket=connect(process.argv[1]);
@@ -1262,9 +1193,8 @@ export class FleetModule implements Module {
     for (const child of this.children.values()) this.cancelAutoRestart(child);
 
     if (this.detachMode) {
-      // Detach: close socket references only; leave child processes alive so
-      // a later parent can adopt them.  Children's own headless runtimes
-      // keep running because they were spawned with detached: true.
+      // Children's own headless runtimes keep running, since they were spawned
+      // with detached: true.
       for (const c of this.children.values()) {
         try { c.socket?.destroy(); } catch { /* noop */ }
         c.socket = null;
@@ -1956,13 +1886,11 @@ export class FleetModule implements Module {
     // The child's stdout and stderr go to startup.log for its whole life, or
     // nowhere if the parent can't open it as a regular file. headless.ts
     // redirects process.stdout.write and process.stderr.write to headless.log
-    // until its shutdown ends that log, but Bun's console.* writes to the file
-    // descriptors directly (Bun 1.3.14 and 1.4.3), so every console line the
-    // child prints lands here: a recipe error, a missing API key, an import
-    // crash, and a fatal error after the redirect, such as a failed listen. So
-    // does what the child writes once its shutdown has ended headless.log. A
-    // failed launch quotes the end of what the child wrote here after its
-    // header, or says why it can't.
+    // until its shutdown ends that log, but Bun's console.* writes to the
+    // file descriptors directly (Bun 1.3.14 and 1.4.3), so every console line
+    // the child prints lands here: a recipe error, a missing API key, an
+    // import crash, and a fatal error after the redirect, such as a failed
+    // listen.
     const { fd: startupFd, log: startupLog } = openStartupLog(join(dataDir, 'startup.log'),
       `\n--- launch ${new Date().toISOString()} recipe=${recipePath} pid=parent:${process.pid} ---\n`);
 
@@ -2000,8 +1928,7 @@ export class FleetModule implements Module {
     }
     // A spawn that can't start the runtime, such as one that isn't there,
     // reports it here on a later tick, with no pid and no exit to follow, and
-    // the socket wait then ends at once. An error for a process that started,
-    // such as a kill that failed, changes nothing.
+    // the socket wait then ends at once.
     proc.on('error', (err) => {
       if (proc.pid === undefined) child.spawnError ??= err;
       else console.error(`[fleet] child "${child.name}" (pid ${proc.pid}): ${spawnErrorText(err)}`);
@@ -2582,9 +2509,8 @@ export class FleetModule implements Module {
       if (child.process && (child.process.exitCode !== null || child.process.signalCode !== null)) {
         const { exitCode, signalCode } = child.process;
         const exited = signalCode !== null ? `was ended by ${signalCode}` : `exited with code ${exitCode}`;
-        // A socket file, or a refused connect, doesn't show this child bound:
-        // the file may be one a killed predecessor left. So the message says
-        // only what is known, with the refusal when there was one.
+        // A socket file, or a refused connect, doesn't show this child
+        // bound: the file may be one a killed predecessor left.
         if (lastRefusal !== undefined || existsSync(child.socketPath)) {
           const refusal = lastRefusal === undefined ? ''
             : `; the last connect failed: ${lastRefusal instanceof Error ? lastRefusal.message : String(lastRefusal)}`;
@@ -2598,8 +2524,7 @@ export class FleetModule implements Module {
     throw new Error(`its socket didn't appear within ${timeout} ms`);
   }
 
-  /** A killed child can leave its pathname behind. Wait for the replacement
-   * runtime to bind, without deleting files whose ownership may have changed. */
+  /** A killed child can leave its pathname behind. */
   private async connectStartingChild(child: FleetChild): Promise<void> {
     const deadline = Date.now() + this.config.socketWaitTimeoutMs;
     let lastRefusal: unknown;
@@ -2649,7 +2574,7 @@ export class FleetModule implements Module {
         sock.on('end', release);
         sock.on('close', release);
         sock.on('error', () => {
-          // Errors get reflected in status via process exit; don't crash parent.
+          // An 'error' event with no listener would throw in the parent.
         });
         resolveConn();
       });
@@ -3027,9 +2952,8 @@ export class FleetModule implements Module {
       };
     }
     if (proc && proc.exitCode === null && proc.signalCode === null) {
-      // SIGKILL exits are already excluded from autoRestart. Leave the manual
-      // cancellation flag alone: a natural nonzero exit may be pending even
-      // while ChildProcess still exposes null exit fields.
+      // A natural nonzero exit may be pending even while ChildProcess still
+      // exposes null exit fields.
       try { child.socket?.destroy(); } catch { /* noop */ }
       child.socket = null;
       try { proc.kill('SIGKILL'); } catch { /* exit confirmation below is authoritative */ }
@@ -3259,13 +3183,8 @@ type StartupLog = (
 ) & { quote?: string };
 
 /**
- * Opens a child's startup.log for its stdout and stderr, writes the launch's
- * header, and says where the launch's output begins. One open, which doesn't
- * wait for a FIFO's reader: a FIFO left at the path would otherwise stop the
- * host's event loop at the open. The child gets the file only if it's a
- * regular file that took the header; otherwise its stdio goes nowhere, and
- * the log says why. A child whose writes fail as the header's did would
- * otherwise be said to have written nothing.
+ * One open, which doesn't wait for a FIFO's reader: a FIFO left at the path
+ * would otherwise stop the host's event loop at the open.
  */
 function openStartupLog(path: string, header: string): { fd: number | null; log: StartupLog } {
   let fd: number;
@@ -3309,16 +3228,10 @@ function errnoCode(err: unknown): string {
 }
 
 /**
- * The end of what the child wrote to startup.log during this launch, under a
- * line that says where it's from, for a failed launch's error, or a line that
- * says why there's none. Another file at that path, such as one a link there
- * names now, isn't the file the child was given, which it goes on writing to
- * through the descriptor it inherited, so whatever it holds can't be told to
- * be this launch's output, and it isn't read. A file now shorter than where
- * this launch began was truncated since: what it holds now, or its end, is quoted and
- * said to be that. A truncation isn't detected if the file is back at or past
- * that point when it's read, or if it comes between the size check and the
- * read. Anything that isn't a regular file isn't read.
+ * Another file at that path, such as one a link there names now, isn't the
+ * file the child was given, which it goes on writing to through the
+ * descriptor it inherited, so whatever it holds can't be told to be this
+ * launch's output, and it isn't read.
  */
 function quoteStartupOutput(log: StartupLog): string {
   if ('problem' in log) return `\n${log.path} ${log.problem}.`;
@@ -3343,10 +3256,7 @@ function quoteStartupOutput(log: StartupLog): string {
     text = buffer.subarray(0, readSync(fd, buffer, 0, buffer.length, from)).toString('utf8');
     // A read that starts after the output's start can start mid-line,
     // mid-character (decoded as U+FFFD), or inside an escape sequence, whose
-    // tail then isn't one. The caps below usually cut that first line, since
-    // 64 KiB is far past the character cap, though blank lines dropped from
-    // the end can leave it short enough to stay. Either way the lead says the
-    // rest is in the file.
+    // tail then isn't one.
     unread = from > start;
   } catch (err) {
     return `\n${log.path} couldn't be read (${errnoCode(err)}), so the child's output isn't quoted.`;
@@ -3363,13 +3273,13 @@ function quoteStartupOutput(log: StartupLog): string {
   // The quote is read as text, and the operator's terminal may show it, so
   // escape sequences go: the colour Bun writes even to a file under
   // FORCE_COLOR, and any other a child prints, such as OSC. So do the other
-  // control characters but tab and newline: OpenTUI 0.1.107 writes a bell or
-  // a backspace to the terminal as it is, and breaks the line at a carriage
-  // return, so a progress line's pieces are joined. startup.log keeps them.
-  // Each line is stripped on its own: Bun.stripANSI drops everything after a
-  // sequence it finds no end for, which would hide an error printed after a
-  // stray one. A sequence that really spans lines, such as sixel graphics,
-  // leaves its later lines as printable noise.
+  // control characters but tab and newline: OpenTUI 0.1.107 writes a bell
+  // or a backspace to the terminal as it is, and breaks the line at a
+  // carriage return, so a progress line's pieces are joined. Each line is
+  // stripped on its own: Bun.stripANSI drops everything after a sequence it
+  // finds no end for, which would hide an error printed after a stray one.
+  // A sequence that really spans lines, such as sixel graphics, leaves its
+  // later lines as printable noise.
   let lines = text.split('\n')
     .map((line) => Bun.stripANSI(line).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, ''));
   // Blank lines at the end go, unless they're all there is.

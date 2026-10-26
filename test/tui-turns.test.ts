@@ -71,10 +71,10 @@ describe("the TUI's Escape, through runTui", () => {
 
     // A message sent, before its turn starts: the bar offers Escape, which
     // finds nothing to abort or keep, says so, and shows the status idle.
-    expect(at('sent').frame).toContain('Ctrl+B:bg Esc:stop]');
-    expect(at('sent, Escape').aborts).toEqual(['first:agent']);
-    expect(times(at('sent, Escape').frame, '(no turn interrupted)')).toBe(1);
-    expect(at('sent, Escape').frame).toContain('[✓ idle]');
+    expect(at('sent, before its turn starts').frame).toContain('Ctrl+B:bg Esc:stop]');
+    expect(at('sent, before its turn starts, Escape').aborts).toEqual(['first:agent']);
+    expect(times(at('sent, before its turn starts, Escape').frame, '(no turn interrupted)')).toBe(1);
+    expect(at('sent, before its turn starts, Escape').frame).toContain('[✓ idle]');
 
     // A model call in flight is aborted at once, and its abort ends the turn.
     expect(at('in flight').aborts).toHaveLength(2);

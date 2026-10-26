@@ -98,8 +98,8 @@ async function harness(
   fw.createEphemeralAgent = (c) => { runs++; return create(c); };
   if (run) {
     fw.runEphemeralToCompletion = (agent, contextManager, watchdogs) => {
-      // Registered by name while it runs, as the framework's own run does,
-      // so a stop finds it.
+      // Registered by name while it runs, as agent-framework's own run is, so a
+      // stop finds it.
       fw.agents.set(agent.name, agent);
       const ran = run(agent, contextManager, watchdogs);
       const drop = () => { if (fw.agents.get(agent.name) === agent) fw.agents.delete(agent.name); };
@@ -131,9 +131,7 @@ function fork(name: string, extra: Record<string, unknown> = {}): ToolCall {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-/** Wait for what a step brings about rather than for a set time, and fail
- *  if it doesn't come. Timed by performance.now(), which a test that holds
- *  Date.now doesn't stop. */
+/** performance.now() runs on while a test holds Date.now. */
 async function until(done: () => boolean, ms = 10_000): Promise<void> {
   const end = performance.now() + ms;
   while (!done()) {
@@ -237,7 +235,7 @@ describe('the module\'s own failures end the retry loop without their words bein
   // answer by halving the concurrency limit. Each of runSpawn's and
   // runFork's loops has its own check that ends it first.
   for (const kind of ['spawn', 'fork'] as const) {
-    test(`an async ${kind} whose 429 ms time limit runs out leaves the concurrency limit alone`, async () => {
+    test(`an async ${kind} whose 429 ms time limit runs out leaves the concurrency limit alone, though its words carry a rate limit's 429`, async () => {
       const h = await harness({ maxRetries: 1 }, () => new Promise(() => { /* never settles */ }));
       try {
         await h.subagent.handleToolCall((kind === 'spawn' ? spawn : fork)('scout', { timeoutMs: 429 }));
@@ -253,7 +251,7 @@ describe('the module\'s own failures end the retry loop without their words bein
 });
 
 describe('a framework failure is read without the ephemeral agent\'s name, and numbers as whole numbers', () => {
-  // agent-framework 0.22.3's startup watchdog, which quotes the agent's name.
+  // agent-framework's startup watchdog error, which quotes the agent's name.
   const watchdog = (agent: { name: string }) => new Error(
     `Ephemeral agent "${agent.name}" failed to start inference within 15000ms — zombie detected. ` +
     'The event loop may have stalled or the inference request was dropped.',
@@ -363,7 +361,7 @@ describe('a sync run moves to the background at its timeoutMs and goes on', () =
 });
 
 describe('an async run is stopped at its time limit, which covers its retries', () => {
-  test('no more of its stream arrives after the stop, and the framework lets the run go', async () => {
+  test('no more of its stream than a chunk already on its way arrives after the stop, and the framework lets the run go', async () => {
     // 60 one-character chunks 100 ms apart: about 6 s of streaming.
     const adapter = new MockAdapter({ defaultResponse: 'x'.repeat(60), streamChunkSize: 1, streamChunkDelayMs: 100 });
     const h = await harness({ maxRetries: 0 }, undefined, adapter);
@@ -384,10 +382,8 @@ describe('an async run is stopped at its time limit, which covers its retries', 
       // ended by itself, about 6 s in.
       await until(() => live().length === 0, 2_000);
       expect(live()).toEqual([]);
-      // Once the framework has let the run go, it drops the stream's later
-      // events unread (agent-framework 0.22.3, driveStream's check that the
-      // agent still owns its name), so the count is final. At most a chunk
-      // already on its way when the stream was cancelled.
+      // Once agent-framework has let the run go, it drops the stream's later
+      // events unread, so the count is final but for a chunk already on its way.
       const stoppedAt = stops[0]!;
       expect(tokensAt.filter((t) => t > stoppedAt).length).toBeLessThanOrEqual(1);
     } finally { await h.cleanup(); }
@@ -464,10 +460,9 @@ describe('an async run is stopped at its time limit, which covers its retries', 
 
   test('a run not started by its deadline is dropped by the framework\'s startup watchdog, and reported as the time limit', async () => {
     const given: Watchdogs[] = [];
-    // As agent-framework 0.22.3 does: a run whose inference hasn't started
-    // by its startup watchdog is rejected with the framework's own words.
-    // Its timer fires a millisecond early, as Node's can, so it settles the
-    // attempt before the module's own limit does.
+    // As agent-framework's startup watchdog rejects a run whose inference hasn't
+    // started, in its own words, with its timer a millisecond early, as Node's
+    // can fire.
     const h = await harness({ maxRetries: 1 }, (agent, _cm, watchdogs) => {
       given.push(watchdogs);
       const ms = watchdogs?.startupTimeoutMs ?? 30_000;
@@ -1678,7 +1673,7 @@ describe('a name means one subagent until its result has come back', () => {
     } finally { spy.mockRestore(); unhandled.stop(); await h.cleanup(); }
   }, 20_000);
 
-  test('a reclaim ends a run whose setup never finishes compiling its prompt, and frees its name', async () => {
+  test('a reclaim ends a registered run whose setup never finishes compiling its prompt, and frees its name', async () => {
     const h = await harness({ maxRetries: 0 }, async () => ran('ran'));
     const fw = h.framework as unknown as { createEphemeralAgent: (c: unknown) => Promise<{ contextManager: { compile(): Promise<unknown> } }> };
     const create = fw.createEphemeralAgent.bind(fw);
@@ -1788,7 +1783,8 @@ describe('with the clock held, agent names stay new to agent-framework, and unti
 
   test('a name\'s number is the time when no earlier name has reached it', async () => {
     // A minute past any number given so far, so the time is what decides.
-    const now = realNow() + 60_000;
+    const aMinutePastAnyNumberGiven = 60_000;
+    const now = realNow() + aMinutePastAnyNumberGiven;
     holdClock(now);
     const names: string[] = [];
     const h = await harness({ maxRetries: 0 }, async (agent) => { names.push(agent.name); return ran('done'); });

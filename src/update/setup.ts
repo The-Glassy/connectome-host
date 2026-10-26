@@ -8,12 +8,13 @@
  *
  * It copies the install's code into the install root as its first release,
  * points `current` at the release, records the data directory the install
- * serves and any state kept outside it, which each update copies with it, and writes the entry
- * point, in that order, so a record always has a `current`. It then checks
- * that the service restarts the host when it exits with 75, as a switch's
- * restart does, and with 1, as a trial that ends before its commit does.
- * Nothing it does touches a running host: the service starts through the
- * entry point once its unit runs it.
+ * serves and any state kept outside it, which each update copies with it,
+ * and writes the entry point. It then checks that each systemd service it
+ * finds running from this directory restarts the host when it exits with
+ * 75, as a switch's restart does, and with 1, as a trial that ends before
+ * its commit does, and where it finds none, or can't ask systemd, it says
+ * what the service needs. Nothing it does touches a running host: the
+ * service starts through the entry point once its unit runs it.
  *
  * Run again, it finishes whatever a run cut off left undone, and changes
  * nothing an earlier run finished: the release `current` names stays. With
@@ -150,17 +151,12 @@ export function passwdHome(name: string, file = '/etc/passwd'): string | null {
   }
 }
 
-/** What systemd's user and system managers say of their service units: those
- *  run from `cwd`, which manager couldn't be asked, and the units whose
- *  working directory this user can't resolve, such as one under /root or
- *  /var/lib/private, which may or may not be `cwd` reached another way. A
- *  unit that sets none runs in its manager's default, which `systemctl show`
- *  gives as the user's home marked `!` for the user manager, and as nothing
- *  for the system's, whose default is /. Most units in a home are others',
- *  so one there is `defaulted` rather than found when `cwd` is that default.
+/** A systemd unit that sets no working directory runs in its manager's
+ *  default, which `systemctl show` gives as the user's home marked `!` for
+ *  the user manager, and as nothing for the system's, whose default is /.
  *  One that sets ~ runs in its user's home: this user's for the user
- *  manager, and for the system's, its User='s, root's when it names none,
- *  as `homeOf` finds it. Only units systemd has loaded are seen. */
+ *  manager, and for the system's, its User='s, root's when it names none.
+ *  Only units systemd has loaded are seen. */
 export function systemdUnits(cwd: string, run = (args: string[]) =>
   Bun.spawnSync(['systemctl', ...args], { stdout: 'pipe', stderr: 'pipe' }), home = homedir(),
 homeOf = passwdHome): ServiceUnits {
@@ -227,9 +223,7 @@ homeOf = passwdHome): ServiceUnits {
       const restart = fields.get('Restart') || 'no';
       const statusesOf = (key: string) => (fields.get(key) ?? '').split(/\s+/).filter(Boolean);
       // systemd's rules for an exit with `code`: a prevented status never
-      // restarts, and a forced one restarts whatever Restart= says. A status
-      // in both is read as prevented, the side on which a wrong answer costs
-      // an edit rather than a stopped host.
+      // restarts, and a forced one restarts whatever Restart= says.
       const restartsOn = (code: string) => {
         if (statusesOf('RestartPreventExitStatus').includes(code)) return false;
         if (statusesOf('RestartForceExitStatus').includes(code)) return true;
@@ -374,8 +368,7 @@ export function setup(options: SetupOptions): void {
       if (name !== null) releaseDir(root, name);
       return name;
     } catch (error) {
-      // readlink's EINVAL: it's there, and not a link. A ContractError: a link
-      // whose last part isn't a release's name. Anything else is its own.
+      // readlink's EINVAL: it's there, and not a link.
       const isLink = error instanceof ContractError;
       if (!isLink && (error as NodeJS.ErrnoException).code !== 'EINVAL') {
         throw new ContractError(`${paths.current} can't be looked at: ${errorText(error)}. ` +
@@ -404,9 +397,10 @@ export function setup(options: SetupOptions): void {
     // Each line names the release current named when it was written: a
     // commit's or a fallback's `to`, any other's `from`. The last line's is
     // the latest known.
+    const currentWhenWritten = (line: JournalLine) =>
+      (line.step === 'commit' && line.outcome === 'ok') || line.step === 'fallback' ? line.to : line.from;
     const last = lines.at(-1);
-    const committed = last === undefined ? null
-      : (last.step === 'commit' && last.outcome === 'ok') || last.step === 'fallback' ? last.to : last.from;
+    const committed = last === undefined ? null : currentWhenWritten(last);
     // A trial after the last commit line may have committed with no line of
     // its own, since a commit moves current first, while every line after it
     // was written with current naming its release. Its own fallback rules it
@@ -414,10 +408,9 @@ export function setup(options: SetupOptions): void {
     // its line's `to` names, and after one that failed, nothing starts.
     let at = -1;
     lines.forEach((line, i) => { if (line.step === 'commit' && line.outcome === 'ok') at = i; });
-    const before = (line: JournalLine) => line.step === 'fallback' ? line.to : line.from;
-    const trials = lines.slice(at + 1).filter((line, i, after) => line.step === 'trial-start' && line.outcome === 'ok' &&
-      after.slice(i + 1).every((l) => before(l) === line.to));
-    const maybe = [...new Set(trials.map((line) => line.to))].filter((release) => release !== committed);
+    const mayHaveCommitted = lines.slice(at + 1).filter((line, i, after) => line.step === 'trial-start' &&
+      line.outcome === 'ok' && after.slice(i + 1).every((l) => currentWhenWritten(l) === line.to));
+    const maybe = [...new Set(mayHaveCommitted.map((line) => line.to))].filter((release) => release !== committed);
     let named: string;
     if (committed !== null) {
       named = `${committed}, which the journal's last line leaves it naming`;

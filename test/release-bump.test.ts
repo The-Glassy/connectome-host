@@ -1,10 +1,5 @@
-// Black-box coverage of scripts/release-bump.mjs. Most cases run the script
-// under node as npm's preversion hook runs it, with npm_old_version and
-// npm_new_version set, in a throwaway directory holding its own changelog.
-// The last cases run npm itself with this repository's preversion entry, and
-// with the version hook (release-changelog.ts, under bun) beside it, so the
-// wiring that makes `npm version` refuse before it writes anything is tested
-// too.
+// npm runs a preversion hook with npm_old_version and npm_new_version set,
+// before it writes anything.
 import { afterAll, test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";

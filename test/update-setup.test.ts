@@ -489,7 +489,7 @@ describe('setup', () => {
     units = { found: [{ id: 'connectome.service', settings: 'Restart=on-failure', restarts: true }], unasked: [], unresolved: [], defaulted: ['a.service', 'b.service'] };
     setup(options());
     expect(said.some((l) => l.startsWith(note('a.service, b.service', false)))).toBe(true);
-    // A % in the directory is doubled, as a unit file's value needs.
+    // A unit file's value writes a literal % as %%.
     const percent = join(dir, '50%h');
     symlinkSync(install, percent);
     said = [];
@@ -625,7 +625,7 @@ describe('setup', () => {
       mkdirSync(join(dir, 'checkout'));
       symlinkSync(join(dir, 'checkout'), join(install, 'node_modules', 'linked'));
       symlinkSync('../../outside', join(install, 'node_modules', '.bin', 'up'));
-      // A link by its full path leads into the install, not the release copied from it.
+      // A link by its full path still leads into the install once its release is copied.
       symlinkSync(join(install, 'node_modules', '@animalabs'), join(install, 'node_modules', 'by-path'));
       return {};
     }, /^node_modules\/\.bin\/up links to \.\.\/\.\.\/outside; node_modules\/by-path links to .*node_modules\/@animalabs; node_modules\/linked links to .*checkout: outside this install/],
@@ -670,7 +670,7 @@ describe('setup', () => {
       mkdirSync(join(dir, 'outside', 'deep'), { recursive: true });
       writeFileSync(join(dir, 'outside', 'y'), 'outside');
       symlinkSync('../../outside/deep', join(install, 'node_modules', 'inner'));
-      // As written it reads node_modules/y, inside; through `inner` it's outside.
+      // Read as written, inner/../y stays inside; resolved through the link inner, it leaves.
       symlinkSync('inner/../y', join(install, 'node_modules', 'x'));
       return {};
     }, /node_modules\/x links to inner\/\.\.\/y/],
@@ -757,7 +757,7 @@ describe('the service check', () => {
       unit('forced.service', 'no', install, '', '', '75 1'),
       unit('half-forced.service', 'no', install, '', '', '75'),
       // A status both prevented and forced is read as prevented.
-      unit('both-lists.service', 'always', install, '', '1', '1'),
+      unit('in-both-lists-read-as-prevented.service', 'always', install, '', '1', '1'),
       // Prevented on 1 alone: a failed trial's exit leaves it stopped.
       unit('prevent-1.service', 'on-failure', install, '', '1'),
     ].join('\n\n');
@@ -778,7 +778,7 @@ describe('the service check', () => {
       { id: 'both-success.service', settings: 'Restart=on-success, SuccessExitStatus includes 75 and 1', restarts: true },
       { id: 'forced.service', settings: 'Restart=no, RestartForceExitStatus includes 75 and 1', restarts: true },
       { id: 'half-forced.service', settings: 'Restart=no, RestartForceExitStatus includes 75', restarts: false },
-      { id: 'both-lists.service', settings: 'Restart=always, RestartPreventExitStatus includes 1, RestartForceExitStatus includes 1', restarts: false },
+      { id: 'in-both-lists-read-as-prevented.service', settings: 'Restart=always, RestartPreventExitStatus includes 1, RestartForceExitStatus includes 1', restarts: false },
       { id: 'prevent-1.service', settings: 'Restart=on-failure, RestartPreventExitStatus includes 1', restarts: false },
     ]);
     expect(calls).toEqual([['--user', ...query], query]);

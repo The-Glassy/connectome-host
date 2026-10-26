@@ -1,16 +1,8 @@
 /**
  * One agent's compression debt, as context-manager's getCompressionDebt()
- * reports it, in the words of the Web UI's Health tab, which imports it as
- * `@conhost/web/compression-debt`.
- *
- * Since anima-research/context-manager#272, a report that couldn't read
- * something says so. `failure` names which read failed, `error` says what
- * happened, what it means and what to do, a line each, and each count it
- * couldn't compute is `null`. So the line shows only the counts the report
- * gives, never a 0 it couldn't compute, and the tab shows `error` whole, with
- * its line breaks, and the host's own next step under it. An observer without
- * 'ops' gets `error` empty, and its tab shows neither, since the next step
- * asks whoever reads it to describe what the message shows.
+ * reports it. A report that couldn't read something says so: `failure` names
+ * which read failed, `error` says what happened, what it means and what to
+ * do, a line each, and each count it couldn't compute is `null`.
  */
 export interface CompressionDebt {
   state?: 'healthy' | 'degraded' | 'critical' | 'unknown';

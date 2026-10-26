@@ -9,9 +9,9 @@ import { AutobiographicalStrategy, ContextManager } from '@animalabs/context-man
 /** Answers any model call a strategy's open makes, as no seed needs one. */
 const MODEL = { complete: async () => ({ stopReason: 'end_turn', content: [{ type: 'text', text: 'x' }] }) } as never;
 
-/** A store whose namespace holds 40 messages and a level-2 summary, L2-x,
- *  holding text and naming an L1 that isn't there, so a load's repair drops
- *  it (`names-missing`) and reports that it did. */
+/** A store whose level-2 summary holds text and names an L1 that isn't
+ *  there, so context-manager's load repair drops it (`names-missing`) and
+ *  reports that it did. */
 export async function makeRepairStore(path: string, namespace = 'agents/agent'): Promise<void> {
   const seed = new AutobiographicalStrategy({ adaptiveResolution: true, hierarchical: true, autoTickOnNewMessage: false, auditOnly: true });
   const manager = await ContextManager.open({ path, namespace, strategy: seed, membrane: MODEL });

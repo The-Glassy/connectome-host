@@ -3,47 +3,37 @@
  * Import a claude.ai data export into conhost sessions.
  *
  * Each conversation in `conversations.json` becomes a new conhost session with
- * an isolated Chronicle store, named after the original conversation. The
- * conversation's messages are appended through context-manager's `MessageStore`
- * so the resulting sessions are indistinguishable from native conhost sessions.
+ * an isolated Chronicle store, named after the original conversation.
  *
  * Block-level fidelity:
  *   - text         → TextContent
  *   - thinking     → TextContent wrapped in <recovered_thinking>…</recovered_thinking>
- *                    (original thinking + summaries preserved verbatim in metadata)
+ *                    (the export's thinking summaries are not imported)
  *   - tool_use     → ToolUseContent (claude.ai-internal tool names kept as-is;
  *                    inert at replay since no module advertises them)
  *   - tool_result  → ToolResultContent
  *   - attachments  → leading <attachment …>{extracted_content}</attachment> text
  *   - files (no bytes) → trailing [image: name (file_uuid=…, bytes not in export)]
  *
- * Why wrapped <recovered_thinking> text and not native thinking blocks:
- *   The export omits cryptographic signatures (claude.ai never plumbed them).
- *   Probed empirically (scripts/test-historical-thinking.ts): the API rejects
- *   unsigned thinking blocks AND redacted_thinking with fabricated data. Wrapped
- *   text round-trips cleanly and lets the model run with extended thinking ON
- *   for the *new* turns (which is the cognitive mode the conversation was
- *   originally in on claude.ai web).
+ * Thinking is imported as wrapped text because the export carries no
+ * signatures, and the API refuses unsigned thinking blocks and
+ * redacted_thinking with fabricated data.
  *
  * Tree handling:
  *   The export records branches via `parent_message_uuid`. When a fork is
- *   present, the importer picks the canonical path by depth-first descent
- *   choosing, at each branch point, the subtree whose deepest leaf has the
- *   latest `created_at`. Orphan branches are discarded in v1 (the original
- *   conversation is preserved in `conversations.json` regardless).
+ *   present, the importer picks, at each branch point, the subtree holding the
+ *   latest `created_at`. Other branches are not imported.
  *
  * Run:
  *   bun scripts/import-claudeai-export.ts ../claudeai-export
  *
  * Options:
  *   --out <dir>       Conhost data dir (default: ./data)
- *   --agent <name>    Participant name for assistant turns. Default: "Claude"
- *                     — the natural choice for claude.ai-derived sessions
- *                     and what the bundled `claude-export-revive.json`
- *                     recipe pins `agent.name` to. The chosen value is
- *                     written into the per-session import-source sidecar,
- *                     so warmup and conhost can read it back without
- *                     re-passing the flag.
+ *   --agent <name>    Participant name for assistant turns. Default: "Claude",
+ *                     what the bundled `claude-export-revive.json` recipe pins
+ *                     `agent.name` to. The chosen value is written into the
+ *                     per-session import-source sidecar, so warmup and conhost
+ *                     can read it back without re-passing the flag.
  *   --filter <regex>  Only import conversations whose name matches (case-insens.)
  *   --dry-run         Parse and report; don't write
  */
@@ -256,23 +246,8 @@ export function linearize(messages: ExportMessage[]): { path: ExportMessage[]; b
 // Block transform
 // ---------------------------------------------------------------------------
 
-/**
- * Transform one export message's content blocks into Anthropic-shape blocks,
- * fixing two claude.ai quirks along the way:
- *
- *   - Internal tools (web_search, web_fetch, conversation_search, artifacts,
- *     etc.) have `tool_use.id === null` and the paired `tool_result` has
- *     `tool_use_id === null`. The API requires non-empty strings. We
- *     synthesize stable IDs (`toolu_imported_<msg.uuid>_<blockIdx>`) and
- *     pair the next null-ID tool_result to the most recent null-ID tool_use
- *     in the same message via FIFO queue.
- *
- *   - tool_use + tool_result get bundled in a single assistant message.
- *     API rules require tool_result to live in the *next* user message.
- *     The block-level transform handled here only emits the blocks; the
- *     message-level split is done in `splitMixedToolMessages` so the
- *     two concerns stay independently testable.
- */
+/** The API requires every tool_use id and tool_result tool_use_id to be a
+ *  non-empty string. */
 export function transformContent(msg: ExportMessage): ContentBlock[] {
   const out: ContentBlock[] = [];
 
@@ -388,21 +363,9 @@ export function transformContent(msg: ExportMessage): ContentBlock[] {
   return out;
 }
 
-/**
- * claude.ai stores an entire internal-tool cycle (tool_use → tool_result)
- * as consecutive blocks in one assistant message. The Anthropic API requires
- * tool_use blocks in assistant turns and tool_result blocks in user turns,
- * with each tool_result in the *immediately following* user message.
- *
- * Walks `blocks` and, whenever a tool_result is encountered in a non-user
- * source message, flushes the preceding blocks as a `sourceParticipant`
- * message, emits the tool_result alone as a `user` message, then continues
- * collecting blocks for another `sourceParticipant` message. Adjacent
- * tool_results get merged into a single user message (API-legal).
- *
- * If the source is already 'user' (claude.ai never produces this, but be
- * safe), no splitting is needed and the input is returned unchanged.
- */
+/** The Anthropic API takes tool_use blocks only in assistant turns and
+ *  tool_result blocks only in user turns, each in the message right after its
+ *  tool_use. */
 export function splitMixedToolMessages(
   blocks: ContentBlock[],
   sourceParticipant: string,

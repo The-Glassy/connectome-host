@@ -1,12 +1,5 @@
 /**
- * postinstall builds the optional Web UI. Its failure must not fail the
- * host's install. `|| true` kept it from doing so, but added nothing to npm's
- * own output. The script now reports a failed build on stderr, naming the
- * retry command, still exiting 0; without a `web/` directory it stays silent;
- * a working build prints nothing extra.
- *
- * Runs the package's actual script with sh, in a scratch copy holding only a
- * stand-in `web/` package (no dependencies, so npm stays offline).
+ * The stand-in `web/` package has no dependencies, so npm stays offline.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

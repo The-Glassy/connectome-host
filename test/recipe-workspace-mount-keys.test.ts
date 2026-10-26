@@ -246,9 +246,8 @@ describe('workspace mount keys', () => {
   });
 
   test('with followSymlinks, a link inside the mount is read, and the instructions file never reads through one leading out of it', async () => {
-    // The instructions file is read through readFileFromDisk, which on a
-    // mount that follows links still refuses one leading outside it, as
-    // `escape`, and the module says the file itself can be that link.
+    // readFileFromDisk, on a mount that follows links, still refuses one leading
+    // outside it, as `escape`.
     const root = mkdtempSync(join(tmpdir(), 'mount-keys-'));
     const dir = join(root, 'instructions');
     const outside = join(root, 'outside');

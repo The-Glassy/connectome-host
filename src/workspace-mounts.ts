@@ -54,20 +54,14 @@ export function buildWorkspaceMounts(
     ];
   }
 
-  // Config mount: version-controls gate.json, gate.js and gate.recipe.json
-  // via Chronicle. Opt-in via recipe: workspace.configMount = true. From
-  // 0.27.0 agent-framework writes gate.recipe.json beside gate.json and
-  // reads it at the next start, so a rewind must take it back with
-  // gate.json. An include's name covers that name in any directory beneath
-  // too: no form of agent-framework's include names the root alone
-  // (anima-research/connectome-host#278). NOTE: this
-  // mount is deliberately NOT autoMaterialize — the host re-materializes it
-  // explicitly after branch-changing commands, and ordinary agent edits stay
-  // Chronicle-side until then. Anything that assumes `_config` disk content
-  // tracks agent edits is wrong (see the instructions-path validation). Its
-  // backend is said, not left to the framework's default: undo and redo
-  // rewind it through materializeMount, which only a 'chronicle' mount has
-  // history for.
+  // Undo and redo rewind this mount through agent-framework's
+  // materializeMount, which does nothing for a direct mount, so its backend is
+  // said rather than left to the framework's default. The gate keeps the
+  // recipe it last applied in gate.recipe.json beside gate.json and reads it
+  // at each start, so a rewind takes it back with gate.json. The include keeps
+  // editors' and recovery files out (anima-research/connectome-host#278); each
+  // name covers that name in any directory beneath as well, since
+  // agent-framework's include has no form for the root alone.
   const wantConfigMount = typeof workspace === 'object' && workspace.configMount;
   if (wantConfigMount) {
     mounts.push({

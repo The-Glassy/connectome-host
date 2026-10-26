@@ -1,16 +1,8 @@
 /**
- * The context composition readouts where an agent has no composition
- * (connectome-host#425), and the Health view's last-inference line.
  * context-manager gives an agent's render stats only from a live compile
- * since its context was loaded, and only for a strategy that keeps them, so
- * the views say which of the two it is. agent-framework keeps an agent's
- * last inference start, end and failure each until the next of its kind, so
- * the last-inference line names a failure only when it came at or after the
- * latest start, and the last-error line shows only then.
- *
- * web/src/composition-text.ts is imported inside each test that uses it, so
- * that run against main's sources, where it doesn't exist, each such test
- * fails on its own.
+ * since its context was loaded, and only for a strategy that keeps them.
+ * agent-framework keeps an agent's last inference start, end and failure each
+ * until the next of its kind.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { buildContextMakeup, buildHealthSnapshot, type PanelAppRef } from '../src/web/panel-data.js';

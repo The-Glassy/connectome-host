@@ -58,8 +58,7 @@ function npmEnv(dir: string): Record<string, string> {
 
 /** npm in `dir`, with npmEnv(). */
 function npm(dir: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
-  // As in release-holds.test.ts: npm's own CLI under `npm test`, the npm on
-  // PATH otherwise.
+  // Under `npm test`, npm_execpath names npm's own CLI.
   const cli = process.env.npm_execpath;
   const [file, argv] = cli && /npm-cli\.c?js$/.test(cli) ? ["node", [cli, ...args]] : ["npm", args];
   return run(file, argv, dir, npmEnv(dir));
@@ -192,8 +191,8 @@ test("outside a git checkout an npm publish stops, saying why", async () => {
 }, 30_000);
 
 test("in a git checkout git can't read, the pack stops, saying why", async () => {
-  // A .git that points at a missing repository: git exits 128 here, as it
-  // does for a checkout another user owns or an unreadable index.
+  // A .git that points at a missing repository: git exits 128, as for any fatal
+  // error.
   const dir = project({ git: false });
   writeFileSync(join(dir, ".git"), `gitdir: ${join(dir, "missing")}\n`);
   const result = await npm(dir, ["pack", "--dry-run"]);

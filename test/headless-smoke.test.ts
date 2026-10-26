@@ -186,10 +186,7 @@ describe('headless daemon: a fatal error', () => {
     try {
       const recipe = join(dir, 'recipe.json');
       writeFileSync(recipe, JSON.stringify(MINIMAL_RECIPE), 'utf-8');
-      // A directory holds the socket's path, so listening fails once the log
-      // is open: the server's error is logged, then the start fails. Each
-      // write to headless.log lands 100 ms late, so an exit that doesn't
-      // wait for the log loses that line every time.
+      // A directory at the socket's path makes listening fail.
       mkdirSync(join(dir, 'ipc.sock', 'taken'), { recursive: true });
       child = spawn('bun', ['--preload', join(TEST_DIR, 'slow-log-writes.ts'), INDEX_PATH, recipe, '--headless'], {
         cwd: dir,

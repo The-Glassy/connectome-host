@@ -126,8 +126,8 @@ describe('startFramework, for a host an install started', () => {
 
   test("a commit that can't be recorded stops the framework, starts nothing and says why", async () => {
     const order: string[] = [];
-    // Where the move's temporary link goes, a directory with something in it,
-    // which stops the move for root as for anyone.
+    // A directory with something in it where the move's temporary link goes
+    // stops the move, for root as for anyone.
     mkdirSync(join(`${installPaths(root).current}.tmp`, 'in-the-way'), { recursive: true });
     await expect(startFramework(framework(order, { fleet: watchedFleet(order) }), { root, release: '0.11.0' })).rejects.toThrow(
       `This host couldn't record 0.11.0 as the release the install at ${root} runs on, so none of its agents started, ` +

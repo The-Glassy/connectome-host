@@ -30,9 +30,9 @@ export interface DryContextData {
 const fmt = (n: number) => n.toLocaleString();
 
 /** Recall pairs render as a CM prompt followed by the summary text. */
-const RECALL_MARKERS = ['what do you remember', 'recall memory', '[cm]'];
+const CONTEXT_MANAGER_RECALL_MARKERS = ['what do you remember', 'recall memory', '[cm]'];
 const isRecallPrompt = (s: string) =>
-  s.length < 400 && RECALL_MARKERS.some((m) => s.toLowerCase().includes(m));
+  s.length < 400 && CONTEXT_MANAGER_RECALL_MARKERS.some((m) => s.toLowerCase().includes(m));
 
 export function DryContext(props: { data: DryContextData | null; onClose(): void }) {
   const rows = () =>

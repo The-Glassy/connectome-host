@@ -48,7 +48,7 @@ describe('mockAdapterConfig', () => {
     };
     const config = mockAdapterConfig(mock);
     expect(config).toEqual(mock);
-    // The adapter drains its queue; the recipe's copy must not change with it.
+    // membrane's MockAdapter drains its queue, so the recipe's copy must not change with it.
     expect(config.responseQueue).not.toBe(mock.responseQueue);
   });
 

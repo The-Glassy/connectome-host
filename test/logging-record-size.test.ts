@@ -25,9 +25,8 @@ function emit(make: (p: string) => unknown, record: object) {
   const parsed = JSON.parse(bytes.toString('utf8'));
   return { bytes, parsed };
 }
-// A failing assertion prints what it received, and these records hold values
-// of up to 16 MiB. So the tests assert presence as a boolean, compare large
-// values by identity, and compare whole objects only by their small fields.
+// A failing assertion prints what it received, so with values of up to
+// 16 MiB the tests compare presence as a boolean and large values by identity.
 const has = (record: object, key: string) => Object.prototype.hasOwnProperty.call(record, key);
 const fields = (record: Record<string, unknown>, keys: readonly string[]) =>
   Object.fromEntries(keys.filter((key) => has(record, key)).map((key) => [key, record[key]]));
@@ -93,9 +92,8 @@ describe('serializeRecord drops parts in order, each step checked against the ca
     const over = line({ ...base, rawRequest: 'x'.repeat(room + 1) });
     expect(has(over.parsed, 'rawRequest')).toBe(false);
     expect(over.parsed.truncated).toBe('raw bodies dropped (record exceeded size guard)');
-    // Two-byte characters bring a line of half as many UTF-16 units to the
-    // cap's bytes before its newline, so only the byte count, newline
-    // included, can tell it doesn't fit.
+    // é is two bytes in UTF-8 and one UTF-16 unit, so this line reaches the cap
+    // in bytes at half as many units: only a byte count sees it doesn't fit.
     const twoByte = 'é'.repeat(Math.floor((room + 1) / 2)) + 'x'.repeat((room + 1) % 2);
     const multiByte = line({ ...base, rawRequest: twoByte });
     expect(has(multiByte.parsed, 'rawRequest')).toBe(false);

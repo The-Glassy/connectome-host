@@ -13,16 +13,13 @@
 // manifest of the version (what `npm view` reads) keeps, as
 // `connectomeRelease`:
 // - `breaking`: whether anything is breaking since the last final release
-//   below it in the changelog, which holds the history of the branch it's cut
-//   on: the new section, or any section between them, has a Breaking
-//   subsection with anything in it, as release-bump.mjs reads a pending
-//   breaking change. A line's breaking entries are folded into its
-//   prereleases, which npm may not hold, so the final release says so too;
+//   below it in the changelog: the new section, or any section between them,
+//   has a Breaking subsection with anything in it;
 // - `cacheWrite`: whether an update from that last final release changes what
 //   each resident's requests carry before its newest turn, so that each one's
 //   next request writes its prompt cache in full, from RELEASE_CACHE_WRITE
 //   (`yes@<version>` or `no@<version>`, naming the version being cut); left
-//   out when it's unset, so a release nobody measured says nothing of its cost.
+//   out when it's unset.
 import {
   existsSync,
   readdirSync,
@@ -59,11 +56,8 @@ interface Fragment {
   body: string;
 }
 
-// Fragment grammar: every non-blank line starts a bullet or continues one
-// (indented two or more spaces; nested bullets included). Headings and
-// thematic breaks are refused wherever they appear — at top level a '## '
-// line would splice a fake section boundary into the released changelog,
-// and as item content ('- ## x', '  ## x') they still render as headings.
+// Headings and thematic breaks still render as such inside a list item
+// ('- ## x', '  ## x').
 const isBulletStart = (l: string): boolean => /^[-*] /.test(l);
 const isContinuation = (l: string): boolean => /^ {2,}\S/.test(l);
 const itemContent = (l: string): string => l.replace(/^\s*(?:[-*]\s+)?/, "");
@@ -195,8 +189,8 @@ function sectionsSinceFinal(rest: string): string[] {
 }
 
 /** RELEASE_CACHE_WRITE as the release's `cacheWrite`: `yes@<version>` or
- *  `no@<version>`, naming the version being cut, so a value left in a shell
- *  from an earlier cut is refused; nothing recorded when it's unset. */
+ *  `no@<version>`, naming the version being cut (another version is refused);
+ *  nothing recorded when it's unset. */
 function cacheWriteOf(value: string | undefined, version: string): boolean | undefined {
   if (value === undefined) return undefined;
   const m = /^(yes|no)@(.+)$/.exec(value);

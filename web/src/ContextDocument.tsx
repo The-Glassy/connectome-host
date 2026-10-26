@@ -26,7 +26,7 @@ interface Stats {
 
 const fmt = (n: number) => n.toLocaleString();
 const estTokens = (s: string) => Math.round(s.length / 3.6);
-const SUMMARY_LABELS = ['What do you remember', 'Context Manager'];
+const CONTEXT_MANAGER_SUMMARY_LABELS = ['What do you remember', 'Context Manager'];
 
 type Block = { type?: string; text?: string; name?: string; input?: unknown; content?: unknown; is_error?: boolean; thinking?: string };
 
@@ -165,7 +165,7 @@ export function ContextDocument(props: {
   const isSummary = (m: Msg) => {
     const who = m.participant ?? '';
     const t = textOf(m.content);
-    return SUMMARY_LABELS.some((l) => who.includes('Context Manager') || t.startsWith(l));
+    return CONTEXT_MANAGER_SUMMARY_LABELS.some((l) => who.includes('Context Manager') || t.startsWith(l));
   };
 
   return (

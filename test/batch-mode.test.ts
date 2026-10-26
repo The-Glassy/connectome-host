@@ -19,9 +19,11 @@ import {
   batchEchoLine,
   BATCH_MCPL_LOG_NOTE,
 } from '../src/batch-mode.js';
+import { PIPED_TURN_CAP_MS } from '../src/piped-turns.js';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const INDEX_PATH = join(REPO_ROOT, 'src', 'index.ts');
+const EXIT_WELL_INSIDE_TURN_CAP_MS = PIPED_TURN_CAP_MS / 4;
 
 describe('batch-mode notices', () => {
   test('the start notice says the run ends at EOF and names --headless', () => {
@@ -48,7 +50,7 @@ describe('batch-mode notices', () => {
     expect(webUiHttpUrl('localhost', 0)).toBe('http://localhost:0');
   });
 
-  test("the echo hides an /auth line's words after its subcommand, and shows every other line as it came", () => {
+  test("the echo hides an /auth line's words after a subcommand it knows, or from the first word it doesn't, and shows every other line as it came", () => {
     expect(batchEchoLine('/auth token sk-ant-oat01-secret')).toBe('/auth token <hidden>');
     expect(batchEchoLine('  /auth TOKEN  two words  ')).toBe('/auth TOKEN <hidden>');
     expect(batchEchoLine('/AUTH token sk-ant-oat01-secret')).toBe('/AUTH token <hidden>');
@@ -180,7 +182,7 @@ describe('batch mode end to end', () => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const outcome = await Promise.race([
       run.exited,
-      new Promise<'still running'>((r) => { timer = setTimeout(() => r('still running'), 30_000); }),
+      new Promise<'still running'>((r) => { timer = setTimeout(() => r('still running'), EXIT_WELL_INSIDE_TURN_CAP_MS); }),
     ]).finally(() => clearTimeout(timer));
     if (outcome === 'still running') {
       run.child.kill('SIGKILL');
@@ -215,7 +217,7 @@ describe('batch mode end to end', () => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const outcome = await Promise.race([
       run.exited,
-      new Promise<'still running'>((r) => { timer = setTimeout(() => r('still running'), 30_000); }),
+      new Promise<'still running'>((r) => { timer = setTimeout(() => r('still running'), EXIT_WELL_INSIDE_TURN_CAP_MS); }),
     ]).finally(() => clearTimeout(timer));
     if (outcome === 'still running') {
       run.child.kill('SIGKILL');

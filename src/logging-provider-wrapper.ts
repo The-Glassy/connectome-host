@@ -2,29 +2,9 @@
 // request, response, usage, timing, and any error to the same
 // `llm-calls.<iso>.jsonl` file the Anthropic and Bedrock paths use.
 //
-// Exists because llm-call logging grew adapter-by-adapter (Anthropic subclass,
-// Bedrock wrapper) and the remaining providers — openai-codex (Mica),
-// openrouter (K3) — had NO wire visibility at all: a post-deploy "did her
-// requests actually work?" check on Mica (2026-07-26) found zero llm-calls
-// files because the codex path never logged. This decorator wraps ANY
-// ProviderAdapter, so a new provider gets logging by construction rather than
-// by remembering to build a logging twin.
-//
 // Contents: full raw request and a summarized-but-complete response record
 // (stop reason, usage, per-block shape, full text) on every call, plus the
-// raw provider response. Retention/rotation/S3 shipping is the host box's
-// llm-logs sync job's problem — this file just writes lines.
-//
-// OOM note (learned on the Anthropic path, which once logged raw+normalized+
-// summary and contributed to production OOMs): the shared size guard
-// (logging-record.ts) drops the raw bodies of pathological payloads (giant
-// image batches), so the line written stays bounded. It serializes the record
-// whole before it knows the line's size, so it bounds what's written, not
-// what's built in memory.
-//
-// Decorator safety: adapters whose complete() internally delegates to their
-// own stream() (codex does) self-call the INNER method, not the wrapper —
-// each membrane-level call logs exactly once.
+// raw provider response.
 //
 // Each line: { type: 'call'|'error', provider, kind: 'complete'|'stream',
 //   timestamp, durationMs, requestSummary?, response?, rawRequest?,
@@ -33,15 +13,8 @@
 // A record whose request or response couldn't be summarized keeps only the
 // head fields and, for a failure, the error (summaryUnavailable: true).
 //
-// The error text is bounded, and read without throwing, by
-// logging-error-fields.ts, which the Anthropic and Bedrock writers share: a
-// provider can echo the whole rejected request in its error body, and that
-// text would otherwise sit in the record beside the request it echoes. The
-// shared size guard (logging-record.ts) drops raw bodies first and keeps the
-// error string as long as anything, so the error string bounds itself.
-//
-// Logging never changes what the caller gets: a successful call's record is
-// written after the provider call's try, and every write is guarded.
+// The error text is bounded: a provider can echo the whole rejected request
+// in its error body.
 
 import type {
   ProviderAdapter,

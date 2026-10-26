@@ -180,8 +180,8 @@ describe('materialiseStructuralFork', () => {
           { type: 'tool_use', id: 'toolu_B', name: 'subagent--fork', input: { name: 'scout-b', task: 'B' } },
         ],
       },
-      // No user turn — parent's tool_results haven't been added to its
-      // ContextManager yet (fork is being dispatched right now).
+      // agent-framework adds a round's tool results after its tools have run, so
+      // a fork being dispatched has no result turn yet.
     ];
 
     const out = materialiseStructuralFork(compiled, 'toolu_B', 'scout-b', 'B', 1, 3);

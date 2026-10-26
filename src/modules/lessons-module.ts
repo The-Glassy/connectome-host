@@ -728,9 +728,7 @@ type SharedRead =
   | { kind: 'unreadable'; problem: string }
   | { kind: 'read'; doc: Record<string, unknown>; entries: unknown[] };
 
-/** Decodes strictly, so bytes that aren't UTF-8 make a file this host can't
- *  read, rather than text it would write back changed. A byte-order mark at
- *  the start is dropped, and a write leaves it out. */
+/** TextDecoder drops a byte-order mark at the start. */
 const utf8 = new TextDecoder('utf-8', { fatal: true });
 
 function readSharedFile(path: string): SharedRead {
@@ -749,10 +747,9 @@ function readSharedFile(path: string): SharedRead {
   }
   let doc: unknown;
   try {
-    // A number JSON can't hold, such as 1e999, parses as Infinity, which
-    // the module's store refuses to save. It's read as null wherever it
-    // sits: a confidence of 1e999 reads as one that isn't a number, and an
-    // id of 1e999 as one that isn't text. A save writes the null back.
+    // JSON.parse reads a number JSON can't hold, such as 1e999, as Infinity,
+    // which the module's store refuses to save: chronicle's setStateJson takes
+    // only numbers JSON can hold.
     doc = JSON.parse(text, (_key, value: unknown) =>
       typeof value === 'number' && !Number.isFinite(value) ? null : value);
   } catch (err) {
@@ -773,29 +770,11 @@ function readSharedFile(path: string): SharedRead {
  *  passed the check of its permission). */
 const IN_PLACE = new Set(['EACCES', 'EPERM', 'EBUSY', 'EXDEV', 'EROFS']);
 
-/** Write the shared lessons file. A file that's there is replaced whole: the
- *  text goes to a temporary file beside the file the path names after its
- *  links, synced to disk and given that file's permissions, and is renamed
- *  over it. So a write that fails leaves the file as it was, a host that
- *  stops partway or a machine that goes down leaves it whole, with the old
- *  text or the new, a reader never meets half of one, and a link stays a
- *  link. The file is a new one, owned as any new file this host makes
- *  there, and an access control list or other extended attribute set on
- *  it isn't kept. A file not made yet is made the same way, with the mode a new file
- *  takes, so a first write that fails leaves no file, and two hosts making
- *  it at once leave one whole file. The temporary file is
- *  lessons-<random>.tmp beside the file, its name new at each write; a
- *  host that stops between making it and the rename leaves it there.
- *
- *  It's written in place instead, as on main: through a link to a file not
- *  made yet, which a rename would replace with a plain file; for a file
- *  this host can't write, which is refused as on main; for a file with a
- *  second name (a hard link), which a rename would leave holding the old
- *  text; and where, for a file that's there, making the temporary file or
- *  the rename is refused with an IN_PLACE error. For the last two, inPlace
- *  is called first, with a key and the reason, so the caller can say so: a
- *  write in place that fails partway can leave the file broken. Any other
- *  error is thrown, with the file as it was or not made. */
+/** A rename over a file makes it a new file, owned as any new file this host
+ *  makes there, without an access control list or other extended attribute
+ *  the old one had, and a second name (a hard link) keeps the old text. A
+ *  rename onto a link to a file not made yet replaces the link with a plain
+ *  file. */
 function writeShared(path: string, text: string, inPlace: (key: string, why: string) => void): void {
   mkdirSync(dirname(path), { recursive: true });
   const old = statIfThere(path);
@@ -817,14 +796,13 @@ function writeShared(path: string, text: string, inPlace: (key: string, why: str
     const fd = openSync(tmp, 'w', mode);
     try {
       writeFileSync(fd, text);
-      // So the file is whole before the rename puts it in place: a machine
-      // that goes down finds the old file or this one, whole.
+      // Synced before the rename, so a machine that goes down finds the old file
+      // or this one, whole.
       fsyncSync(fd);
     } finally {
       closeSync(fd);
     }
-    // The umask narrows the mode a file is made with: a file that's there
-    // keeps its own, and a new one takes the umask's, as on main.
+    // The umask narrows the mode a file is made with.
     if (old !== null) chmodSync(tmp, mode);
     renameSync(tmp, target);
   } catch (err) {
@@ -844,10 +822,7 @@ function writeShared(path: string, text: string, inPlace: (key: string, why: str
   }
 }
 
-/** Whether this host may write the file, as far as its permission goes. A
- *  refusal for permission (EACCES, EPERM, EROFS) is no, so the write goes
- *  in place and is refused there, as on main; any other error from the
- *  check is thrown, so the file is left alone. */
+/** access(2) refuses for permission with EACCES, EPERM or EROFS. */
 function writable(path: string): boolean {
   try {
     accessSync(path, constants.W_OK);
@@ -922,11 +897,8 @@ function statIfThere(path: string, stat: (path: string) => Stats = statSync): St
   }
 }
 
-/** A copy's `updated` as the merge ranks it: one that isn't a number no
- *  greater than Number.MAX_SAFE_INTEGER ranks below every one that is. Past
- *  that, adding one can give the same number, so a change couldn't always
- *  stamp past the copy; no clock gives one (a Date holds at most 8.64e15),
- *  and ranked by value, a hand edit's would outrank every change. */
+/** Past Number.MAX_SAFE_INTEGER, adding one can give the same number, and
+ *  no clock gives a stamp that large: a Date holds at most 8.64e15. */
 function stampOf(l: unknown): number {
   const u = isRecord(l) ? l.updated : undefined;
   return typeof u === 'number' && Number.isFinite(u) && u <= Number.MAX_SAFE_INTEGER ? u : -Infinity;

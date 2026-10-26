@@ -21,9 +21,8 @@ import { hostModeRecord } from './host-mode-record.js';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-// A reply of 60 characters streamed 150 ms apart: a turn of about nine
-// seconds, with no network, which the first quiesce's wait of about a second
-// ends well inside, even on a loaded host.
+// agent-framework's quiesce waits at least a second, so the reply below, 60
+// characters 150 ms apart, outlasts the first quiesce's wait.
 const RECIPE = {
   name: 'Switch quiesce child',
   agent: {
@@ -66,7 +65,7 @@ function idleHost(): QuiesceFramework {
 }
 
 describe("the switch's quiesce of a real fleet child", () => {
-  test('waits on its turn, says who holds it, persists until the resume, and leaves the child serving', async () => {
+  test('waits on its turn, says who holds it, answers a request it can\'t read with why, persists until the resume, and leaves the child serving', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'update-quiesce-e2e-'));
     dirs.push(dir);
     const recipe = join(dir, 'kid.json');

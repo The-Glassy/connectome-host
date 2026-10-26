@@ -103,13 +103,15 @@ export function pickTopAlert(kinds: string[]): string | null {
  * end < len — the marker rows are budgeted for here, which is why the body
  * grows by one at either edge (that marker doesn't render).
  */
+const MARKER_ROW = 1;
+
 export function sliceViewport(len: number, cursor: number, avail: number): { start: number; end: number } {
   if (len <= avail) return { start: 0, end: len };
-  const body = Math.max(1, avail - 2);
+  const body = Math.max(1, avail - 2 * MARKER_ROW);
   const start = Math.max(0, Math.min(cursor - Math.floor(body / 2), len - body));
   const end = start + body;
-  if (start === 0) return { start, end: Math.min(len, Math.max(1, avail - 1)) };
-  if (end >= len) return { start: Math.max(0, len - Math.max(1, avail - 1)), end: len };
+  if (start === 0) return { start, end: Math.min(len, Math.max(1, avail - MARKER_ROW)) };
+  if (end >= len) return { start: Math.max(0, len - Math.max(1, avail - MARKER_ROW)), end: len };
   return { start, end };
 }
 
@@ -176,22 +178,6 @@ export function resolveQuitConfirm(raw: string): QuitConfirmAction {
 }
 
 
-/**
- * What the status line does when the root agent's stream ends
- * (state/turn-trace.ts): the status it shows next, whether a backgrounded
- * turn's output is shown or dropped, and the line it adds. Null for a trace
- * that isn't a stream end, and for an end while no turn is showing, so an
- * end that follows an end (`completed`, then `turn_ended`; `failed`, then
- * `exhausted` or `aborted`) adds nothing. A failure always shows:
- * agent-framework 0.22.3 sends
- * `inference:failed` only for an attempt it started, so with no turn
- * showing it's still the end of a turn, one whose start the TUI didn't
- * follow, as at startup or around a session switch. The TUI's interrupt
- * ends a turn the framework aborts as such an
- * `aborted`; where Escape acts (escapeActs) and finds no turn running to
- * abort, it shows the turn as ended itself (escapeLine). Pure so the rule is
- * pinned by tests.
- */
 export interface RootTurnEnd {
   status: 'idle' | 'error';
   background: 'show' | 'drop';
@@ -201,6 +187,8 @@ export function rootTurnEnd(
   event: { type: string; error?: unknown; reason?: unknown },
   turnShowing: boolean,
 ): RootTurnEnd | null {
+  // agent-framework sends inference:failed only for an attempt it started, so
+  // a failure ends a turn even when the TUI didn't see the turn start.
   if (!turnShowing && event.type !== 'inference:failed') return null;
   switch (event.type) {
     case 'inference:completed':
@@ -214,8 +202,8 @@ export function rootTurnEnd(
     }
     case 'inference:exhausted':
       // Alone, without a `failed` first, it ends a stream aborted for a
-      // reason other than a stop, which agent-framework 0.22.3 doesn't treat
-      // as deliberate, so it shows as a failure; a stop ends with `aborted`.
+      // reason other than a stop, which agent-framework doesn't treat as
+      // deliberate, so it shows as a failure; a stop ends with `aborted`.
       return { status: 'error', background: 'drop', line: { text: `(turn ended: ${traceError(event)})`, tone: 'error' } };
     default:
       return null;
@@ -631,6 +619,7 @@ export async function runTui(app: AppContext): Promise<void> {
     paddingTop: 1,
   });
   let fleetLineCounter = 0;
+  const STATUS_INPUT_PADDING_ROWS = 3;
 
   /** Detach AND destroy all fleetBox lines. These views rebuild on every
    *  poll tick — remove() without destroy() leaked one native text buffer
@@ -663,11 +652,8 @@ export async function runTui(app: AppContext): Promise<void> {
     justifyContent: 'space-between',
   });
 
-  // Multi-line input. Enter submits; Alt+Enter (meta+return) and Ctrl+J
-  // (linefeed, default Textarea binding) insert a newline. Shift+Enter is
-  // not bound because most terminals don't transmit the shift modifier on
-  // Enter without Kitty Keyboard protocol; users who want it can run their
-  // terminal's equivalent of Claude Code's /terminal-setup.
+  // Ctrl+J is a linefeed, which OpenTUI's Textarea binds to a newline by
+  // default.
   const input = new TextareaRenderable(renderer, {
     id: 'input',
     placeholder: 'Type a message or /help — Alt+Enter for newline',
@@ -686,6 +672,7 @@ export async function runTui(app: AppContext): Promise<void> {
   // placeholder is expanded back to the original text on submit.
   const INLINE_PASTE_THRESHOLD = 200;
   const pastedTexts: string[] = [];
+  const PASTE_PLACEHOLDER = /\[paste #(\d+):[^\]]*\]/g;
   function formatPastePlaceholder(n: number, text: string): string {
     // Square brackets in the head would terminate the `[^\]]*` expansion
     // regex early on submit, mangling the message (pasted JSON/code/links
@@ -816,9 +803,8 @@ export async function runTui(app: AppContext): Promise<void> {
     if (children.length <= SCROLLBACK_CAP) return;
     for (const child of children.slice(0, children.length - SCROLLBACK_CAP)) {
       if (child === currentStreamText) continue; // never destroy the live stream element
-      // remove() only detaches; destroy() is what frees the native text
-      // buffer. Without it the "cap" bounds render cost but still leaks
-      // one native buffer per line.
+      // OpenTUI's remove() only detaches a renderable; destroy() frees its
+      // native text buffer.
       scrollBox.remove(child.id);
       child.destroy();
     }
@@ -1602,7 +1588,7 @@ export async function runTui(app: AppContext): Promise<void> {
     // fleetBox (terminalHeight - 3: status bar, input row, paddingTop). Without
     // this, a real fleet outgrows the terminal and the cursor walks below the
     // fold — navigating (and Del:stopping) rows the operator cannot see.
-    const avail = Math.max(5, renderer.terminalHeight - 3 - header.length);
+    const avail = Math.max(5, renderer.terminalHeight - STATUS_INPUT_PADDING_ROWS - header.length);
     const { start, end } = sliceViewport(treeLines.length, fleetCursorLine, avail);
     const lines: FleetLine[] = [...header];
     if (start > 0) lines.push({ text: `  ┈ ${start} lines above ┈`, color: DIM_GRAY });
@@ -1693,8 +1679,8 @@ export async function runTui(app: AppContext): Promise<void> {
       // Same viewport accounting as updatePeekView: header lines already in
       // `lines`, the "N lines above" marker, and the pending token line all
       // occupy rows of the terminalHeight - 3 the fleetBox actually has.
-      const available = renderer.terminalHeight - 3;
-      const maxLines = Math.max(5, available - lines.length - 1 - (pending ? 1 : 0));
+      const available = renderer.terminalHeight - STATUS_INPUT_PADDING_ROWS;
+      const maxLines = Math.max(5, available - lines.length - MARKER_ROW - (pending ? 1 : 0));
       const tail = log.slice(-maxLines);
       if (log.length > maxLines) {
         lines.push({ text: `  ┈ (${log.length - maxLines} lines above)`, color: DIM_GRAY });
@@ -1824,6 +1810,7 @@ export async function runTui(app: AppContext): Promise<void> {
   // ── Peek view ────────────────────────────────────────────────────────
 
   /** Accumulated event log per agent (keyed by display name). */
+  const PEEK_LOG_MAX_LINES = 500;
   const peekLogs = new Map<string, FleetLine[]>();
   /** Current in-progress tool per agent (for sticky display). */
   const peekCurrentTool = new Map<string, string | null>();
@@ -1835,7 +1822,7 @@ export async function runTui(app: AppContext): Promise<void> {
     log.push({ text, color });
     // Cap to match appendProcPeekLog — these accumulate for EVERY subagent
     // via the global stream subscription, whether anyone ever peeks or not.
-    if (log.length > 500) log.splice(0, log.length - 500);
+    if (log.length > PEEK_LOG_MAX_LINES) log.splice(0, log.length - PEEK_LOG_MAX_LINES);
   }
 
   function cleanupPeek() {
@@ -1924,8 +1911,8 @@ export async function runTui(app: AppContext): Promise<void> {
     // too — otherwise the NEWEST lines, the whole point of a tail-follow
     // view, get clipped off the bottom of the box.
     if (log && log.length > 0) {
-      const available = renderer.terminalHeight - 3;
-      const maxLines = Math.max(5, available - lines.length - 1);
+      const available = renderer.terminalHeight - STATUS_INPUT_PADDING_ROWS;
+      const maxLines = Math.max(5, available - lines.length - MARKER_ROW);
       const tail = log.slice(-maxLines);
       if (log.length > maxLines) {
         lines.push({ text: `  ┈ (${log.length - maxLines} lines above)`, color: DIM_GRAY });
@@ -2209,8 +2196,8 @@ export async function runTui(app: AppContext): Promise<void> {
             const files = toolInput.files as string[] | undefined;
             const fileList = files ? files.join(', ') : 'all';
             // OSC 8 hyperlink for the target directory
-            const link = `\x1b]8;;file://${dir}\x07${dir}\x1b]8;;\x07`;
-            addLine(`  ${short}materialize → ${link} (${fileList})`, DIM_GRAY);
+            const osc8Link = `\x1b]8;;file://${dir}\x07${dir}\x1b]8;;\x07`;
+            addLine(`  ${short}materialize → ${osc8Link} (${fileList})`, DIM_GRAY);
           } else if (tool === 'lessons--create' && toolInput.content) {
             const content = String(toolInput.content);
             const tags = (toolInput.tags as string[] | undefined)?.join(', ') ?? '';
@@ -2352,7 +2339,7 @@ export async function runTui(app: AppContext): Promise<void> {
     const log = procPeekLogs.get(name)!;
     log.push({ text, color });
     // Cap at 500 lines to match FleetModule buffer sizing.
-    if (log.length > 500) log.splice(0, log.length - 500);
+    if (log.length > PEEK_LOG_MAX_LINES) log.splice(0, log.length - PEEK_LOG_MAX_LINES);
   }
 
   // Subscribe to each subagent's stream for peek logs + done events.
@@ -2586,9 +2573,9 @@ export async function runTui(app: AppContext): Promise<void> {
   // ── Keyboard ───────────────────────────────────────────────────────
 
   renderer.keyInput.on('keypress', (key: { name?: string; ctrl?: boolean }) => {
-    // OpenTUI's destroy hands the keys still buffered to these handlers, so
-    // keys typed as the stop begins can reach them once it has: they start
-    // nothing then (handleSubmit too).
+    // OpenTUI's destroy hands the keys still buffered to these handlers,
+    // so keys typed as the stop begins can reach them once it has: they
+    // start nothing then.
     if (stopping) return;
     if (key.name === 'tab') {
       cleanupPeek();
@@ -2876,7 +2863,7 @@ export async function runTui(app: AppContext): Promise<void> {
 
     // Expand paste placeholders
     const text = pastedTexts.length > 0
-      ? raw.replace(/\[paste #(\d+):[^\]]*\]/g, (m, n) => pastedTexts[parseInt(n, 10) - 1] ?? m)
+      ? raw.replace(PASTE_PLACEHOLDER, (m, n) => pastedTexts[parseInt(n, 10) - 1] ?? m)
       : raw;
     pastedTexts.length = 0;
 
@@ -3035,9 +3022,8 @@ export async function runTui(app: AppContext): Promise<void> {
   addLine(`Error log: ${logPath}`, DIM_GRAY);
   rootTraces.follow(app.framework);
   loadSessionHistory();
-  // Printed at start too, but the alternate screen hides that line. After the
-  // history, since the view keeps to its bottom and would scroll a line above
-  // a long history out of sight.
+  // Printed at start too, but the alternate screen OpenTUI draws on hides
+  // that line.
   if (bunFloorNotice) addLine(bunFloorNotice, YELLOW);
 
   // ── Cleanup ────────────────────────────────────────────────────────
@@ -3060,9 +3046,8 @@ export async function runTui(app: AppContext): Promise<void> {
     // the TUI's stop has begun.
     app.stopping = true;
     // OpenTUI's destroy removes its own signal listeners, so a second stop
-    // signal during the stop (a terminal closing after the Web UI's quit,
-    // say) would end the process by default. These join the stop instead,
-    // as headless mode's do, until it settles.
+    // signal during the stop would end the process by default. These join the
+    // stop instead, until it settles.
     for (const signal of STOP_SIGNALS) process.on(signal, cleanup);
     // Each step runs on its own, so one that throws is logged and the rest
     // still put the terminal back and leave nothing to hold the process.
@@ -3105,11 +3090,9 @@ export async function runTui(app: AppContext): Promise<void> {
       });
       for (const signal of STOP_SIGNALS) process.off(signal, cleanup);
     };
-    // The framework the host holds now. A switch that has begun stopping it
-    // shares this stop, since agent-framework keeps a stop under way, and a
-    // finished one, for a later call. After a failed stop whose storage is
-    // still open, agent-framework lets a later stop() start its teardown
-    // again, so this call can be that later one.
+    // agent-framework's stop() gives a later call the stop under way, or the
+    // one that finished, and after a failed stop whose storage is still open it
+    // starts the teardown again.
     Promise.resolve().then(() => app.framework.stop()).then(async () => {
       await settled();
       resolveExit?.();
@@ -3129,21 +3112,13 @@ export async function runTui(app: AppContext): Promise<void> {
     stop: (_reason, farewell) => { setTimeout(() => { cleanup(); console.log(farewell); }, 0); },
   });
 
-  // The TUI ends with its renderer. OpenTUI destroys the renderer itself on
-  // SIGTERM, SIGINT, SIGHUP and its other exit signals (the Web UI's own quit
-  // sends SIGTERM), so stop then as /quit does. cleanup's own destroy() emits
-  // this too, and finds the TUI already stopping.
+  // OpenTUI destroys the renderer itself on SIGTERM, SIGINT, SIGHUP and its
+  // other exit signals, so the TUI stops on its destroy, as /quit does.
   renderer.on(CliRenderEvents.DESTROY, cleanup);
-  // A terminal that has gone away (its window or SSH session closed) fails
-  // the TUI's own stop: OpenTUI's destroy turning raw mode off fails on
-  // stdin, and cleanup's title reset on stdout, each as an error on its
-  // stream. Unheard, either would end the process before the TUI stopped.
-  // A failing terminal ends the TUI as /quit does, and its first error gets
-  // a line in the log, whether it starts the stop or comes during it: a
-  // hangup's SIGHUP can start the stop before its error is heard. Later
-  // errors are the dead terminal answering the stop's own writes, so they
-  // get none, and the listeners stay after the stop, so a late one can't end
-  // the exiting process either.
+  // With the terminal gone (its window or SSH session closed), OpenTUI's
+  // destroy fails turning raw mode off, and the title reset fails writing,
+  // each as an error on stdin or stdout. Unheard, either would end the process
+  // before the TUI stopped.
   let terminalReported = false;
   const terminalFailed = (error: unknown): void => {
     if (!terminalReported && !logEnded) {

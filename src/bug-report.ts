@@ -18,14 +18,16 @@
  *   where in our own code it was thrown, as package-relative `path:line`.
  *
  * No log line, error message, request, response, prompt, server name,
- * command, argument, url, env value or path is copied, and that holds for
- * the local file too. The error logs can't be cleaned of conversation text
- * reliably (they hold all of stderr, a server's included, and a provider can
- * echo a whole request in its error), so they are read only for shapes.
+ * command, argument, url or env value is copied, nor any path but a
+ * frame's package-relative one in our own code, and that holds for the
+ * local file too. The error logs can't be cleaned of conversation text
+ * reliably (they hold all of stderr, a server's included, and a provider
+ * can echo a whole request in its error), so they are read only for
+ * shapes.
  *
  * Nothing is sent from here. The command shows the report, writes it to a
  * file, and gives a link to GitHub's new-issue form, filled in; the user
- * reads it there and submits it themselves, so no credentials are needed.
+ * reads it there and submits it themselves.
  */
 
 import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
@@ -455,8 +457,8 @@ export function serverRows(
     // The framework's own reading when it gives one (a newer framework dials
     // an https url as modern MCP over HTTP); otherwise the configuration's,
     // as an older framework reads it: any url is a WebSocket.
-    // A framework that gives the field but leaves it null (agent-framework
-    // #262, for a refused server) means it has no usable value: unknown.
+    // A framework that gives the field but leaves it null (a refused server)
+    // means it has no usable value: unknown.
     const transport: ServerRow['transport'] = server.transport === 'stdio' || server.transport === 'websocket' || server.transport === 'http'
       ? server.transport
       : Object.hasOwn(server, 'transport') ? 'unknown'
@@ -473,8 +475,7 @@ export function serverRows(
       family,
       connected: server.connected === true,
       retrying: server.retrying === true,
-      // `refused` (agent-framework #262's listMcplServers; older frameworks
-      // list no refused server) is a sentence naming the server and its url:
+      // `refused` is a sentence naming the server, and it can quote the url:
       // only whether there is one goes in.
       refused: server.refused !== undefined && server.refused !== null && server.refused !== false,
       toolCount: count(server.toolCount) ?? 0,

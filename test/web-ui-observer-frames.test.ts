@@ -45,9 +45,8 @@ describe('what each client is sent', () => {
     getMessageCount: () => transcript.length,
     getMessageWindow: (offset: number, limit: number, opts?: { alignToBodyGroups?: boolean }) => {
       onRead?.(offset, limit);
-      // As the store does with alignToBodyGroups, a window that begins inside
-      // a sharded body begins at its first shard. (The store also carries a
-      // window's end to its body's last shard, which no test here needs.)
+      // As context-manager's store does with alignToBodyGroups, a window that
+      // begins inside a sharded body begins at its first shard.
       let start = offset;
       while (opts?.alignToBodyGroups && start > 0 && continuesBody(transcript[start - 1] as BodyShard, transcript[start] as BodyShard)) start--;
       return { messages: transcript.slice(start, offset + limit), startIndex: start, totalCount: transcript.length };
@@ -201,7 +200,7 @@ describe('what each client is sent', () => {
     for (const conn of [c.reader, c.interior]) expect(conn.framesOf('usage')).toEqual([]);
   });
 
-  test("a child's answers to the fleet's own requests, a panel's or a switch's, reach no client", async () => {
+  test("a child's answers to the fleet's own requests, a panel's or a switch's, reach no client, where the event sent after them does", async () => {
     const c = await everyone();
     const fleetEvents = host.module as unknown as { handleFleetEvent(name: string, event: unknown): void };
     fleetEvents.handleFleetEvent('kid', { type: 'panel-response', corrId: 'panel-health-1', op: 'health', ok: true, data: {} });
@@ -418,7 +417,7 @@ describe('what each client is sent', () => {
       }
     });
 
-    test('a welcome whose tail such messages fill reads back too, on connecting and when a refresh welcomes the client again', async () => {
+    test('a welcome whose tail such messages fill reads back too, on connecting and when a refresh welcomes the client again, and comes empty past ten windows of 200 before its tail, from where the reading stopped', async () => {
       transcript = [say('m0', 'user', [{ type: 'text', text: 'a word' }]), ...Array.from({ length: 250 }, (_, i) => toolUse(`m${i + 1}`, `t${i}`))];
       try {
         const c = await everyone();

@@ -63,9 +63,8 @@ afterEach(async () => {
     host.kill('SIGKILL');
     await exited;
   }
-  // A child runs detached, so one its parent couldn't stop, such as after a
-  // SIGKILL, is stopped here, by every pid the children file lists and the
-  // one its pid file holds.
+  // Children run detached, so one its parent couldn't stop, as after a SIGKILL,
+  // outlives it.
   for (const dir of dirs.splice(0)) {
     for (const pid of childPids(dir)) {
       try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
@@ -102,7 +101,7 @@ function startHost(
   let out = '';
   host.stderr!.on('data', (chunk) => { err += String(chunk); });
   host.stdout!.on('data', (chunk) => { out += String(chunk); });
-  // 'close' comes once the host has exited and its stderr is all read.
+  // 'close' comes once the host has exited and its stdio is all read.
   const exit = new Promise<number | null>((done) => host.once('close', (code) => done(code)));
   return { host, stderr: () => err, stdout: () => out, exit };
 }
@@ -277,8 +276,8 @@ describe('a host started from an install', () => {
     expect(readCurrent(root)).toBe('9.9.9');
     expect(stderr()).not.toContain("couldn't connect the MCPL server");
     expect(readJournal(root).map(({ step }) => step)).toEqual(['trial-start', 'commit']);
-    // Committed, it keeps no trial log: headless's SIGTERM ends it through process.exit, which runs exit handlers.
-    // Its handlers go on just after its socket listens, so a SIGTERM before then would end it with none run.
+    // process.exit runs 'exit' listeners, and a signal nothing handles runs none,
+    // so the SIGTERM waits until the host's handlers are on.
     const log = join(dir, 'data', 'headless.log');
     await until(() => existsSync(log) && readFileSync(log, 'utf-8').includes('socket listening at'), 30_000, 'headless listens');
     host.kill('SIGTERM');
@@ -472,9 +471,8 @@ describe("a host's update, on a real start", () => {
     expect(closed).toBe(false);
     page.send(JSON.stringify({ type: 'command', command: '/update restart 9.9.10' }));
     expect(await exit).toBe(75);
-    // The page's socket closes with the host's process, which sends nothing
-    // once it has exited, so every frame the page has once it sees the close
-    // was sent before the exit.
+    // The page's socket closes when the host's process exits, so no frame comes
+    // after the close.
     await until(() => closed, 5_000, 'the page sees its connection close');
     const answers = frames.filter((frame) => frame.type === 'command-result').flatMap((frame) => frame.lines!.map((l) => l.text));
     expect(answers).toEqual([

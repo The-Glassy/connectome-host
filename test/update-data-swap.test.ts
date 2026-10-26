@@ -298,7 +298,7 @@ describe('a file item', () => {
 
   test('one that is missing is made with the source\'s mode, in a directory made for it, and its absence is noted', () => {
     rmSync(join(dir, 'work'), { recursive: true });
-    // A mode the usual umasks (022, 002, 077) would each cut.
+    // Each usual umask (022, 002, 077) would cut this mode.
     chmodSync(source, 0o666);
     replaceFile(file, source, keep);
     expect(readFileSync(file, 'utf-8')).toBe('older');
@@ -440,7 +440,7 @@ describe('a file item', () => {
     expect(syncsOf(() => replaceFile(file, null, keep))).toContain(join(dir, 'work'));
   });
 
-  test("a source that can't be read leaves the file as it was", () => {
+  test("a source of another size that can't be read leaves the file as it was", () => {
     // Of another size, so the content comparison never opens it.
     writeFileSync(source, 'older, and longer');
     chmodSync(source, 0o000);

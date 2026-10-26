@@ -116,9 +116,8 @@ describe('AutobiographicalStrategy state slot under explicit namespace', () => {
       });
 
       const stateIds = store.listStates().map((s: { id: string }) => s.id);
-      // The slot the framework's main-agent ContextManager registers.
-      // If warmup-session.ts ever drops its namespace argument again, this
-      // assertion fails because the strategy lands at `default/` instead.
+      // agent-framework opens an agent's ContextManager in namespace agents/<name>;
+      // context-manager without a namespace uses `default`.
       expect(stateIds).toContain('agents/Claude/autobio:summaries');
       expect(stateIds).not.toContain('default/autobio:summaries');
     } finally {

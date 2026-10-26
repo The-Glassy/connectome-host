@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildFrameworkAgentConfig } from '../src/framework-agent-config.js';
 import { buildFrameworkStrategy } from '../src/framework-strategy.js';
-import { loadSavedRecipe, saveRecipe, validateRecipe } from '../src/recipe.js';
+import { DEFAULT_RECIPE_CLOCK, loadSavedRecipe, saveRecipe, validateRecipe } from '../src/recipe.js';
 
 function recipe(agent: Record<string, unknown> = {}) {
   return {
@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 describe('framework FKM composition', () => {
-  test('preserves the pre-merge AgentConfig shape field-for-field when FKM additions are omitted', () => {
+  test('preserves the pre-merge AgentConfig shape field-for-field when FKM additions are omitted, but for the default recipe clock', () => {
     const parsed = validateRecipe(recipe({
       provider: 'openai-responses',
       maxTokens: 4_096,
@@ -85,7 +85,7 @@ describe('framework FKM composition', () => {
       },
       // The one FKM addition a recipe gets without naming it: ten-minute clock
       // rows (DEFAULT_RECIPE_CLOCK), off only with agent.clock: false.
-      clock: { intervalMinutes: 10 },
+      clock: DEFAULT_RECIPE_CLOCK,
     });
   });
 

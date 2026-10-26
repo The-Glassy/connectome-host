@@ -11,6 +11,7 @@ import {
   type QuiesceFramework, type SwitchFleet, type SwitchRequest, answerSwitchRequest, quiesceForSwitch, resumeAfterSwitchQuiesce, resumeIfSwitch,
 } from '../src/update/quiesce.js';
 
+const TIMER_LIMIT_LESS_ANSWER_MARGIN = 2 ** 31 - 1 - 10_000;
 const SWITCH = switchQuiesceReason('0.14.0');
 
 /** A framework as the switch's quiesce uses one: `holders` hold a turn, and
@@ -307,7 +308,7 @@ describe('quiesceForSwitch', () => {
   });
 
   test('the longest wait a timer can hold with the margin is taken', async () => {
-    const longest = 2 ** 31 - 1 - 10_000;
+    const longest = TIMER_LIMIT_LESS_ANSWER_MARGIN;
     const { framework, calls } = fakeFramework();
     const { fleet, asked } = fakeFleet({ kid: drained() });
     expect((await quiesceForSwitch(framework, fleet, { to: '0.14.0', timeoutMs: longest })).drained).toBe(true);
@@ -319,7 +320,7 @@ describe('quiesceForSwitch', () => {
   test("a wait that isn't a number of milliseconds a timer can hold is refused before anything is quiesced", async () => {
     // A request's timer holds the wait and ten seconds' margin, so a wait
     // that fits a timer only without the margin is refused too.
-    for (const timeoutMs of [Number.POSITIVE_INFINITY, Number.NaN, -1, 2 ** 31, 2 ** 31 - 1 - 10_000 + 1]) {
+    for (const timeoutMs of [Number.POSITIVE_INFINITY, Number.NaN, -1, 2 ** 31, TIMER_LIMIT_LESS_ANSWER_MARGIN + 1]) {
       const { framework, entered } = fakeFramework();
       const { fleet, asked } = fakeFleet({ kid: drained() });
       await expect(quiesceForSwitch(framework, fleet, { to: '0.14.0', timeoutMs }), String(timeoutMs)).rejects.toThrow(RangeError);
@@ -455,7 +456,7 @@ describe("a fleet child's answer", () => {
     for (const request of [
       null, {}, { op: 'resum' }, { op: 'quiesce', waitMs: 0 }, { op: 'quiesce', to: '', waitMs: 0 },
       { op: 'quiesce', to: '0.14.0' }, { op: 'quiesce', to: '0.14.0', waitMs: -1 }, { op: 'quiesce', to: '0.14.0', waitMs: Number.NaN },
-      { op: 'quiesce', to: '0.14.0', waitMs: 2 ** 31 - 1 - 10_000 + 1 },
+      { op: 'quiesce', to: '0.14.0', waitMs: TIMER_LIMIT_LESS_ANSWER_MARGIN + 1 },
     ]) {
       const { framework, calls } = fakeFramework({ quiesced: true, reason: SWITCH });
       await expect(answerSwitchRequest(framework, request), JSON.stringify(request)).rejects.toThrow("This fleet child can't read the switch's request");

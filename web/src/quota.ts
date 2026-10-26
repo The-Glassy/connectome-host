@@ -21,7 +21,7 @@ const POLL_MS = 60_000;
 export function createQuotaPoll(scope: Accessor<string | null> = () => 'local'): Accessor<QuotaSnapshotData | null> {
   const [quota, setQuota] = createSignal<QuotaSnapshotData | null>(null);
   let timer: number | undefined;
-  let metered = false;
+  let stopAsking = false;
 
   const looking = (): boolean => document.visibilityState === 'visible' && document.hasFocus();
 
@@ -35,13 +35,13 @@ export function createQuotaPoll(scope: Accessor<string | null> = () => 'local'):
       // Only a definite answer ends the polling. A 401 can be the observer
       // session cookie not written yet, a 503 the host still binding, a 5xx a
       // child restarting: all of them are "ask again next tick".
-      if (res.status === 403 || res.status === 404) { metered = true; return; }
+      if (res.status === 403 || res.status === 404) { stopAsking = true; return; }
       if (!res.ok) return;
       // An older host answers the SPA shell here: no readout, stop asking.
-      if (!(res.headers.get('content-type') ?? '').includes('json')) { metered = true; return; }
+      if (!(res.headers.get('content-type') ?? '').includes('json')) { stopAsking = true; return; }
       const data = (await res.json()) as QuotaSnapshotData;
       // A pay-per-token host never becomes a subscription host mid-session.
-      if (!data.subscription) metered = true;
+      if (!data.subscription) stopAsking = true;
       setQuota(data);
     } catch {
       // Transient network failure: keep the last reading, try next tick.
@@ -49,11 +49,11 @@ export function createQuotaPoll(scope: Accessor<string | null> = () => 'local'):
   };
 
   const sync = (): void => {
-    const want = looking() && !metered && scope() !== null;
+    const want = looking() && !stopAsking && scope() !== null;
     if (want && timer === undefined) {
       void load();
       timer = window.setInterval(() => {
-        if (metered) sync(); else void load();
+        if (stopAsking) sync(); else void load();
       }, POLL_MS);
     } else if (!want && timer !== undefined) {
       window.clearInterval(timer);
@@ -63,7 +63,7 @@ export function createQuotaPoll(scope: Accessor<string | null> = () => 'local'):
 
   // A different process is a different credential: forget the old answer.
   createEffect(on(scope, () => {
-    metered = false;
+    stopAsking = false;
     setQuota(null);
     if (timer !== undefined) { window.clearInterval(timer); timer = undefined; }
     sync();
@@ -86,9 +86,8 @@ export function createQuotaPoll(scope: Accessor<string | null> = () => 'local'):
 }
 
 /**
- * What a spent window means right now. "Parked" is claimed only when the
- * framework says it is holding an agent; a spent window by itself parks
- * nothing (the hold arms on a 429, and only on a framework with the hook).
+ * "Parked" is claimed only when agent-framework says it holds an agent: a
+ * spent window parks nothing until a call fails on it.
  */
 export function quotaStatus(q: QuotaSnapshotData): string | null {
   if (!q.blockedUntil) return q.parked ? 'inference parked on a spent quota window' : null;

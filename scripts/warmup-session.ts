@@ -4,19 +4,11 @@
  * before the session is opened for real continuation.
  *
  * Bulk-imported sessions (from claude.ai exports, etc.) land in Chronicle with
- * thousands of raw messages and no L1/L2/L3 summaries. At runtime, autobio's
- * uncompressed-fallback would emit everything raw at first compile, blowing
- * the context window. This script pre-computes all summaries so the session
- * is openable.
+ * thousands of raw messages and no L1/L2/L3 summaries. This script
+ * pre-computes all summaries so the session is openable.
  *
- * Compression is driven by the same model used at conversation time
- * (Sonnet 4.5 by default) — autobio's prompts are explicitly first-person
- * ("describe it as you would to yourself"), so the summarizer is literally
- * writing the friend's-Claude's own diary. Haiku here would be a different
- * voice wearing the same name.
- *
- * Resumable: autobio persists its compression and merge queues to Chronicle.
- * If interrupted, re-running this script picks up where it left off.
+ * Resumable: if interrupted, re-running this script picks up where it left
+ * off.
  *
  * Run:
  *   bun scripts/warmup-session.ts <session-name-or-id>
@@ -31,7 +23,8 @@
  *                      session was imported with — Membrane formats the
  *                      assistant role by string-comparing message
  *                      participants against this name.
- *   --max-spend <usd>  Soft cap; halt gracefully if cost exceeds this
+ *   --max-spend <usd>  Soft cap; halt gracefully between ticks once the
+ *                      estimated cost reaches this
  *   --l1-budget <n>    L1 budget tokens (passed to autobio)
  *   --l2-budget <n>    Likewise L2
  *   --l3-budget <n>    Likewise L3
@@ -234,10 +227,9 @@ async function main() {
     : new AnthropicAdapter({ apiKey: process.env.ANTHROPIC_API_KEY });
   const membrane = new Membrane(adapter, {
     ...(isBedrock ? { defaultPromptCaching: false } : {}),
-    // Imported sessions store assistant turns under participant `agentName`.
-    // Membrane's default assistantParticipant is 'Claude'; if that disagrees
-    // with the stored participant every assistant message maps to role
-    // 'user' and the API rejects tool_use blocks.
+    // Membrane gives the assistant role only to messages whose participant is
+    // assistantParticipant (default 'Claude'); every other message goes as
+    // 'user', its tool blocks aside.
     assistantParticipant: agentName,
     hooks: {
       afterResponse: (response: NormalizedResponse) => {

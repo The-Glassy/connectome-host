@@ -1,12 +1,7 @@
 /**
- * The web UI's /files/<mount>/<path> passthrough serves a workspace file
- * through WorkspaceModule.readFileFromDisk, which refuses a file that is
- * itself a link unless the mount follows links, and reads a file only if its
- * canonical path lies inside the mount. The first tests stand in for that
- * read's answers. Every path also resolves by its text to a real file (as
- * resolveAbsolutePath answers), which a read that went around
- * readFileFromDisk would serve instead. The last run agent-framework's own
- * WorkspaceModule on real mounts, whose links all stay inside their mount.
+ * agent-framework's WorkspaceModule.readFileFromDisk refuses a file reached
+ * through a link unless the mount follows links, and reads a file only if its
+ * canonical path lies inside the mount.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -21,10 +16,10 @@ import {
 } from '../src/modules/web-ui-module.js';
 
 // agent-framework's code for a link among a path's directories that stays
-// inside the mount, from its release with anima-research/agent-framework#468.
+// inside the mount.
 const PARENT_SYMLINK = 'parent_symlink' as WorkspaceReadError['code'];
-// anima-research/agent-framework#460's code for a path in another mount's
-// directory nested in the one named.
+// agent-framework's code for a path in another mount's directory nested in
+// the one named.
 const OTHER_MOUNT = 'other_mount' as WorkspaceReadError['code'];
 
 describe("the web UI's /files/ route serves only what the mount's own read gives", () => {

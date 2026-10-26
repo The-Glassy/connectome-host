@@ -124,9 +124,7 @@ describe('unresolved recipe persistence', () => {
     const path = join(dataDir, '.recipe.json');
     expect(statSync(path).mode & 0o777).toBe(0o600);
 
-    // Legacy deployments have a world-readable resolved snapshot; an
-    // overwrite must tighten it even though writeFileSync's mode only
-    // applies at creation.
+    // writeFileSync's mode applies only when it creates the file.
     chmodSync(path, 0o644);
     expect(statSync(path).mode & 0o777).toBe(0o644);
     saveRecipe(dataDir, persistable);
@@ -250,7 +248,7 @@ describe('unresolved recipe persistence', () => {
     // returned null, so each throws, saying why.
     test('a file that is there but is not a JSON object throws, saying what it holds', async () => {
       const cases: Array<[string, RegExp]> = [
-        // Only that it isn't JSON: the parser's message can quote the text.
+        // JSON.parse's message can quote the text.
         ['', /^it isn't JSON$/],
         ['{"name": "Torn", "agent', /^it isn't JSON$/],
         ['{not json', /^it isn't JSON$/],

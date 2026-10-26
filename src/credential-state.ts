@@ -89,12 +89,8 @@ export interface CredentialSource {
   setToken?(token: string): Promise<void> | void;
   /** Epoch ms the current credential expires, when known. */
   expiresAt?(): number | undefined;
-  /**
-   * Cheap validity check that costs no inference (usage endpoint, account
-   * read). Resolves on success; rejects with `{ status?: number }` on
-   * failure — only 401/403 count as an auth verdict, anything else is
-   * inconclusive (the KR-class inference-only token answers 429 here).
-   */
+  /** Only 401/403 count as an auth verdict: an inference-only token answers
+   *  429 on the usage endpoint. */
   probe?(): Promise<void>;
   /** The live bearer, for in-process callers that must send the same
    *  credential as inference (count_tokens). Never put in a snapshot. */

@@ -10,10 +10,8 @@ const { runTui } = await import('../src/tui.js');
 
 const failure = new AggregateError([new Error('injected Fleet cleanup failure')], 'Fleet shutdown failed');
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-// The runs of each framework's stop body. agent-framework keeps a stop under
-// way, and a successful one, for a later stop() call. These keep a failed one
-// too, which no case here stops again, so a framework that the switch and
-// the TUI's stop both stop runs its body once.
+// agent-framework keeps a stop under way, and a successful one, for a later
+// stop() call.
 let stopCalls = 0;
 let switchedStopCalls = 0;
 // Trace listeners detached, from either framework, and listeners attached to
@@ -128,8 +126,8 @@ const app = {
 };
 
 async function finish(status: string, error?: unknown): Promise<void> {
-  // A turn of the timers first, so an unhandled rejection that the
-  // settlement leaves behind is reported before the receipt.
+  // A turn of the timers first, so an unhandled rejection the settlement leaves
+  // is reported before the receipt.
   await sleep(20);
   process.stdout.write(`TUI_RESULT ${JSON.stringify({
     status, stopCalls, switchedStopCalls, traceDetached, followedAfterStop, detachedAtStop, switchedDetachedAtStop,
@@ -192,8 +190,8 @@ if (control === 'ctrl-c') {
   await mockInput.typeText('/quit');
   mockInput.pressEnter();
 } else if (control === 'stdout-error' || control === 'stdin-error') {
-  // A terminal that fails with no signal, as a write to a pseudo-terminal
-  // whose other end has closed does: Bun's own terminal sends no SIGHUP.
+  // A terminal can fail with no signal, as a write to a pseudo-terminal whose
+  // other end has closed does.
   const stream = control === 'stdout-error' ? process.stdout : process.stdin;
   stream.emit('error', Object.assign(new Error('write EIO'), { code: 'EIO' }));
 } else if (control === 'two-errors') {

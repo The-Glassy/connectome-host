@@ -82,9 +82,8 @@ function fail(text: string): ToolResult {
   return { success: false, error: text, isError: true };
 }
 
-/** The module's name. The framework prefixes each of its tools with it, so
- *  the agent calls `mcpl-admin--mcpl_list`, and every result names the tools
- *  that way, so a remedy can be followed as written. */
+/** agent-framework prefixes each of the module's tools with its name, so the
+ *  agent calls `mcpl-admin--mcpl_list`. */
 const MODULE_NAME = 'mcpl-admin';
 const tool = (name: string): string => `${MODULE_NAME}--${name}`;
 const LIST = tool('mcpl_list');
@@ -120,9 +119,8 @@ function overlayRepair(name?: string): string {
   return `${capital(REPAIR)}${name ? `, then call ${name} again` : ''}. ${NOT_ASIDE}`;
 }
 
-/** File-system failures that are this host's own rather than the file's:
- *  too many files open, in this process (EMFILE) or the system (ENFILE).
- *  Nothing about the file needs fixing, and the failure can pass. */
+/** EMFILE and ENFILE: too many files open, in this process or in the
+ *  system. */
 const OWN_FAILURES = new Set(['EMFILE', 'ENFILE']);
 
 /** The repair for a file this host couldn't open or read: by whose failure
@@ -140,11 +138,8 @@ function readRepair(error: unknown, name?: string): string {
   return `Ask your operator to fix it${name ? `, then call ${name} again` : ''}.`;
 }
 
-/** The failures a save of the overlay meets before anything is written: at
- *  the open, or in the read before it (saveAgentOverlay keeps the root's
- *  other keys). The overlay is written in place (saveAgentOverlay says why),
- *  so any other failure may have come after the open's truncation and left
- *  the file cut short. */
+/** writeFileSync truncates the file at its open, so a failure after the open
+ *  can leave it cut short. */
 const BEFORE_WRITE = new Set([
   'EACCES', 'EPERM', 'ENOENT', 'ENOTDIR', 'EISDIR', 'EROFS', 'ELOOP', 'ENAMETOOLONG', 'EMFILE', 'ENFILE', 'ETXTBSY',
   'EBUSY',
@@ -158,9 +153,8 @@ function partway(error: unknown): boolean {
   return typeof code === 'string' && !BEFORE_WRITE.has(code);
 }
 
-/** What a save that may have stopped partway left, as sentences. EIO can
- *  come from the read before the write, and a failure at close after the
- *  whole content went out, so no single guess about the file is true. */
+/** EIO can come from the read before the write, or from the close after the
+ *  whole content went out. */
 const PARTWAY_TEXT = ' What your overlay file holds now isn\'t known: its old content, the new content whole, or ' +
   `the new content cut short. ${LIST} shows the entries it holds, or why it can't be read. If it says the file ` +
   `isn't valid JSON, the next host start will stop on it until it's fixed: ${REPAIR}. ${NOT_ASIDE}`;
@@ -171,14 +165,9 @@ const PARTWAY_TEXT = ' What your overlay file holds now isn\'t known: its old co
  *  back then, so no more is promised here. */
 const UNLOAD_REMEDY = `${UNLOAD} unloads it.`;
 
-/** What fixes a server of the agent's own that won't connect, after a deploy
- *  or a restart. A restart reconnects with the configuration agent-framework
- *  stored at the server's last connect, whether that connect succeeded or
- *  not, so a wrong command, args or url is corrected only by deploying
- *  again, while a server rebuilt in place is picked up by a restart. A
- *  deploy replaces the entry whole, so it takes each of the server's fields,
- *  not the corrected one alone. A restart of another's server takes
- *  restartRemedy's instead. */
+/** agent-framework's restart reconnects with the configuration stored at the
+ *  server's last connect, whether it succeeded or not, so only a deploy
+ *  corrects a wrong command, args or url. */
 const CONNECT_REMEDY = `If its command, args or url is wrong, call ${DEPLOY} with each of its fields, the wrong one ` +
   `corrected, since a deploy replaces the entry whole; if the server itself needs fixing (its build, say), call ` +
   `${RESTART} once it's fixed. ${UNLOAD_REMEDY}`;
@@ -673,9 +662,7 @@ export class McplAdminModule implements Module {
         `tool names: use one such as ${JSON.stringify(cleaned && cleaned !== '__proto__' ? cleaned : 'my-server')}.`,
       );
     } else if (id === '__proto__') {
-      // The one name the pattern admits that JavaScript doesn't take as a
-      // key: `overlay["__proto__"] = entry` sets the overlay's prototype, so
-      // the entry would never be saved.
+      // `overlay["__proto__"] = entry` sets the overlay's prototype.
       problems.push(
         '"__proto__" can\'t be a server id, since JavaScript reads it as an object\'s prototype rather than a name: ' +
         'choose another.',
@@ -822,11 +809,7 @@ export class McplAdminModule implements Module {
     try {
       saveAgentOverlay(this.overlayPath, overlay);
     } catch (error) {
-      // A save that may have stopped partway may have written the new entry
-      // whole, which the next host start loads, so only a save that wrote
-      // nothing says nothing was deployed, with the repair by whose failure
-      // it is (readRepair), as for a read. Bun's errors from the write itself
-      // (ENOSPC, say) name no file, so the text names it.
+      // Bun's errors from the write itself (ENOSPC, say) name no file.
       const cut = partway(error);
       return fail(
         `${cut ? 'Saving' : 'Nothing was deployed: saving'} your overlay file, ${this.overlayPath}, failed ` +
@@ -838,17 +821,13 @@ export class McplAdminModule implements Module {
     }
 
     const config = resolveOverlayEntry(id, entry) as unknown as McplServerConfig;
-    // The child's env as the boot composes it for every server
-    // (composeMcplChildEnv): the entry's own env, with the host's
-    // AGENT_TIMEZONE over it. agent-framework adds its reaction-suppression
-    // default when the child spawns, unless the entry sets a baseline with
-    // tokens.
+    // agent-framework adds its reaction-suppression default to a stdio child's
+    // env unless the env declares a baseline.
     config.env = composeMcplChildEnv(config.env as Record<string, string> | undefined, this.timeZone);
     if (entry.access && this.identity) {
       const identity = this.identity;
       const audience = entry.access;
-      // Fresh credential on every dial, resolved host-side; the overlay
-      // stores only the access NAME. See identity-module.ts header.
+      // agent-framework calls accessProvider at every dial.
       config.accessProvider = () => identity.accessFor(audience);
     }
 
@@ -916,9 +895,8 @@ export class McplAdminModule implements Module {
         error, `nothing is said here about your entry, and ${DEPLOY} and an ${UNLOAD} that persists are refused`,
       ))}`;
     }
-    // agent-framework restarts only a server it holds a configuration for,
-    // and listMcplServers lists exactly those, so this is its own test, made
-    // first so the refusal can say what is loaded and what to do instead.
+    // agent-framework restarts only a server it holds a configuration for, and
+    // listMcplServers lists exactly those.
     const loaded = framework.listMcplServers().map((s) => s.id);
     if (!loaded.includes(id)) {
       return fail(
@@ -1030,13 +1008,9 @@ export class McplAdminModule implements Module {
       `fixed, call ${DEPLOY} again to apply it now. ${UNLOAD_REMEDY}`;
   }
 
-  /** What else holds `prefix`, as a phrase, if `id` deployed with it would
-   *  share it: a module, or another server the next host start configures
-   *  (the operator's, as this host's start composed them, under the
-   *  overlay's other entries) or that's loaded now. agent-framework's
-   *  create() refuses a prefix two hold, so the next start would stop on it
-   *  (framework.ts:2827-2847 at 0.22.3); connectMcplServer refuses it too,
-   *  but only after the save. */
+  /** agent-framework's create() refuses a tool prefix two holders share, so the
+   *  next start would stop on it; connectMcplServer refuses it too, but only
+   *  after the save. */
   private prefixHolder(
     framework: AgentFramework,
     id: string,
@@ -1137,8 +1111,7 @@ export class McplAdminModule implements Module {
     const id = typeof input.id === 'string' ? input.id.trim() : '';
     const problems: string[] = [];
     if (!id) problems.push(`${UNLOAD} needs \`id\` as text, the server's id as ${LIST} shows it.`);
-    // As for mcpl_deploy: `overlay["__proto__"] = …` would set the prototype,
-    // so a tombstone for it would never be saved.
+    // `overlay["__proto__"] = …` would set the prototype.
     if (id === '__proto__') {
       problems.push(
         'your overlay can\'t record "__proto__", which JavaScript reads as an object\'s prototype rather than a name, ' +
@@ -1255,11 +1228,7 @@ export class McplAdminModule implements Module {
       saveAgentOverlay(this.overlayPath, current);
       return ok(`${head} Tombstoned in your overlay — it stays unloaded across host restarts; ${this.tombstoneAdvice(id)}.`);
     } catch (error) {
-      // A save that may have stopped partway leaves the file's content, and
-      // so what the next start loads, unknown; if it wrote the change whole,
-      // there's nothing left for a retry to record. One that wrote nothing
-      // leaves the file as it was read. Bun's errors from the write itself
-      // (ENOSPC, say) name no file, so the text names it.
+      // Bun's errors from the write itself (ENOSPC, say) name no file.
       return fail(
         `${head} ${partway(error)
           ? `But saving your overlay file, ${this.overlayPath}, failed (${reasonText(error)}).${PARTWAY_TEXT} If the ` +
@@ -1277,8 +1246,7 @@ function entryOf(overlay: Record<string, AgentOverlayEntry>, id: string): AgentO
   return Object.hasOwn(overlay, id) ? overlay[id] : undefined;
 }
 
-/** One of a server's tools with its effective class (RFC-008 §6), as
- *  listMcplServers() reports it on frameworks with tool classes. */
+/** One of a server's tools with its effective class (MCPL RFC-008 §5-6). */
 interface ServerToolClass {
   tool: string;
   serverTool: string;
@@ -1286,13 +1254,9 @@ interface ServerToolClass {
   source: 'override' | 'host' | 'server' | 'none';
 }
 
-/**
- * A server's tools grouped by effective class and source, e.g.
- * `{comms/server: say,send; media/override: render; unclassed: probe}`.
- * Sources: `server` = the server's own `_meta["mcpl/class"]`, `override` =
- * the operator's recipe override; unclassed tools never expose their
- * arguments to lifecycle observers. `unknown` on an older framework.
- */
+/** Sources: `server` is the server's own `_meta["mcpl/class"]`, `override`
+ *  the operator's recipe override; agent-framework never shows an unclassed
+ *  tool's arguments to lifecycle observers. */
 function formatServerToolClasses(rows: ServerToolClass[] | undefined): string {
   if (rows === undefined) return 'unknown';
   const groups = new Map<string, string[]>();
@@ -1322,9 +1286,8 @@ function formatManifestState(state: {
     `negotiatedAt=${formatManifestTimestamp(state.lastNegotiatedAt)}}`;
 }
 
-/** Bound and quote the server-authored, equality-only revision before putting
- * it on a model-facing text surface. Conforming revisions fit well below the
- * limit; malformed peers cannot inject control lines or unbounded text. */
+/** The manifest revision is an opaque, server-authored string (MCPL RFC-003
+ *  §3). */
 function formatManifestRevision(revision: string | null): string {
   if (revision === null) return 'none';
   const bounded = revision.length <= 64 ? revision : `${revision.slice(0, 61)}...`;

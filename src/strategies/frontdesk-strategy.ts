@@ -55,9 +55,9 @@ export class FrontdeskStrategy extends AutobiographicalStrategy {
     store: MessageStoreView,
     log: ContextLogView,
     budget: TokenBudget,
-    // Passed through whole: without it a dry run (a preview, the context
-    // curve) reached the autobiographical select as a committing one. The
-    // package root doesn't export SelectOptions, so it's named by position.
+    // Passed through whole, so a dry run reaches the autobiographical select as
+    // a dry one. The package root doesn't export SelectOptions, so it's named
+    // by position.
     opts?: Parameters<AutobiographicalStrategy['select']>[3],
   ): ContextEntry[] {
     this.updateSalience(store);
@@ -132,9 +132,9 @@ export class FrontdeskStrategy extends AutobiographicalStrategy {
     if (ts) parts.push(ts);
 
     if (meta.messageId !== undefined && meta.messageId !== null && meta.messageId !== '') {
-      // Render the FULL id — truncating (an old token-saving trim) corrupts
-      // Discord snowflakes, so every reply_message/fetch_around/add_reaction
-      // call the agent copies from its own context 404s with Unknown message.
+      // The full id: a Discord snowflake cut short names no message, so a
+      // reply, fetch or reaction the agent copies from it fails with Unknown
+      // message.
       parts.push(`msg ${String(meta.messageId)}`);
     }
 
@@ -201,9 +201,9 @@ export class FrontdeskStrategy extends AutobiographicalStrategy {
 
   /**
    * Close chunk boundaries at Zulip-topic transitions, so summaries of
-   * unrelated topics are not fused. Rides the base chunker (context-manager
-   * ≥0.6.3): record persistence, minimum-size and tool-pairing guards all
-   * apply to hinted closes.
+   * unrelated topics are not fused. Rides the base chunker: record
+   * persistence, minimum-size and tool-pairing guards all apply to hinted
+   * closes.
    */
   protected override chunkBoundaryHint(prev: StoredMessage, next: StoredMessage): boolean {
     return this.isTopicBoundary(prev, next);

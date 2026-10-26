@@ -300,7 +300,7 @@ describe('system pins (pin_channel_idle_limit)', () => {
     await mod.stop();
   });
 
-  test('pin/unpin round-trip preserves an agent override', async () => {
+  test('pin/unpin round-trip preserves an agent override, and pinned traffic still counts toward it', async () => {
     const mod = new SubscriptionGcModule({ defaultLimitChars: 5 });
     const { ctx, toolCalls } = mockCtx();
     await mod.start(ctx);
@@ -449,10 +449,8 @@ describe('close provenance + explicit-open protection (issue #5)', () => {
     const m = new SubscriptionGcModule({ defaultLimitChars: 10, serverId: 'discord' });
     const { ctx } = mockCtx();
     const receipts: Array<{ kind: string; agent: string; message: string; data?: Record<string, unknown> }> = [];
-    // The mock is deliberately `this`-sensitive, like the real
-    // ModuleContextImpl.notifyOps (which reads this.registry): a detached
-    // `const f = ctx.notifyOps; f(...)` throws here instead of passing —
-    // the exact bug class Sol caught in the first revision.
+    // `this`-sensitive, as agent-framework's ModuleContextImpl.notifyOps is (it
+    // reads this.registry), so a detached call throws.
     Object.assign(ctx as object, {
       getAgents: () => [{ name: 'mythos' }],
       _receipts: receipts,

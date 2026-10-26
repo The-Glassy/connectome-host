@@ -1,26 +1,19 @@
 // BedrockAdapter wrapper that appends each LLM call's request summary, stop
 // reason, and any error to the same `llm-calls.<iso>.jsonl` file the
-// Anthropic path uses. Purpose-built during the Aria bring-up (2026-07-21)
-// when a 0-token assistant turn proved undiagnosable: the bedrock transport
-// had no wire visibility at all.
-//
-// Kept deliberately lighter than LoggingAnthropicAdapter: request summaries
-// always include tool NAMES (were tools attached at all? — the question that
-// motivated this file), message/system sizes, and the stop sequences; the
-// full raw request is retained only on errors. Responses log stop_reason,
-// usage, and content-block shape (type + size per block) on every call.
+// Anthropic path uses. Request summaries always include tool NAMES,
+// message/system sizes, and the stop sequences; the full raw request is
+// retained only on errors. Responses log stop_reason, usage, and
+// content-block shape (type + size per block) on every call.
 //
 // Each line: { type: 'call'|'error', kind: 'complete'|'stream', timestamp,
 //   durationMs, requestSummary, response?, rawRequest?, error?, errorType?,
 //   httpStatus?, providerErrorCode?, retryable?, errorChars?, truncated? }
 // A failure's `error` is { name, message } with its text bounded, or a
-// non-Error's text (logging-error-fields.ts). A record whose request or
-// response couldn't be summarized keeps only the head fields and, for a
-// failure, the error (summaryUnavailable: true). Every line, newline
-// included, stays within the shared 16 MiB UTF-8 cap (logging-record.ts):
-// an oversized or unserializable record drops the raw request first, then
-// its summaries (`truncated` says what was dropped). Logging never changes
-// what the caller gets: it runs after the provider call, outside its try.
+// non-Error's text. A record whose request or response couldn't be
+// summarized keeps only the head fields and, for a failure, the error
+// (summaryUnavailable: true). Every line, newline included, stays within the
+// shared 16 MiB UTF-8 cap: an oversized or unserializable record drops the
+// raw request first, then its summaries (`truncated` says what was dropped).
 
 import { BedrockAdapter } from '@animalabs/membrane';
 import type {

@@ -93,15 +93,14 @@ describe("the _config mount's include", () => {
 
   test("the watcher takes in a new gate.js and nothing written beside it", async () => {
     const { root, storePath, cfg } = setUp();
-    // gate.json is there before the start, so the event that takes it in
-    // comes from the catch-up pass, which runs once the watcher is ready.
+    // The watcher ignores what's there when it starts: the event that takes
+    // gate.json in comes from the catch-up pass it runs once it's ready.
     writeFileSync(join(cfg, 'gate.json'), '{}\n');
     const { events, eventNaming } = await started(root, configMount(storePath));
     await eventNaming('_config/gate.json');
-    // Written beside the config first, then gate.js, all after the watcher is
-    // ready. The watcher batches what it sees but doesn't promise order, so
-    // after gate.js arrives the test waits past another batch (the 300 ms
-    // debounce after awaitWriteFinish's 100 ms) before it checks.
+    // The watcher doesn't promise the order it reports writes in, so once gate.js
+    // arrives the test waits past another batch: the 300 ms debounce after
+    // awaitWriteFinish's 100 ms.
     for (const name of LEFT_OUT) writeFileSync(join(cfg, name), `${name}\n`);
     writeFileSync(join(cfg, 'gate.js'), 'export default () => true;\n');
     await eventNaming('_config/gate.js');

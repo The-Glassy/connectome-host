@@ -1,12 +1,6 @@
 /**
- * The answer a module gives a call naming a tool it doesn't have.
- *
- * Module routing is by prefix: agent-framework hands any `<module>--<name>`
- * to that module's handleToolCall, with the bare name, whether or not the
- * module declares it. So each module answers an unknown name itself, and
- * this is that answer: the name as the agent called it, that nothing ran,
- * and what the module offers instead, read from its own tool and utility
- * lists so that the answer can't drift from them.
+ * agent-framework hands any `<module>--<name>` call to that module's
+ * handleToolCall, with the bare name, whether or not the module declares it.
  */
 
 import type { ToolDefinition, ToolResult } from '@animalabs/agent-framework';

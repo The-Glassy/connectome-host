@@ -11,13 +11,8 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-// Regression guard for the reasoning passthrough. `withReasoning` injects
-// adaptive `thinking` into `request.extra`, which the Anthropic adapter
-// forwards to the API params verbatim. This is invisible to the type system
-// (membrane's ProviderRequest doesn't type `thinking`), so it's exactly the
-// kind of contract that silently rots on a dependency bump — pin it here so
-// the next break is a red test with a name, not a tsc error blamed on the
-// wrong package (see the git history of this file).
+// membrane's Anthropic adapter merges `request.extra` into the API params,
+// which is how the reasoning setting's `thinking` reaches the API.
 
 const baseRequest: ProviderRequest = {
   messages: [],
@@ -239,7 +234,7 @@ describe('LoggingAnthropicAdapter.withProgressNotes', () => {
     expect(wire.bodies).toHaveLength(3);
     for (const i of [0, 1]) {
       expect(wire.bodies[i]?.thinking).toEqual({ type: 'adaptive', display: 'updates' });
-      // membrane >= 0.7.0 adds the beta 'updates' needs; without it the API refuses the value.
+      // membrane adds the beta 'updates' needs; without it the API refuses the value.
       expect(wire.betas(i)).toContain('thinking-display-updates-2026-08-18');
       // No binding controls were asked for, so none go, nor their beta.
       expect(wire.betas(i)).not.toContain('thinking-binding-controls-2026-08-01');
@@ -274,9 +269,7 @@ describe('LoggingAnthropicAdapter.withProgressNotes', () => {
   test("through membrane, a recipe's 'summarized' goes as 'updates' wherever membrane sends no config for it, as chosen where it sends one, and the reasoning setting decides over it", async () => {
     // membrane sends the Fable and Mythos family a thinking config only for
     // binding controls or 'updates' (buildThinkingParam), and another model one
-    // only when the recipe's `enabled` is true. Where it sends none, the step
-    // adds 'updates' on the listed models. Mythos 5 isn't listed, so nothing
-    // goes there.
+    // only when the recipe's `enabled` is true.
     const recipeSend = (membrane: Membrane, model: string, enabled = true) => membrane.stream({
       messages: [{ participant: 'user', content: [{ type: 'text', text: 'hi' }] }],
       config: { model, maxTokens: 64, thinking: { enabled, type: 'adaptive', display: 'summarized' } },

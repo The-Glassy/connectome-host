@@ -338,7 +338,7 @@ describe('FleetModule — unresolved launch artifacts', () => {
   // An earlier version kept an absolute dataDir as it was given. Restored,
   // such a record still matches a relaunch into its directory, which
   // reattaches to its own running child.
-  test('a relaunch adopts a restored child whose dataDir an earlier version kept with a trailing slash', async () => {
+  test('a relaunch adopts a restored child whose dataDir an earlier version kept with a trailing slash, and with no boot id', async () => {
     let state: any;
     const ctx = { setState: (value: unknown) => { state = value; }, getState: () => state,
       pushEvent: () => {}, getModule: () => null } as unknown as Parameters<FleetModule['start']>[0];
@@ -442,7 +442,7 @@ describe('FleetModule — unresolved launch artifacts', () => {
   }
 
   // A record from this boot: one from before it has no process to guard.
-  function trackedState(dataDir: string, pid: number | null = 2_147_483_647) {
+  function trackedStateFromThisBoot(dataDir: string, pid: number | null = 2_147_483_647) {
     return { children: { guard: { name: 'guard', recipePath: resolve('mock-recipe'), dataDir,
       socketPath: join(dataDir, 'ipc.sock'), pid, status: 'ready', startedAt: Date.now(),
       exitedAt: null, lastEventAt: null, exitCode: null, exitReason: null,
@@ -450,7 +450,7 @@ describe('FleetModule — unresolved launch artifacts', () => {
   }
   async function restoreRecord(dataDir: string, pid: number | null = 2_147_483_647) {
     const fleet = makeFleet();
-    let state: any = trackedState(dataDir, pid);
+    let state: any = trackedStateFromThisBoot(dataDir, pid);
     await fleet.start({ getState: () => state, setState: (s: unknown) => { state = s; } } as any);
     return fleet;
   }
@@ -492,7 +492,7 @@ describe('FleetModule — unresolved launch artifacts', () => {
     writeFileSync(pidPath, '2147483647');
     const fleet = new FleetModule({ childIndexPath: '' });
     fleets.push(fleet);
-    let state: any = trackedState(dataDir);
+    let state: any = trackedStateFromThisBoot(dataDir);
     await fleet.start({ getState: () => state, setState: (s: unknown) => { state = s; } } as any);
     const result = await launch(fleet, dataDir);
     // Deliberately stop at the existing no-entry-script guard, after reconciliation.
@@ -508,7 +508,7 @@ describe('FleetModule — unresolved launch artifacts', () => {
     const dataDir = mkdtempSync(join(tmpDir, 'no-entry-script-'));
     const fleet = new FleetModule({ childIndexPath: '' });
     fleets.push(fleet);
-    let state: any = trackedState(dataDir);
+    let state: any = trackedStateFromThisBoot(dataDir);
     await fleet.start({ getState: () => state, setState: (s: unknown) => { state = s; } } as any);
     const record = fleet.getChildren().get('guard');
     expect(record?.status).toBe('crashed');
@@ -633,7 +633,8 @@ describe('FleetModule — unresolved launch artifacts', () => {
       writeFileSync(pidPath, '2147483647');
       const server = createServer();
       await new Promise<void>((ok, no) => { server.once('error', no); server.listen(socketPath, ok); });
-      // Retain a real Unix socket inode after closing its listener.
+      // Closing a Unix-socket listener removes its path, so the socket is moved
+      // aside first to keep a real inode.
       renameSync(socketPath, socketPath + '.retained');
       await new Promise<void>((ok, no) => server.close(err => err ? no(err) : ok()));
       renameSync(socketPath + '.retained', socketPath);

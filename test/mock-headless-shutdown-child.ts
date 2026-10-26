@@ -75,8 +75,8 @@ if (mode === 'late-write-failure') {
     return result;
   } as typeof end;
 }
-// Hold the actual listen callback until shutdown has entered framework.stop.
-// The server can accept a client and send ready while that callback is held.
+// The server can accept a client and send ready while its listen callback
+// is held.
 const order: string[] = [];
 let releaseListen: (() => void) | undefined;
 if (mode === 'ready-window') {
@@ -115,9 +115,7 @@ await runHeadless({
       }
       if (mode === 'delayed-failure') await new Promise(resolve => setTimeout(resolve, 100));
       writeFileSync(join(process.env.DATA_DIR!, 'stop-calls.json'), JSON.stringify({ stopCalls }));
-      // The writes before the log ends, and the client whose line comes once
-      // it has: the host has accepted it once its first event arrives, so
-      // the server's close at the shutdown can't drop it.
+      // server.close() stops new connections and leaves accepted ones open.
       if (mode === 'late-write-failure') {
         writes('before');
         lateClient = connect(join(process.env.DATA_DIR!, 'ipc.sock'));

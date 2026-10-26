@@ -1,46 +1,6 @@
 /**
- * NoticesModule — tells the people in an agent's chat channels when the host
- * cannot answer them, through the same channels, without a working model.
- *
- * A sink of the framework's `ops:alert` trace stream (the same stream the
- * Discord ops webhook and the WebUI alert strip read). Nothing here looks at
- * raw `inference:failed` events: the framework's own breakers decide when a
- * failure is an outage (`hard-down` after N consecutive failures, credential
- * state transitions, `mcpl-down` after 5 attempts, …) and this module only
- * decides WHERE and HOW LOUDLY to say so.
- *
- * Three audiences, by tier:
- *   - `silent` — log only (the alert still reaches failures.log / webhook).
- *   - `status` — the recipe's status channels get the operator-grade message.
- *   - `reply`  — additionally, a person who writes to the agent while the
- *                outage is on gets one canned "cannot respond right now" line
- *                in the channel they wrote in, and the channel whose message
- *                triggered the failing turn is told the same. Reply scope is a
- *                list of channel-id patterns, so "reply on Zulip, never on
- *                Discord" is `reply: { in: ['zulip:*'] }`.
- *
- * Episode semantics (not time debounce): an episode opens on the first
- * qualifying alert and holds every kind active since; a kind leaves on its
- * `-clear` alert — or, for framework kinds that have no clear (`hard-down`,
- * refusals), on the agent's next turn that completes or that a tool ends
- * (skip_reply, sleep) — and the episode closes
- * when no kind remains, so a lesser alert landing mid-outage neither mutes the
- * outage nor, on its own clear, announces a false recovery. One notice
- * per (episode, channel); a channel is told again only when the announced end
- * has passed and the outage is still on. Channels that were told get one
- * "back" line on close. Status channels follow the kind-level timeline
- * instead: one line when a kind has been active for `quietMs` (so a flap that
- * resolves in seconds says nothing), one line when a told kind clears, naming
- * what remains. Replies never wait — a human is.
- *
- * The chat MCPL server may itself be down. Channel ids are opaque here and
- * resolved at post time through the ChannelRegistry; a notice refused because
- * the channel or server isn't there to take it (the reasons in
- * PARKED_REFUSALS) is parked on the episode and re-admitted when a server
- * (re)connects while the episode is still open, else dropped silently. A
- * clear or "back" line refused the same way is owed to the channel and
- * retried on reconnect regardless, so no channel is left carrying a warning
- * nobody will clear. A first post's other failures are logged and dropped.
+ * A sink of agent-framework's `ops:alert` trace stream: the framework decides
+ * when a failure is an outage.
  */
 
 import type {
@@ -114,16 +74,13 @@ export const DEFAULT_TIERS: Readonly<Record<string, NoticeTier>> = Object.freeze
   'refusal': 'silent',
 });
 
-/** Framework kinds with no `-clear` producer: the agent's next turn that
- *  completes, or that a tool ends, is the recovery signal, since the model
- *  answered either way. Everything else waits for its clear. */
+/** agent-framework raises these kinds with no `-clear` alert. */
 const CLOSES_ON_SUCCESS: ReadonlySet<string> = new Set([
   'hard-down', 'context-refusal', 'refusal', 'refusal-offpath', 'context-maintenance-failed',
 ]);
 
 /** Alert kinds whose `agentName` is a component id (an MCPL server), not an
- *  agent. They get their own episode, status tier at most, and close when
- *  that component reconnects. */
+ *  agent. */
 const COMPONENT_KINDS: ReadonlySet<string> = new Set(['mcpl-down']);
 
 /** The two markers an episode can write; see markerForm. */
@@ -275,16 +232,10 @@ interface Registry {
 type PublishResult = { success: boolean; error?: string; reason?: PublishRefusalReason };
 
 /**
- * The refusals that mean the chat server may simply not be up, for which
- * post() parks a notice or owes a line until a reconnect or a server's
- * return: the channel isn't registered (yet), its server is gone, connecting
- * or down, or its connection refused the request before writing anything.
- * agent-framework names each refusal's cause in `reason`. post() logs any
- * other refusal (a channel that takes no posts, a publish the host isn't
- * permitted), a failure with no reason and a thrown error, and neither parks
- * nor owes it, since nothing here waits for those to change. A line already
- * owed is retried at each reconnect whatever its replay's refusal
- * (flushOwed).
+ * The refusals agent-framework gives when the chat server may simply not be
+ * up: the channel isn't registered (yet), its server is gone, connecting or
+ * down, or its connection refused the request before writing anything
+ * (`not-sent`).
  */
 const PARKED_REFUSALS: ReadonlySet<PublishRefusalReason> = new Set<PublishRefusalReason>([
   'channel-not-registered',
@@ -456,8 +407,8 @@ export class NoticesModule implements Module {
         if (!mine) return;
         if (this.currentWake) {
           this.failedWake = { channelId: this.currentWake, at: this.now() };
-          // The alert may already be open (hard-down re-fires per failure):
-          // tell the channel whose turn just died.
+          // agent-framework's hard-down alert fires again with each failure, so it may
+          // already be open.
           void this.replyToWaker();
         }
         return;

@@ -253,8 +253,8 @@ describe('ObserverRegistry checks', () => {
 
   test('a file that can\'t be reached from the start is named once', () => {
     const { tmp, lines, done } = setup();
-    // A name longer than a directory entry can be fails the stat with
-    // ENAMETOOLONG, which a test can make without chmod, as root too.
+    // A name longer than a directory entry can take fails the stat with
+    // ENAMETOOLONG.
     const path = join(tmp, 'x'.repeat(300), 'observers.json');
     const registry = new ObserverRegistry(path, 60_000);
     try {
@@ -685,7 +685,7 @@ describe('scope filters', () => {
     // The operator log's entry, as request-operator-log gives ops.
     expect(traceScopes({ type: 'operator:action' })).toEqual(['ops']);
     expect(traceScopes({ type: 'mcpl:server-closed' })).toEqual(['ops']);
-    // A batched wake run without its gate line, which agent-framework adds after 0.26.0.
+    // agent-framework's trace for a batched wake run without its gate line.
     expect(traceScopes({ type: 'gate:wake-line-omitted' })).toEqual(['ops']);
     for (const type of [
       'gate:policy-added', 'gate:policy-removed', 'gate:config-reconciled', 'gate:shadow-warnings',
@@ -713,9 +713,8 @@ describe('scope filters', () => {
   });
 
   test("every trace type the installed agent-framework defines has an entry in the table", () => {
-    // Read the source the runtime resolves the package to from here, as the host loads it, wherever
-    // it's installed: in this repository's node_modules, or in one above it, as a hoisted install or a
-    // linked checkout leaves it. Its exports give Bun the index of that source.
+    // Bun resolves the package through its exports to the index of its source,
+    // wherever it's installed; the trace types sit beside it.
     const index = Bun.resolveSync('@animalabs/agent-framework', import.meta.dir);
     const source = readFileSync(join(dirname(index), 'types', 'trace.ts'), 'utf-8');
     const types = [...new Set([...source.matchAll(/\btype: '([^']+)'/g)].map((m) => m[1]!))].sort();
@@ -803,7 +802,7 @@ describe('scope filters', () => {
   // Health-gated telemetry must be masked exactly like its live frames:
   // `usage`, `call-ledger` and `host-mode` pushes require the 'health' scope,
   // so the welcome cannot hand the same data to a messages-only observer.
-  test('scopeWelcome without health strips callLedger/perAgentCost/hostMode and zeroes usage', () => {
+  test('scopeWelcome without health strips callLedger/perAgentCost/hostMode and zeroes usage, and with health alone empties the ledger strings LEDGER_STRINGS does not name', () => {
     const welcome = {
       type: 'welcome', protocolVersion: WEB_PROTOCOL_VERSION,
       messages: [entry],
@@ -860,7 +859,7 @@ describe('scope filters', () => {
   });
 
   test("keepNamedStrings empties each string its spec doesn't keep, and keeps numbers, flags, nulls, every key and each list's length", () => {
-    // From JSON, as a payload comes, so an agent named `__proto__` is an own key.
+    // JSON.parse makes a `__proto__` key an own key, as a payload brings it.
     const value = JSON.parse(`{
       "name": "main", "note": "free text", "count": 2, "ok": true, "none": null,
       "byAgent": { "alice": { "state": "healthy", "error": "it broke" }, "__proto__": { "state": "degraded", "error": "also broke" } },
@@ -1063,6 +1062,8 @@ describe('ObserverSessions', () => {
 // hot-appears → observer flow works.
 // ---------------------------------------------------------------------------
 
+const PAST_THE_GATE_WITH_NO_APP = 503;
+
 describe('WebUiModule observer flow (e2e)', () => {
   let tmp: string;
   let observersPath: string;
@@ -1177,13 +1178,13 @@ describe('WebUiModule observer flow (e2e)', () => {
     // remain operator-only because they can expose lessons and opt-in inputs.
     const cookie = `fkm_obs=${ack.sessionToken}`;
     // 503 means authorization passed but this harness has no bound app.
-    expect((await fetch(`${base()}/healthz`, { headers: { cookie } })).status).toBe(503);
-    expect((await fetch(`${base()}/credential`, { headers: { cookie } })).status).toBe(503);
-    expect((await fetch(`${base()}/debug/context`, { headers: { cookie } })).status).toBe(503);
+    expect((await fetch(`${base()}/healthz`, { headers: { cookie } })).status).toBe(PAST_THE_GATE_WITH_NO_APP);
+    expect((await fetch(`${base()}/credential`, { headers: { cookie } })).status).toBe(PAST_THE_GATE_WITH_NO_APP);
+    expect((await fetch(`${base()}/debug/context`, { headers: { cookie } })).status).toBe(PAST_THE_GATE_WITH_NO_APP);
     expect((await fetch(`${base()}/debug/retrieval`, { headers: { cookie } })).status).toBe(401);
     expect((await fetch(`${base()}/debug/retrieval/view`, { headers: { cookie } })).status).toBe(401);
     // Basic auth still works for everything.
-    expect((await fetch(`${base()}/healthz`, { headers: { authorization: BASIC } })).status).toBe(503);
+    expect((await fetch(`${base()}/healthz`, { headers: { authorization: BASIC } })).status).toBe(PAST_THE_GATE_WITH_NO_APP);
 
     ws.close();
   }, 25_000);
@@ -1213,8 +1214,7 @@ describe('WebUiModule observer flow (e2e)', () => {
     const host = `127.0.0.1:${port}`;
     const ws = new WebSocket(`ws://${host}/ws`);
     const closed = new Promise<number>((r) => ws.addEventListener('close', (ev) => r(ev.code)));
-    // An upgrade refused (no grant active yet) closes without opening; say so
-    // rather than wait for an open that won't come.
+    // A refused upgrade closes without opening.
     const opened = await new Promise<boolean>((r) => {
       ws.addEventListener('open', () => r(true));
       ws.addEventListener('close', () => r(false));
@@ -1243,8 +1243,7 @@ describe('WebUiModule observer flow (e2e)', () => {
     const fakeWs = {
       data: { id, authed: false, host },
       send: (s: string) => { sent.push(s); return s.length; },
-      // A close that succeeds runs the server's close handler inside it, as
-      // Bun's does (receipt ws-close-timing-bun-1.4.3-and-1.3.14.txt).
+      // Bun runs the server's close handler inside a close() that succeeds.
       close: (code?: number) => {
         if (throws-- > 0) throw new Error('socket');
         closes.push(code!);
@@ -1327,7 +1326,7 @@ describe('WebUiModule observer flow (e2e)', () => {
       // refused debug, and still past the health gate it kept, which answers
       // 503 here with no app, where an ended session would get 401.
       expect(await debug(keptCookie)).toBe(401);
-      expect((await fetch(`${base()}/healthz`, { headers: { cookie: keptCookie } })).status).toBe(503);
+      expect((await fetch(`${base()}/healthz`, { headers: { cookie: keptCookie } })).status).toBe(PAST_THE_GATE_WITH_NO_APP);
     } finally {
       for (const ws of sockets) ws.close();
       // Leave the file with no grants, as the next case expects, once a check has read it.
@@ -1368,12 +1367,12 @@ describe('WebUiModule observer flow (e2e)', () => {
 
       const first = await connect();
       const cookie = `fkm_obs=${first.ack.sessionToken}`;
-      expect(await healthz(cookie)).toBe(503);
+      expect(await healthz(cookie)).toBe(PAST_THE_GATE_WITH_NO_APP);
       expect(await debug(cookie)).not.toBe(401);
 
       saveObserversFile(observersPath, { observers: [{ key: kp2.id, label: 'to-revoke', scopes: ['health'] }] });
       expect(await first.closed).toBe(4403);
-      expect(await healthz(cookie)).toBe(503);
+      expect(await healthz(cookie)).toBe(PAST_THE_GATE_WITH_NO_APP);
       expect(await debug(cookie)).toBe(401);
       const second = await connect();
       expect(second.ack.scopes).toEqual(['health']);

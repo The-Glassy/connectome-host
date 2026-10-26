@@ -209,8 +209,8 @@ describe('SubagentModule reaper — F3 request-in-flight protection', () => {
   });
 
   test('lifecycle: inference:stream_resumed sets requestInFlightSince again', () => {
-    // After a tool round, the framework emits stream_resumed and dispatches a
-    // new request. This is the gap the postmortem traced reaps to.
+    // After a tool round, agent-framework emits stream_resumed and sends the
+    // next request.
     const now = Date.now();
     const mod = new SubagentModule({ provider: 'mock' });
     const { live } = installSubagent(mod, {

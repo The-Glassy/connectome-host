@@ -1,49 +1,26 @@
-/**
- * Observer identity for the webui — the M2 layer of connectome
- * docs/observability.md.
- *
- * An observer is an Archipelago layer-0 principal: an ed25519 keypair,
- * human device or agent or service. Authorization is a per-agent grant file
- * (data/observers.json) that is hot-reloaded on mtime (the proven
- * discord-filters pattern: atomic tmp+rename writes, parse errors keep the
- * previous state; removing the file revokes every grant in it) and editable
- * by the agent itself through the observers
- * module's tools — interiority access is a consent question, so the agent
- * holds the pen.
- *
- * The handshake is challenge-less: the client signs a statement binding the
- * Host it connected to + a fresh timestamp (replay/relay-proof, no extra
- * round trip):
- *
- *   sign( "connectome-observer|v1|<host>|<timestamp>" )
- *
- * The server verifies signature, freshness (±5 min), and that the key has a
- * live grant — then the connection carries that grant's scope mask.
- */
 import { readFileSync, renameSync, statSync, lstatSync, realpathSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createPublicKey, verify as cryptoVerify, randomBytes } from 'node:crypto';
 import { parseHandWrittenJson } from '../hand-written-json.js';
 
-/** Scope = event-family mask. See docs/observability.md §4. */
+/** Scope = event-family mask. */
 export const OBSERVER_SCOPES = ['health', 'ops', 'messages', 'tools', 'thinking', 'debug'] as const;
 export type ObserverScope = typeof OBSERVER_SCOPES[number];
 
 export interface ObserverGrant {
-  /** `ed25519:<base64url of the raw 32-byte public key>`. The registry holds
-   *  each usable grant's key in this canonical form (canonicalKey); the file
-   *  may spell the same key in either base64 alphabet, padded or not. */
+  /** `ed25519:<base64url of the raw 32-byte public key>`. The file may spell
+   *  the same key in either base64 alphabet, padded or not. */
   key: string;
   /** Human-readable label. Testimony, not identity — never treat as verified naming. */
   label: string;
   scopes: ObserverScope[];
   /** Expiry: as the tools write it, a date in ECMAScript's own form, alone
    *  or with a time and a zone (Z or an offset), or null. The file may hold
-   *  any value Date.parse reads, which verifyHello reads the same way;
-   *  absent, null, empty or any other falsy value means no expiry. */
+   *  any value Date.parse reads; absent, null, empty or any other falsy value
+   *  means no expiry. */
   expires?: string | null;
-  /** Protected grants cannot be revoked via the agent-facing tools
-   *  (recipe-designated operator baseline). File edits can still remove them. */
+  /** Protected grants cannot be revoked via the agent-facing tools, nor
+   *  made by them. File edits can still remove them. */
   protected?: boolean;
 }
 
@@ -65,6 +42,13 @@ export interface ObserverHelloIdentity {
 
 const FRESHNESS_MS = 5 * 60_000;
 
+/**
+ * The statement an observer signs with its ed25519 key:
+ * `connectome-observer|v1|<host>|<timestamp>`, binding the Host it connected
+ * to and a fresh timestamp. The server checks the signature, freshness
+ * (±5 min) and that the key has a live grant; the connection then carries
+ * that grant's scopes.
+ */
 export function observerStatement(host: string, timestamp: string): string {
   return `connectome-observer|v1|${host}|${timestamp}`;
 }
@@ -128,8 +112,7 @@ export function readObserversFile(path: string): ObserversFileRead {
   } catch (err) {
     const code = (err as NodeJS.ErrnoException | null)?.code;
     if (code === 'ENOENT') {
-      // A link whose target is gone reads as ENOENT too, but the path is
-      // there, and writing would replace the link rather than make a first file.
+      // A link whose target is gone reads as ENOENT too.
       return isLink(path)
         ? { kind: 'unreadable', problem: `is a link to a file that can't be read (${errorText(err)})`, readFailed: true }
         : { kind: 'missing' };
@@ -155,8 +138,7 @@ export function checkObserversFile(parsed: unknown): Exclude<ObserversFileRead, 
   try {
     return checkGrants(parsed);
   } catch (err) {
-    // The checks read plain JSON values, but one nested deeply enough still
-    // overflows JSON.stringify.
+    // JSON.stringify overflows on a value nested deeply enough.
     return { kind: 'unreadable', problem: `can't be checked (${errorText(err)})` };
   }
 }
@@ -235,8 +217,8 @@ function entryProblems(i: number, g: unknown): string[] {
   return problems;
 }
 
-/** Date.parse, which converts an object through its own toString or valueOf
- *  and throws when neither can be called; such a value is no date. */
+/** Date.parse converts an object through its toString or valueOf, and
+ *  throws when it can call neither. */
 function parseDate(value: unknown): number {
   try {
     return Date.parse(value as string);
@@ -245,8 +227,7 @@ function parseDate(value: unknown): number {
   }
 }
 
-/** A value as a problem quotes it: as JSON, except a number JSON can't hold,
- *  which JSON.stringify would show as null. */
+/** JSON.stringify shows a non-finite number as null. */
 function shown(value: unknown): string {
   return typeof value === 'number' && !Number.isFinite(value) ? String(value) : JSON.stringify(value);
 }
@@ -282,23 +263,17 @@ export function saveObserversFile(path: string, file: ObserversFile): void {
   mkdirSync(dirname(target), { recursive: true });
   const tmp = `${target}.tmp`;
   writeFileSync(tmp, JSON.stringify(file, keepNonFinite, 2) + '\n');
-  renameSync(tmp, target); // atomic — mtime pollers never read a half-write
+  renameSync(tmp, target); // atomic: a reader never sees half a write
 }
 
-/** JSON has no Infinity: a number too large for it, such as 1e309, parses as
- *  Infinity, and JSON.stringify writes that as null. An expiry the viewer
- *  can't read would come back as no expiry, and the grant would admit its
- *  key with no end. Written as text instead, every such value keeps its
- *  meaning to both readers: "Infinity" is no date, no scope and no key,
- *  and is as truthy as Infinity. */
+/** JSON has no Infinity: a number too large for it, such as 1e309, parses
+ *  as Infinity, and JSON.stringify writes that as null. */
 function keepNonFinite(_key: string, value: unknown): unknown {
   return typeof value === 'number' && !Number.isFinite(value) ? String(value) : value;
 }
 
-/** What the registry compares between checks: the file's mtime, ctime,
- *  inode and size, so a file replaced by one with the same mtime (cp -p,
- *  rsync -t) or made unreadable in place (chmod) reads as changed. When the
- *  stat fails, why, as the log names it. */
+/** cp -p and rsync -t keep a file's mtime, and chmod changes only its
+ *  ctime. */
 export function observersFileStat(path: string): { sig: string } | { problem: string } {
   try {
     const s = statSync(path);
@@ -306,7 +281,7 @@ export function observersFileStat(path: string): { sig: string } | { problem: st
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'ENOENT' || code === 'ENOTDIR') {
-      // A link whose target is gone stats as missing too, but the path is there.
+      // A link whose target is gone stats as missing too.
       return { problem: isLink(path) ? `is a link to a file that can't be read (${code})` : 'is gone' };
     }
     return { problem: `can't be read (${code ?? (err instanceof Error ? err.message : String(err))})` };
@@ -650,7 +625,7 @@ export const TRACE_SCOPES: Readonly<Record<string, FrameScopes>> = {
   'inference:turn_ended': MESSAGES,
   // The messages injected into a turn.
   'inference:stream_resumed': MESSAGES,
-  // Branch names, as request-branches.
+  // Branch names.
   'undo:completed': MESSAGES,
   'redo:completed': MESSAGES,
   // A turn's end, and a restart for its context budget, carry token counts.
@@ -664,8 +639,8 @@ export const TRACE_SCOPES: Readonly<Record<string, FrameScopes>> = {
   'inference:tool_calls_yielded': TOOLS,
   'tool:started': TOOLS,
   'tool:completed': TOOLS,
-  // A failed or dropped call's error, and a call an operator made for the
-  // agent, are ops besides.
+  // A failed call's error, a dropped call's result, and a call an operator
+  // made for the agent, are ops besides.
   'tool:failed': TOOLS_AND_OPS,
   'tool:result_dropped': TOOLS_AND_OPS,
   'puppet:tool-call': TOOLS_AND_OPS,
@@ -683,14 +658,12 @@ export const TRACE_SCOPES: Readonly<Record<string, FrameScopes>> = {
   // Alerts: failures and refusals, the gate's decisions, modules coming and
   // going, MCPL servers and conversations, and what operators did.
   'ops:alert': OPS,
-  // The operator log's own entry, which request-operator-log gives ops
-  // whole: the branch an operator acted on and the mode they set come with
-  // it.
+  // The operator log's entry, with what the operator acted on and set.
   'operator:action': OPS,
   'inference:failed': OPS,
   'inference:exhausted': OPS,
-  // Why a turn was stopped: the surface an operator stopped it from, or the
-  // host's drain. A client without ops gets stream-ended in its place.
+  // Why a turn was stopped. A client with messages and without ops gets
+  // stream-ended in its place.
   'inference:aborted': ['messages', 'ops'],
   'inbound:observer-failed': OPS,
   'inference:request_dropped': OPS,
@@ -769,11 +742,8 @@ export const TRACE_SCOPES: Readonly<Record<string, FrameScopes>> = {
   'inference:published_complete': MESSAGES,
 };
 
-/** What a trace needs before it may go to an observer (TRACE_SCOPES). A token
- *  delta or a content block needs its block's scope as well: a thinking
- *  block's 'thinking', a tool call's or result's 'tools'. A server's
- *  inference refused before any model was routed names no model, so it needs
- *  'ops' alone. */
+/** agent-framework's token deltas and content blocks name their block's
+ *  type. */
 export function traceScopes(event: { type: string; blockType?: unknown; model?: unknown }): FrameScopes {
   if (event.type === 'mcpl:inference_fail' && event.model === null) return OPS;
   if (event.type === 'inference:tokens' || event.type === 'inference:content_block') {
@@ -1112,13 +1082,9 @@ export interface ObserverConnection {
   ws: { close(code?: number, reason?: string): void };
 }
 
-/** Close each observer connection whose grant is gone, expired or narrowed,
- *  so a revoke, an expiry or the file's removal ends open connections as it
- *  ends new hellos. A grant that's gone or expired closes with 4401, which
- *  the web client takes as final, as it does a refused hello. A narrowed
- *  grant closes with 4403 rather than narrowing the connection, since its
- *  open subscriptions were checked against the old scopes, and the client
- *  connects again with the new ones. Returns how many it closed. */
+/** A grant that's gone or expired closes its connections with 4401, which a
+ *  client takes as final, as for a refused hello; a narrowed grant closes
+ *  them with 4403, and the client connects again with the new scopes. */
 export function closeConnectionsWithoutGrant(
   connections: Iterable<ObserverConnection>,
   registry: Pick<ObserverRegistry, 'liveScopes'>,

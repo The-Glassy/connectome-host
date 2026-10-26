@@ -1,19 +1,16 @@
 /**
  * Household-gateway telemetry headers (x-gate-* stamps).
  *
- * The data boundary these headers exist under: a household inference gateway
- * records them into its ledger and STRIPS them before the vendor — the vendor
- * must never see them. That boundary is only real if the host refuses to
- * attach the stamps anywhere else, so attachment is double-gated:
+ * The data boundary these headers exist under: a household inference
+ * gateway records them into its ledger and STRIPS them before the vendor —
+ * the vendor must never see them.
  *
  *   1. `GATE_TELEMETRY=1` — the operator's explicit declaration that the
  *      configured base URL is such a gateway. Absent/false ⇒ never attach.
  *   2. `ANTHROPIC_BASE_URL` actually set — the flag alone must not stamp
  *      traffic that would go to the vendor's default endpoint.
  *
- * Fail-closed on both (review finding on the first wiring: the stamp was
- * attached unconditionally, so with no base URL configured the value went
- * straight to the vendor).
+ * Attachment needs both.
  *
  * Two stamps ride the same hook:
  *
@@ -26,21 +23,17 @@
  *
  * The origin trio describes the agent's turn; a compression call running in
  * the background is not the turn, so on the 'complete' lane those three are
- * withheld (an older membrane that passes no lane gets them on every call —
- * documented, and the ledger's `streamed` flag lets a reader tell the lanes
- * apart regardless). Values are ids and short class words: never content,
- * never display names.
+ * withheld (an older membrane that passes no lane gets them on every call).
+ * Values are ids and short class words: never content, never display names.
  */
 
 /**
  * Fail-closed env-flag parse: ONLY an allowlisted affirmative — `1` or
- * `true` (case-insensitive, trimmed) — enables the flag. Everything else is
- * off, matching the documented contract (an explicit `GATE_TELEMETRY=1`
- * declaration). The previous parser treated every non-empty string except
- * '0'/'false' as ON, so `off`, `no` and ordinary typos ENABLED telemetry —
- * exactly the values operators use to turn a flag off (#119). Unrecognized
- * non-empty values warn once, naming the value and the accepted forms, so a
- * typo explains itself instead of silently disabling (or enabling) anything.
+ * `true` (case-insensitive, trimmed) — enables the flag. Everything else
+ * is off, matching the documented contract (an explicit `GATE_TELEMETRY=1`
+ * declaration). Unrecognized non-empty values warn once, naming the value
+ * and the accepted forms, so a typo explains itself instead of silently
+ * disabling (or enabling) anything.
  */
 const ENV_FLAG_ON = new Set(['1', 'true']);
 const ENV_FLAG_OFF = new Set(['', '0', 'false', 'off', 'no']);
@@ -95,12 +88,9 @@ export function originClass(trigger: TurnTrigger): string {
 }
 
 /**
- * Header-safe attribute. HTTP header values are ByteStrings: a single
- * non-ASCII code point (an emoji in a channel name, say) makes Fetch throw
- * and would turn telemetry into a failed model request. So the rule is
- * fail-closed on the WHOLE value — visible ASCII (0x20..0x7e) only, clipped
- * to 120 — never character-stripping, which would mint a different id and
- * collide provenance. An unsendable id is simply not sent (null → dropped).
+ * HTTP header values are ByteStrings: a code point above U+00FF (an emoji in
+ * a channel name, say) makes Fetch throw and would turn telemetry into a
+ * failed model request.
  */
 function attr(v: string | undefined): string | null {
   if (typeof v !== 'string') return null;

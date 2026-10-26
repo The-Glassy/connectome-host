@@ -14,10 +14,12 @@ import { MAX_RECORD_BYTES } from './logging-record.js';
 
 /** The most a reader reads of a call log: four of the longest lines the
  *  writers write, and the byte before them. */
-export const CALL_LOG_READ_BUDGET = 4 * MAX_RECORD_BYTES + 1;
+const LINES_READ_WHOLE = 4;
+const BYTE_BEFORE_OLDEST_LINE = 1;
+export const CALL_LOG_READ_BUDGET = LINES_READ_WHOLE * MAX_RECORD_BYTES + BYTE_BEFORE_OLDEST_LINE;
 
 /** How much is read at a time. */
-const CHUNK_BYTES = 1024 * 1024;
+export const CHUNK_BYTES = 1024 * 1024;
 
 export interface LinesRead {
   /** Bytes read from the file. */

@@ -44,7 +44,7 @@ export interface ProviderCallRecord {
   /** Present exactly when the call failed: its error text, which can be empty. */
   error?: string;
   /** membrane's key for the call's cache lineage: its model, system and
-   *  tools. Undefined for rows written before it was recorded. */
+   *  tools. */
   lineage?: string;
 }
 

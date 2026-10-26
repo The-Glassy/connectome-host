@@ -320,14 +320,9 @@ export function liveChildren(dataDir: string, ops: LauncherOps): string[] {
     throw new ContractError(`The fleet's children file at ${childrenFilePath(dataDir)} has no list of children this release can read.`);
   }
   const bootId = ops.bootId();
-  // The fleet keeps an entry it can't read as a child as it is, and such an
-  // entry names no process.
-  // A child runs in a group it leads, as a fleet child does, and a helper
-  // left in that group can write where the child does, so the child counts
-  // while its group has a member. The lock's
-  // holder counts by its own process alone.
-  // Only a positive pid names a process: 0 or less would signal this one's
-  // own group.
+  // Only a positive pid names one process: kill() takes 0 as this process's
+  // group, -1 as every process it may signal, and another negative pid as
+  // that group.
   const live: string[] = [];
   for (const child of file.children.filter(isChildEntry)) {
     const pid = child.pid;
@@ -708,12 +703,8 @@ function restorePlace(root: string, from: string, place: Place, target: Kind, ma
     if (existsSync(dirname(place.path))) syncEntries(dirname(place.path));
     return;
   }
-  // A directory that's there keeps its own mode, as a file item does. One
-  // made here is made with the copy's, with rwx for its owner, since it holds
-  // its update area, so a replay finds it with that mode. Only when the umask
-  // takes bits from it, or setgid, which mkdir takes from the parent rather
-  // than from the mode, differs, does the chmod after set it, and a cut
-  // between the two leaves it with the mode mkdir gave it.
+  // mkdir's mode loses the bits the umask takes, and its setgid comes from
+  // the parent rather than from the mode, so the chmod after sets it.
   const made = now === 'none';
   if (made) {
     makeDirs(dirname(place.path));
@@ -757,12 +748,8 @@ function clearGoBack(root: string, markId: string, ops: LauncherOps): void {
       'there is wanted.');
     return;
   }
-  // Nothing needs what's removed here, so a removal that fails is said and
-  // left for a later start, which tries again. The areas go first, and the
-  // set-aside directory, the list in it, after them, so while an area stays
-  // the list still says where it is. The areas' removal is synced before the
-  // list goes, so a power cut can't bring an area back with nothing to name
-  // it; a sync that can't be made leaves the list, as a failed removal does.
+  // The areas' removal is synced before the list goes, so a power cut can't
+  // bring an area back with nothing to name it.
   try {
     for (const place of places.filter((p) => kindOf(p.path) === 'dir')) {
       for (const area of [itemSetAsideDir(place.path, markId), itemStagingDir(place.path, markId)]) {
@@ -818,7 +805,8 @@ function putBack(root: string, markId: string, ops: LauncherOps): void {
       // left holding only its update directory rather than driven, since a
       // drive would leave an empty staging area to stand in for the copy's at
       // a later restore; removing it would want a mount check of its own.
-      if (!any && readdirSync(place.path).every((name) => name === ITEM_UPDATE_DIR)) continue;
+      const madeAndNeverFilled = !any && readdirSync(place.path).every((name) => name === ITEM_UPDATE_DIR);
+      if (madeAndNeverFilled) continue;
       stopForMounts(place.path, ops);
       if (!any) emptyArea(setAside);
       drive(place.path, staging, setAside);
@@ -911,9 +899,10 @@ async function checkSwitch(root: string, record: InstallRecord, mark: Mark, ops:
   // copy's written over it in place.
   const room = roomProblem(root, places.flatMap((place) => {
     const bytes = spaceTaken(place.path);
-    if (statSync(place.path).isDirectory()) return [{ path: root, bytes }, { path: place.path, bytes }];
-    // A file on a filesystem no one can write is never written in place.
-    const needs = [{ path: root, bytes }, { path: root, bytes }];
+    const copied = { path: root, bytes };
+    if (statSync(place.path).isDirectory()) return [copied, { path: place.path, bytes }];
+    const keptAtFallback = { path: root, bytes };
+    const needs = [copied, keptAtFallback];
     return writableFilesystem(place.path) ? [...needs, { path: place.path, bytes }] : needs;
   }), `a copy of the data and room to restore it if ${mark.to} fails before it commits`, ops);
   if (room !== null) return { step: 'copy', reason: room };
@@ -1030,10 +1019,9 @@ async function checkGoBack(root: string, record: InstallRecord, mark: Mark, ops:
       };
     }
   }
-  // A file place it writes in place mustn't be a link, which the write would
-  // go through: one that leads somewhere is a place that moved, refused
-  // above, so this is one that leads nowhere, which the record no longer
-  // lists. And one it takes away mustn't be a mount, which can't go.
+  // A file place it writes in place mustn't be a link, which the write
+  // would go through. And one it takes away mustn't be a mount, which
+  // can't go.
   const link = places.find((place) => place.before === 'file' && lstatSync(place.path).isSymbolicLink());
   if (link) {
     return { step: 'go-back', reason: `${link.path} is a link now, and a Go back writes a file in place, so it won't write ` +
@@ -1167,7 +1155,8 @@ async function finishGoBack(root: string, record: InstallRecord, goBackLine: Jou
   // A putting back that failed before this Go back's trial kept, of each
   // file, only what this restore wrote, which the copy still holds. Its keeps
   // go, so the trial's fallback keeps what the trial leaves.
-  removeTree(join(setAsideDir(root, markId), 'put-back'));
+  const failedPutBackKeeps = join(setAsideDir(root, markId), 'put-back');
+  removeTree(failedPutBackKeeps);
   if (existsSync(setAsideDir(root, markId))) syncPath(setAsideDir(root, markId));
   try {
     if (!goBackLine.keptData) {
@@ -1394,8 +1383,7 @@ export function shellWord(word: string): string {
  * that a Go back is offered and that no request is under way, writes the
  * mark, and gives the lock up: the service's next start goes back. A host
  * that holds the lock the whole time is up, so its own Go back, which
- * quiesces first, is the way: a mark ready for a running host's next start
- * would switch it at a moment the operator didn't choose.
+ * quiesces first, is the way.
  */
 export function goBackFromShell(root: string, args: string[], ops: LauncherOps): number {
   const unknown = args.filter((arg) => arg !== KEEP_DATA_FLAG);

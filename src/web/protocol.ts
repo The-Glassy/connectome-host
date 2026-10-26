@@ -1,24 +1,14 @@
 /**
  * WebUI wire protocol — JSON-over-WebSocket envelope for the web admin client.
  *
- * Both ends import these types so the messages stay in lockstep. The shape
- * deliberately mirrors the fleet IPC (`fleet-types.ts`) so a future external
- * aggregator can reuse the same parsers.
- *
  * Versioning: v2. Breaking changes bump `WEB_PROTOCOL_VERSION`. On a
  * mismatch the Web UI page shows a banner asking for a reload and keeps the
  * conversation it had; its socket stays open, and the welcome's other fields
  * and later frames still apply.
  *
- * v1 (2026-07): windowed history (welcome carries only a tail window plus
- * `history` metadata; older pages via request-history/history-page), ordered
- * `blocks` on message entries (thinking / tool_use / tool_result / media
- * surface in full), and `message-appended` live pushes of stored messages.
- *
- * v2 (2026-10): an observer gets only the frames its grant's scopes cover,
- * live as well as in its welcome, and a `stream-ended` frame in place of a
- * stream-end trace its scopes don't cover, which a page has to handle to end
- * a streamed turn.
+ * v2: an observer gets only the frames its grant's scopes cover, live as well
+ * as in its welcome, and a `stream-ended` frame in place of a stream-end trace
+ * its scopes don't cover, which a page has to handle to end a streamed turn.
  */
 
 import type { Line } from '../output-line.js';
@@ -26,10 +16,9 @@ import type { Line } from '../output-line.js';
 export const WEB_PROTOCOL_VERSION = 2;
 
 /** What an observer needs to be sent the agent trees, and so what a page
- *  needs to build and show them: every scope but 'debug'. A tree's nodes carry
- *  a subagent's task, each run's phase and how it ended, failures included,
- *  its counters and its token counts, so the tree is the whole operational
- *  view, and goes only with the whole grant. */
+ *  needs to build and show them: every scope but 'debug'. A tree's nodes
+ *  carry a subagent's task, each run's phase and how it ended, failures
+ *  included, its counters and its token counts. */
 export const AGENT_TREE_SCOPES = ['messages', 'thinking', 'tools', 'health', 'ops'] as const;
 
 // ---------------------------------------------------------------------------
@@ -37,9 +26,10 @@ export const AGENT_TREE_SCOPES = ['messages', 'thinking', 'tools', 'health', 'op
 // ---------------------------------------------------------------------------
 
 /**
- * Cold-start payload sent immediately after a client connects. Contains
- * everything needed to render a usable view without any further roundtrips.
- * Subsequent live updates arrive as `trace` / `child-event` / etc.
+ * Cold-start payload, sent once a client connects (an observer, once its
+ * `observer-hello` verifies). Contains everything needed to render a usable
+ * view without any further roundtrips. Subsequent live updates arrive as
+ * `trace` / `child-event` / etc.
  */
 export interface WelcomeMessage {
   type: 'welcome';
@@ -76,9 +66,7 @@ export interface WelcomeMessage {
   };
   /**
    * Parent-local agent tree snapshot. Shape matches AgentTreeSnapshot from
-   * `state/agent-tree-reducer.ts` — kept structurally typed here to avoid
-   * a cross-package import cycle and to let the client embed the same
-   * reducer with no transitive dependency on framework internals.
+   * `state/agent-tree-reducer.ts`.
    */
   localTree: {
     asOfTs: number;
@@ -96,9 +84,8 @@ export interface WelcomeMessage {
     nodes: Array<Record<string, unknown>>;
     callIdIndex: Record<string, string>;
     /** Recipe summary for the child, parsed from its recipe file at fleet
-     *  registration. Undefined when the recipe couldn't be loaded (e.g. URL
-     *  recipe not yet fetched, or read error); SPA falls back to showing
-     *  the child name only. */
+     *  registration. Undefined when the recipe couldn't be loaded (e.g.
+     *  URL recipe not yet fetched, or read error). */
     recipe?: {
       name: string;
       description?: string;
@@ -153,8 +140,7 @@ export interface WelcomeMessageEntry {
   participant: 'user' | 'assistant' | 'system' | 'tool';
   /** Ordered content blocks — the full internal life of the message. */
   blocks: MessageBlock[];
-  /** Flattened text content (text blocks only), kept as a convenience and
-   *  for degraded rendering by stale clients. */
+  /** Flattened text content (text blocks only). */
   text: string;
   /** Epoch-millis timestamp if available. */
   timestamp?: number;
@@ -323,18 +309,16 @@ export interface QuotaSnapshotData {
   parked?: boolean | null;
 }
 
-/** Per-agent cost slice used by the WebUI usage panel to label rows. Only
- *  surfaces parent-process agents — fleet-child agents track their own
- *  usage in their own UsageTracker and aren't aggregated cross-process. */
+/** Per-agent cost slice used by the WebUI usage panel to label rows.
+ *  Only surfaces parent-process agents. */
 export interface PerAgentCost {
   name: string;
   cost: { total: number; currency: string };
   inferenceCount: number;
 }
 
-/** Sent when the active branch changes (undo/redo/checkout). Clients should
- *  re-fetch their conversation by reconnecting or treating subsequent traces
- *  as authoritative. */
+/** Sent when the active branch changes (undo/redo/checkout). A fresh
+ *  `welcome` with the new branch's messages follows it. */
 export interface BranchChangedMessage {
   type: 'branch-changed';
   branch: { id: string; name: string };
@@ -376,13 +360,14 @@ export interface BranchesListMessage {
   currentId: string;
 }
 
-/** Sent when the active session changes. Clients should soft-reconnect. */
+/** Not sent by this host: a session switch re-welcomes every client instead,
+ *  with the new session. */
 export interface SessionChangedMessage {
   type: 'session-changed';
   session: { id: string; name: string };
 }
 
-/** Live peek stream for one subagent (Phase 5). Multiplexed by `scope`. */
+/** Live peek stream for one subagent. Multiplexed by `scope`. */
 export interface PeekMessage {
   type: 'peek';
   scope: string;
@@ -394,9 +379,8 @@ export interface PeekMessage {
  *  surface a "module not loaded" hint rather than appearing broken. */
 export interface LessonsListMessage {
   type: 'lessons-list';
-  /** Which process this snapshot describes: 'local' or a fleet-child name.
-   *  Lets the SPA drop stale replies after a scope switch instead of
-   *  rendering child A's data under child B's header. */
+  /** Which process this snapshot describes: 'local' or a fleet-child
+   *  name. */
   scope?: string;
   loaded: boolean;
   lessons: Array<{
@@ -453,8 +437,7 @@ export interface WorkspaceFileMessage {
 }
 
 /** MCPL server config snapshot — response to request-mcpl, mcpl-add, etc.
- *  Sent only to the requesting client; mutations don't broadcast since
- *  changes are file-only and require restart anyway. */
+ *  Sent only to the requesting client; mutations don't broadcast. */
 export interface McplListMessage {
   type: 'mcpl-list';
   /** Process whose MCPL view this is ('local' or fleet-child name). The
@@ -476,8 +459,7 @@ export interface McplListMessage {
   }>;
   /** Servers the scoped process actually LOADED (recipe opt-in + agent
    *  overlay), with live connection status from its framework. Absent on
-   *  older hosts. This is the per-scope truth the file registry can't give:
-   *  a conductor with zero MCPLs and a clerk with five share one file. */
+   *  older hosts. */
   live?: Array<{
     id: string;
     connected: boolean;
@@ -504,9 +486,8 @@ export interface McplListMessage {
 /**
  * Protected ranges (pins / documents) for one agent.
  *
- * BROADCAST to full clients on change: pins alter what the next compile folds,
- * so two operators must not hold divergent views of them. No observer gets
- * them, as none may request them.
+ * BROADCAST to full clients on change. No observer gets them, as none may
+ * request them.
  */
 export interface PinsListMessage {
   type: 'pins-list';
@@ -527,7 +508,7 @@ export interface PinsListMessage {
   }>;
   /** False when the active strategy has no pin support — panel goes read-only. */
   pinsSupported: boolean;
-  /** False when `level` would silently degrade to raw (non-kv-stable folding). */
+  /** False when `level` would silently degrade to raw. */
   levelHonored: boolean;
   /** Deepest fold level currently present, so the UI can bound level inputs. */
   deepestLevel?: number;
@@ -538,15 +519,8 @@ export interface PinsListMessage {
   candidates?: Array<{ id: string; index: number; participant: string; text: string }>;
 }
 
-/**
- * Runtime context-settings snapshot.
- *
- * BROADCAST to every full client on change — unlike `mcpl-list`, these are
- * live process state, not a config file, so two operators must not see
- * divergent values. No observer gets them, as none may request them.
- */
-/** Credential state of one process (see src/credential-state.ts). The
- *  `credential` fields are absent on an API-key host (`subscription: false`). */
+/** Credential state of one process. Every field but `type`, `scope` and
+ *  `subscription` is absent on an API-key host (`subscription: false`). */
 export interface CredentialStateMessage {
   type: 'credential-state';
   scope?: string;
@@ -570,6 +544,12 @@ export interface CredentialStateMessage {
   lastAction?: { id: string; at: number; ok: boolean; message: string };
 }
 
+/**
+ * Runtime context-settings snapshot.
+ *
+ * BROADCAST to every full client on change. No observer gets them, as none
+ * may request them.
+ */
 export interface SettingsStateMessage {
   type: 'settings-state';
   /** Process these settings belong to ('local' or fleet-child name). */
@@ -586,7 +566,7 @@ export interface SettingsStateMessage {
     /** Why a descent is stuck: pace below floor, or protected context too big. */
     transitionReason?: string;
   };
-  /** Keys currently overridden away from the recipe (i.e. persisted). */
+  /** Keys currently overridden away from the recipe, persisted or not. */
   overrides: string[];
   /** Which keys this build can apply live. Everything else needs a restart —
    *  the UI must show that split rather than implying all knobs are hot. */
@@ -629,7 +609,9 @@ export interface MessageAppendedMessage {
   entry: WelcomeMessageEntry;
 }
 
-/** Server-side error response. Non-fatal; the client stays connected. */
+/** Server-side error response. Non-fatal; the client stays connected,
+ *  except after a failed `observer-hello`, when the server closes the
+ *  connection. */
 export interface ErrorMessage {
   type: 'error';
   /** corrId echo if the error was triggered by a specific request. */
@@ -650,9 +632,7 @@ export interface QuitConfirmRequiredMessage {
 
 /**
  * An external message just landed in the agent's context — e.g. an MCPL push
- * (zulip notification, etc.) or channel incoming. The TUI quietly switches to
- * "thinking" when this happens; the WebUI surfaces it as a labeled box so the
- * operator can see *why* the agent is suddenly active.
+ * (zulip notification, etc.) or channel incoming.
  *
  * Not emitted for inputs typed in the WebUI itself (those are already
  * optimistically rendered as a user message).
@@ -682,7 +662,7 @@ export interface InboundTriggerMessage {
 export interface HostModeSnapshot {
   /** 'serving' | 'quiescing' | 'quiesced' — or whatever the framework reports. */
   mode: string;
-  /** Epoch millis when the current mode was entered, if known. */
+  /** Epoch millis the quiesce began, while quiescing or quiesced, if known. */
   since?: number;
   /** Operator-supplied reason for a quiesce, if any. */
   reason?: string;
@@ -709,7 +689,8 @@ export interface SurgeryResultMessage {
   ok: boolean;
   error?: string;
   /** Framework refusal code when `ok` is false: 'agent-busy' means quiesce
-   *  (or wait for idle) and retry; others are input problems. */
+   *  (or wait for idle) and retry; 'failed' is an operational failure, which
+   *  `error` describes; others are input problems. */
   code?: string;
   agent?: string;
   sourceBranch?: string;
@@ -775,10 +756,11 @@ export type WebUiServerMessage =
 // authenticate in-band over the WS before any data flows.
 // ---------------------------------------------------------------------------
 
-/** Sent to a connection that upgraded without basic auth (allowed only when
- *  observer grants exist): the client must reply with observer-hello before
- *  anything else is sent. `host` is what the server will verify the signed
- *  statement against — the Host header of the upgrade request. */
+/** Sent to a connection that upgraded without full authority (basic auth or
+ *  a full session cookie), which is allowed only when observer grants exist:
+ *  the client must reply with observer-hello before anything else is sent.
+ *  `host` is what the server will verify the signed statement against — the
+ *  Host header of the upgrade request. */
 export interface ObserverAuthRequiredMessage {
   type: 'observer-auth-required';
   host: string;
@@ -804,8 +786,8 @@ export interface UserMessageMessage {
   content: string;
 }
 
-/** Slash command. Server runs `handleCommand()` and replies with a
- *  `command-result` carrying the same `corrId`. */
+/** Slash command. The server replies with a `command-result`
+ *  carrying the same `corrId`. */
 export interface CommandMessage {
   type: 'command';
   command: string;
@@ -826,10 +808,7 @@ export interface InterruptMessage {
 
 /** Cancel one specific in-process subagent by display name. If `childName`
  *  is set, the cancel is forwarded to that fleet child's headless runtime;
- *  otherwise the conductor's local SubagentModule is used. Required for
- *  subagents that live inside a fleet child (e.g. Clerk-spawned subagents) —
- *  the conductor typically has no SubagentModule loaded, so a non-routed
- *  cancel would hit "subagent module not loaded". */
+ *  otherwise the conductor's local SubagentModule is used. */
 export interface CancelSubagentMessage {
   type: 'cancel-subagent';
   name: string;
@@ -944,9 +923,10 @@ export interface RequestPinsMessage {
  * `kind: 'document'` marks a single message as a document instead of pinning a
  * range, and ignores `lastMessageId`.
  *
- * NOTE: `level` is honored only by `foldingStrategy: 'kv-stable'`. Other
- * strategies degrade it to raw — a safe superset, but not what was asked for.
- * `pins-list.levelHonored` reports which case the live agent is in.
+ * NOTE: context-manager honors `level` under `foldingStrategy` 'kv-stable' or
+ * 'kv-unified' with adaptive resolution. Elsewhere it degrades to raw: a safe
+ * superset, but not what was asked for. `pins-list.levelHonored` reports which
+ * case the live agent is in.
  */
 export interface PinAddMessage {
   type: 'pin-add';
@@ -1094,9 +1074,8 @@ export interface RequestHistoryMessage {
   limit?: number;
 }
 
-/** In-band observer authentication (docs/observability.md §3): the client
- *  signs `connectome-observer|v1|<host>|<timestamp>` with its ed25519 key.
- *  Challenge-less — the Host binding + freshness window replace a nonce. */
+/** In-band observer authentication: the client signs
+ *  `connectome-observer|v1|<host>|<timestamp>` with its ed25519 key. */
 export interface ObserverHelloMessage {
   type: 'observer-hello';
   identity: {

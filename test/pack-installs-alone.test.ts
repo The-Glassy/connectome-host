@@ -1,11 +1,5 @@
-// Black-box coverage of scripts/pack-installs-alone.mjs: each case runs the
-// real script under node, as the publish workflow runs it, in a throwaway
-// stand-in for the host. The stand-in has no dependencies, so npm packs and
-// installs it offline with its own cache. Its tree has the built Web UI,
-// dist/web/index.html, which its `files` lists as the host's does, and its
-// src/index.ts answers the smoke run as batch mode with the mock recipe
-// does: '> line' for each line it reads, then the mock agent's queued reply,
-// and only with the Web UI off and the mock's echo off.
+// The stand-in has no dependencies, so npm packs and installs it offline with
+// its own cache.
 import { afterAll, test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
@@ -15,9 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SCRIPT = fileURLToPath(new URL("../scripts/pack-installs-alone.mjs", import.meta.url));
-// The node on PATH, which runs the script as the workflows do (under
-// `bun test`, process.execPath is bun). Found once, since a case may hand
-// the script a PATH without it.
+// Under `bun test`, process.execPath is bun, so node is found on PATH.
 const NODE = execFileSync("sh", ["-c", "command -v node"], { encoding: "utf8" }).trim();
 const TIMEOUT_MS = 60_000;
 
@@ -115,8 +107,8 @@ test("a package that carries its Web UI, installs alone, resolves and gives its 
 }, TIMEOUT_MS);
 
 test("npm pack's JSON is read in npm 12's shape too, and a prepack's output doesn't break it", async () => {
-  // npm 12 prints an object keyed by package name: a shim in front of the
-  // real npm rewrites npm 11's array that way, and passes npm 12's through.
+  // npm 12 prints the pack's JSON as an object keyed by package name, npm 11 as
+  // an array.
   const bin = mkdtempSync(join(tmpdir(), "pack-installs-alone-npm12-"));
   made.push(bin);
   const realNpm = execFileSync("sh", ["-c", "command -v npm"], { encoding: "utf8" }).trim();

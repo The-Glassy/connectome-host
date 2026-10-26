@@ -197,7 +197,7 @@ describe('responseAnomaly', () => {
   });
 
   test("doesn't read a raw `anomalies` list: nothing writes one at this layer", () => {
-    // membrane#168 records its anomalies on the Membrane-level response
+    // membrane records its anomalies on the Membrane-level response
     // (`details.anomalies`), which a provider adapter never returns.
     expect(responseAnomaly({ raw: { content: [TEXT], stop_reason: 'end_turn', anomalies: [{ kind: 'x' }] } })).toBeUndefined();
   });

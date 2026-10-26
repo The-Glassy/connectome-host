@@ -199,7 +199,7 @@ describe('loadRepairSpans', () => {
 });
 
 describe('loadRepairLines', () => {
-  test("where no summary's size could be read it says so, where some could, at least their total, and one token is one", () => {
+  test("where no summary's size could be read, or only a size of 0 could, it says so, where some could, at least their total, and one token is one", () => {
     const none = report([drop('a', 1, '2026-10-01T10:00:00Z', '2026-10-01T11:00:00Z', { tokens: null })], { droppedTokens: 0 });
     expect(loadRepairLines(none, 'Alice')[0]).toStartWith(
       "Alice's memory changed at load: context-manager's load repair dropped summaries whose total size couldn't be read, covering 2026-10-01",
@@ -309,8 +309,8 @@ describe("wireLoadRepairAlert after a start's load", () => {
 });
 
 describe('the health snapshot', () => {
-  // An agent with no `latest` has a strategy without the getter, such as a
-  // passthrough strategy.
+  // An agent with no `latest` has a strategy without the getter, such as
+  // context-manager's PassthroughStrategy.
   function appWith(agents: Array<{ name: string; latest?: () => unknown }>): PanelAppRef {
     const framework = {
       agents: agents.map((a) => ({

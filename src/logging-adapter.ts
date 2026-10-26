@@ -1,19 +1,12 @@
 // AnthropicAdapter wrapper that appends each LLM call's RAW request, RAW
-// response, and any error to a JSONL log file. Restores the Hermes-era
-// `llm-calls.<iso>.jsonl` visibility we lose on the connectome stack by
-// default. Successful calls keep a compact request summary; the full raw
-// request is retained only for refusals, anomalous responses and errors,
-// where forensic inspection matters (a keepalive poke's only with full
-// payloads: see below). Serializing the full raw + normalized request on every tool-loop
-// turn previously created several simultaneous copies of a large context and
-// contributed to production OOMs.
+// response, and any error to a JSONL log file. Successful calls keep a
+// compact request summary; the full raw request is retained only for
+// refusals, anomalous responses and errors, where forensic inspection
+// matters (a keepalive poke's only with full payloads: see below).
 //
-// "Raw" means the actual Anthropic API payload (post-buildRequest, including
-// `thinking`, tool definitions in Anthropic shape, etc.) and the raw provider
-// response — not the membrane-normalized intermediate. We hook the membrane's
-// `options.onRequest` callback (called inside anthropic.ts with the built
-// request) and read `ProviderResponse.raw` for the response. Normalized
-// representations are kept under separate keys for occasional cross-reference.
+// "Raw" means the actual Anthropic API payload (post-buildRequest,
+// including `thinking`, tool definitions in Anthropic shape, etc.) and the
+// raw provider response — not the membrane-normalized intermediate.
 //
 // The summary also carries `effort` when the wire request set
 // `output_config.effort`, so a reasoning_effort change is checkable here,
@@ -28,20 +21,16 @@
 //     messageId?, requestId?, requestSummary, rawRequest?, rawResponse, anomaly?,
 //     error?, errorType?, httpStatus?, providerErrorCode?, retryable?, errorChars?, truncated? }
 // A failure's `error` is { name, message, stack } with its text bounded, or
-// a non-Error's text (logging-error-fields.ts). The request summary leaves
-// out only the parts it can't read; a record whose response can't be read
-// keeps only the head fields (summaryUnavailable: true). Logging never
-// changes what the caller gets, with one older exception: the capture hook
-// keeps an error thrown by a caller's own onRequest hook from failing the
-// call. Logging runs after the provider call, outside its try.
-// A keepalive row also carries `keepalive: { key, lane, startedAt }`: the
-// lineage it refreshed, its lane, and when its send began. It keeps the
-// replayed request only with full payloads on, whatever its outcome.
-// Every line, newline included, stays within the shared 16 MiB UTF-8 cap
-// (logging-record.ts): an oversized or unserializable record drops its raw
-// request first, its raw response only if the line still doesn't fit, then
-// its summaries, and `truncated` says what was dropped. Every step keeps
-// `anomaly`, `messageId` and `requestId`.
+// a non-Error's text. The request summary leaves out only the parts it
+// can't read; a record whose response can't be read keeps only the head
+// fields (summaryUnavailable: true). A keepalive row also carries
+// `keepalive: { key, lane, startedAt }`: the lineage it refreshed, its
+// lane, and when its send began. It keeps the replayed request only with
+// full payloads on, whatever its outcome. Every line, newline included,
+// stays within the shared 16 MiB UTF-8 cap: an oversized or unserializable
+// record drops its raw request first, its raw response only if the line
+// still doesn't fit, then its summaries, and `truncated` says what was
+// dropped. Every step keeps `anomaly`, `messageId` and `requestId`.
 //
 // A complete() or stream() row also carries, when the provider response (or
 // a failed call's error) exposes them, `messageId` (the provider's message
@@ -51,14 +40,13 @@
 // rows, the Bedrock adapter's and the generic wrapper's don't.
 //
 // An anomalous response keeps its full raw request too, and its row carries
-// `anomaly` (see responseAnomaly) plus one timestamped stderr line that says
-// whether the row with the request was written, so the call can be replayed
-// and reported. Anomalous: a response holding a client `tool_use` block
-// whose stop reason is anything but 'tool_use' (observed 2026-10-19 as
-// `end_turn` with a complete tool call). The row is the provider's response
-// as this adapter received it: membrane with membrane#168 runs complete
-// calls under `end_turn` or no stop reason; earlier membrane, and any
-// membrane under other stop reasons, don't.
+// `anomaly` (see responseAnomaly) plus one timestamped stderr line that
+// says whether the row with the request was written, so the call can be
+// replayed and reported. Anomalous: a response holding a client `tool_use`
+// block whose stop reason is anything but 'tool_use'. The row is the
+// provider's response as this adapter received it: membrane runs a round's
+// complete calls when the provider stopped it with a literal `end_turn`
+// (membrane#168), and none under any other reason or none.
 
 import { AnthropicAdapter, cacheLineageKey } from '@animalabs/membrane';
 import type {
@@ -102,10 +90,7 @@ export function modelAcceptsEffort(model: string, level: EffortLevel): boolean {
 /** Whether `model` accepts `thinking: { type: 'adaptive' }`. Adaptive
  *  thinking arrived with the 4.6 pair; Haiku 4.5, Sonnet 4.5, Opus 4.5 and
  *  older reject it with a 400 ("adaptive thinking is not supported on this
- *  model"). The reasoning setting is host-wide, so without this gate every
- *  call through the shared membrane inherits it, including RetrievalModule's
- *  Haiku calls, which then fail on every compile. Unknown models are not
- *  sent the parameter, the same fail-safe posture as modelAcceptsEffort. */
+ *  model"). */
 export function modelAcceptsAdaptiveThinking(model: string): boolean {
   return /claude-(fable|mythos)-|claude-opus-(4-[6-9]|[5-9])|claude-sonnet-(4-6|[5-9])/.test(model);
 }
@@ -128,11 +113,10 @@ export function modelReturnsNotesInThinking(model: string): boolean {
 export type ProviderCallObserver = (record: ProviderCallRecord) => void;
 
 /** Exact first-system-block identity Anthropic requires on subscription
- *  (sk-ant-oat…) OAuth traffic. Verified 2026-07-09: any other first block —
- *  including this text with a suffix appended in the SAME block — is rejected
- *  with a masked 429 rate_limit_error; this block followed by arbitrary
- *  persona blocks is accepted (the mechanism the Agent SDK's
- *  system-prompt-append uses). */
+ *  (sk-ant-oat…) OAuth traffic. Any other first block — including this text
+ *  with a suffix appended in the SAME block — is rejected with a masked 429
+ *  rate_limit_error; this block followed by arbitrary persona blocks is
+ *  accepted (the mechanism the Agent SDK's system-prompt-append uses). */
 const OAUTH_SYSTEM_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 /** Calls `get`, giving undefined where it throws. */
@@ -180,12 +164,11 @@ export interface ResponseAnomaly {
  * round. That includes `max_tokens` and `refusal` (a call cut off
  * mid-input) as well as `end_turn`, `stop_sequence` and a missing reason,
  * since such a call is worth a replayable record whatever stopped it.
- * Membrane before membrane#168 runs tool rounds only on 'tool_use', so these
- * calls were lost; membrane with membrane#168 runs complete calls under
- * `end_turn` or no reason. This reads the provider's response as the adapter
- * returns it, before membrane decides. Server-side tool blocks
- * (`server_tool_use`) are not client calls and don't count. Reading never
- * throws.
+ * Membrane runs a round's complete calls when the provider stopped it with
+ * a literal `end_turn` (membrane#168). This reads the provider's response
+ * as the adapter returns it, before membrane decides. Server-side tool
+ * blocks (`server_tool_use`) are not client calls and don't count. Reading
+ * never throws.
  */
 export function responseAnomaly(response: unknown): ResponseAnomaly | undefined {
   return guarded(() => {
@@ -340,16 +323,9 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
   /** True when authenticated with an OAuth/Bearer token instead of an API
    *  key; requests then need the identity block prepended (see above). */
   private readonly oauthMode: boolean;
-  /** LLM_CALLS_FULL_PAYLOADS=1: retain the full raw request on EVERY call,
-   *  not just refusals/errors, within the 16 MiB a log line may take
-   *  (logging-record.ts). Purpose: pass/refusal contrast corpora — a
-   *  refusal's payload is only interpretable next to the passing payloads
-   *  around it (classifier-forensics finding, 2026-07-27: verdicts are a
-   *  near-deterministic function of the payload, so adjacent pairs isolate
-   *  the differentiator). Costs disk, and at each write a string the size of
-   *  the whole record, serialized before the cap applies (the raw request
-   *  itself is already captured per-call for the summary); pair with
-   *  llm-calls rotation. */
+  /** LLM_CALLS_FULL_PAYLOADS=1 (or true, in any case): retain the full raw
+   *  request on EVERY call, not just refusals/errors, within the 16 MiB a log
+   *  line may take. Costs disk. */
   private readonly fullPayloads: boolean = envFlag(process.env.LLM_CALLS_FULL_PAYLOADS);
 
   constructor(
@@ -403,10 +379,8 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
     };
   }
 
-  /** If reasoning is enabled, inject `thinking` into the request before the
-   *  adapter builds the Anthropic payload. The Anthropic adapter forwards
-   *  provider-specific params carried in `request.extra`, so that's the hook
-   *  point. We return a shallow clone to avoid surprising callers. */
+  /** The Anthropic adapter forwards provider-specific params carried in
+   *  `request.extra`. */
   private withReasoning(request: ProviderRequest): ProviderRequest {
     const r = this.getReasoning?.();
     if (!r || !r.enabled) return request;
@@ -424,22 +398,10 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
     // form. Current Anthropic models (opus-4-6/4-7/4-8, …) reject the legacy
     // form with: `"thinking.type.enabled" is not supported for this model.
     // Use "thinking.type.adaptive"`. Under adaptive the model sizes its own
-    // thinking, so `budgetTokens` is no longer sent (it still shows in
-    // agent_settings as an informational hint).
-    //
-    // membrane's `ProviderRequest` doesn't type a top-level `thinking` field
-    // (membrane is 0.5.68 — agent-framework is the package that went 0.6.0;
-    // the old `as … ProviderRequest['thinking']` cast only ever compiled via a
-    // stale nested membrane copy that lockfile dedup removed). But the Anthropic
-    // adapter applies `request.extra` to the API params verbatim
-    // (`complete()`: `const { normalizedMessages, prompt, ...rest } =
-    // request.extra; Object.assign(params, rest)`), so we route thinking
-    // through the typed `extra` bag — no type assertion, and it survives the
-    // next dependency reshuffle instead of hiding it from the compiler.
+    // thinking, so `budgetTokens` is no longer sent.
     //
     // `display`: models 4.7+ default to 'omitted' (empty `thinking` text,
-    // signature only). We pass the setting through — default 'summarized' —
-    // so reasoning summaries are visible again (stores, webui, estimators).
+    // signature only).
     return {
       ...request,
       extra: {
@@ -449,26 +411,9 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
     };
   }
 
-  /** Never leave the notes the model writes between tool calls empty on a
-   *  model that returns them as thinking blocks (modelReturnsNotesInThinking).
-   *  The thinking config in effect (`extra.thinking` wins over
-   *  `request.thinking`, as in the adapter) is sent with `display: 'updates'`
-   *  where it would leave display at 'omitted', explicitly or by sending none,
-   *  including with reasoning off, which these models can't honour anyway:
-   *  reasoning stays hidden either way, and only the notes come back.
-   *  'summarized' already returns the notes (mixed with reasoning summaries),
-   *  and a config of another type ('disabled', 'between_tools') is the
-   *  caller's to keep, so both pass untouched, as does every other model.
-   *  The config's other fields, such as block binding, are kept.
-   *
-   *  Called for stream() only, as withEffort is: agent turns stream, and
-   *  notes come only between tool calls. complete() carries one-shot calls
-   *  (compression, retrieval, naming) that make none, so they have no notes
-   *  to keep, and this step leaves them alone (withReasoning still applies).
-   *
-   *  Needs membrane >= 0.7.0, which adds the
-   *  `thinking-display-updates-2026-08-18` beta whenever the body it sends
-   *  asks for 'updates'; without the beta the API refuses the value. */
+  /** Needs membrane >= 0.7.0, which adds the
+   *  `thinking-display-updates-2026-08-18` beta whenever the body it sends asks
+   *  for 'updates'; without the beta the API refuses the value. */
   private withProgressNotes(request: ProviderRequest): ProviderRequest {
     if (!modelReturnsNotesInThinking(request.model)) return request;
     const extraThinking = (request.extra as { thinking?: unknown } | undefined)?.thinking;
@@ -568,11 +513,8 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
       ...errorFields,
     };
     this.log(record);
-    // A poke spends the same credential as a turn, so the credential monitor
-    // hears it too: an idle resident's rejected credential shows at its next
-    // poke rather than at its next turn (membrane pokes an idle lineage for a
-    // day after its last real request by default: cacheKeepalive.maxIdleHours),
-    // and a poke that succeeds settles an auth alert as a turn would.
+    // membrane pokes an idle lineage for a day after its last real request by
+    // default (cacheKeepalive.maxIdleHours).
     try {
       if (call.outcome === 'error') this.onProviderError?.(call.error, 'keepalive');
       else this.onProviderSuccess?.('keepalive');
@@ -609,16 +551,8 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
   }
 
   /**
-   * Off-path refusal dragnet (observability M3). The main inference driver
-   * instruments its own refusals (agent-framework noteRefusal), but that
-   * covers ONLY streamed agent turns. Every other model call in the process
-   * — compression/summarizer drains, maintenance — flows through this
-   * adapter's complete() and previously refused in silence; the 2026-07-15
-   * mythos cascade STARTED there and alerted nowhere. Fired ONLY for
-   * kind==='complete' — agent turns stream, so this never double-reports a
-   * refusal the main driver already escalated. A refused keepalive poke is
-   * logged and fires nothing; a streamed turn the provider refuses is the
-   * framework's to report, as every refused turn is.
+   * Agent turns stream, and agent-framework reports their refusals itself
+   * (noteRefusal), so this fires only for complete().
    */
   onRefusal?: (info: OffPathRefusal) => void;
 

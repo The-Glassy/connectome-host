@@ -1,42 +1,16 @@
 /**
  * The store audit: whether this release opens every store its residents keep.
  * It opens each store in place, as a start of this release opens it, so it
- * runs only where something taken before it can put the stores back:
- * - a host on trial runs it before its commit (auditBeforeCommit, from
- *   startFramework), over every store it would otherwise open only after the
- *   commit: its own sessions but the active one, which its start has open
- *   already, and its recipe's fleet children. It opens only stores under a
- *   place the trial's fallback puts back or takes away. A store it can't open
- *   ends the trial, and the fallback undoes what the trial changed;
- * - by hand, `--audit-stores <data directory>…` runs it in place of a host,
- *   right after the copy a hand update takes ("Updating an install" and
- *   "Updating checkouts" in docs/DEPLOYMENTS.md).
- *
- * In each store, the audit opens what a start of this release opens through
- * context-manager: the agent's namespace as agent-framework's createAgent
- * opens it, and, when the recipe enables the subconscious, its namespace as
- * createSubconsciousAgent does, while the agent's is open. It does so for
- * each session the directory's index lists, since a session switch opens the
- * others too, under `agents/<name>` with each name a start can resolve, since
- * a start keeps its name through switches (residentOf), with the
- * resident's own strategy, built from the recipe a start would load as a
- * start builds it, and with the framework's view of the resident's messages.
- * agent-framework's own state in the store isn't read. Each fleet entry of a
- * directory's recipe whose directory exists is that directory's child, and
- * its audit runs in a process of its own, as the fleet launches the child:
- * under the recipe its entry names and in the environment the fleet starts it
- * with (fleetChildEnv). What an open throws is a refusal; a strategy that
- * calls a model, which the audit gives it none of, leaves the store not
- * audited, unless its open refused the store on its topology all the same,
- * or another namespace's open refused it.
- * Each store is read at its current branch, as an open reads it.
+ * runs only where something taken before it can put the stores back: a host
+ * on trial runs it before its commit, and by hand `--audit-stores <data
+ * directory>…` runs it in place of a host, right after the copy a hand
+ * update takes ("Updating an install" and "Updating checkouts" in
+ * docs/DEPLOYMENTS.md).
  *
  * An open is a load, so context-manager's load repair runs in the audit as at
  * a start, and writes what it repairs to the store. Each load repair that
- * dropped summaries holding text is said, in the words the host's alert uses
- * (load-repair-alert.ts), since the start, switch or child that opens the
- * store next finds nothing left to repair. A host on trial also sends each
- * through the ops path (auditBeforeCommit).
+ * dropped summaries holding text is said, since the start that opens the
+ * store next finds nothing left to repair.
  */
 import { spawn } from 'node:child_process';
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
@@ -60,14 +34,11 @@ import {
 } from './contract.js';
 
 /** The flag that runs the audit in place of a host: `<entry> --audit-stores
- *  [--recipe <recipe>] <data directory>…`, by hand after a copy, and for each
- *  fleet child an audit finds, with the recipe its entry names. */
+ *  [--recipe <recipe>] <data directory>…`, by hand after a copy. */
 export const AUDIT_STORES_FLAG = '--audit-stores';
 const RECIPE_OPTION = '--recipe';
-/** Given only by an audit to the fleet child's audit it starts: audit this one
- *  directory and none of its recipe's fleet entries, since a fleet child has
- *  no children of its own (the fleet refuses to launch one whose recipe
- *  declares a fleet), so no audit reaches past one level. */
+/** Given only by an audit to the fleet child's audit it starts: audit this
+ *  one directory and none of its recipe's fleet entries. */
 const FLEET_CHILD_OPTION = '--fleet-child';
 /** Given only by an audit on a trial to a fleet child's audit, once for each
  *  place the trial's fallback puts back, so the child's stores are held to
@@ -86,13 +57,9 @@ const FINISHED_LINE = new RegExp(`^${FLEET_CHILD_FINISHED}: ([01])$`);
 const USAGE = `Usage: ${AUDIT_STORES_FLAG} [${RECIPE_OPTION} <recipe>] <data directory>…, with one data directory ` +
   `when a recipe is given`;
 
-/** agent-framework's view of a resident's messages (createAgent, in
- *  framework.ts): a message a tune-out diverted never enters it, so the
- *  strategy never chunks one into its pyramid, and neither does another
- *  agent's stored context injection (context-manager #155 part 5), since
- *  the residents share the slot. agent-framework doesn't export it, so this
- *  is a copy, and test/update-audit-stores.test.ts opens the same stores
- *  through agent-framework's own path to keep the two in step. */
+/** agent-framework's view of a resident's messages (createAgent): a message
+ *  a tune-out diverted, or another agent's stored context injection, never
+ *  enters it. agent-framework doesn't export it, so this is a copy. */
 const residentView = (name: string) => (message: StoredMessage): boolean =>
   !message.metadata?.tuneOut && !isAnotherAgentsInjection(message.metadata, name);
 
@@ -110,14 +77,8 @@ function isAnotherAgentsInjection(metadata: unknown, name: string): boolean {
   return mark !== undefined && mark.agent !== name;
 }
 
-/** A membrane for one open that gives no model: each of its methods a
- *  strategy calls, complete, stream, streamYielding or any other, throws, so
- *  the strategy can't go on as if it had an answer, and `called` says whether
- *  one was called. An open whose strategy called a model can't be audited,
- *  whether the open then threw or the strategy caught the error, unless the
- *  open refused the store on its topology, which stands, as does another
- *  namespace's refusal. It isn't a thenable,
- *  so a strategy that awaits it gets it back. */
+/** `then` isn't among its methods, so the membrane isn't a thenable, and a
+ *  strategy that awaits it gets it back. */
 function noModel(): { membrane: Membrane; called: () => boolean } {
   let called = false;
   const method = (property: string | symbol) => property !== 'then' && typeof property === 'string';
@@ -146,10 +107,8 @@ export type Say = (line: string, failed: boolean) => void;
 
 /**
  * The audit as the host's entry runs it, in place of a host: every line on
- * stderr. Resolves with its exit status once each line has been written:
- * Bun drops what's still queued for a pipe at process.exit, and an empty
- * write's callback doesn't wait for the writes before it, so each line's own
- * write is waited for, a failure the audit itself throws included.
+ * stderr. Resolves with its exit status once each line has been written,
+ * since Bun drops what's still queued for a pipe at process.exit.
  */
 export async function auditStoresFromEntry(args: string[]): Promise<number> {
   const stderr = process.stderr.write.bind(process.stderr);
@@ -470,9 +429,9 @@ export async function auditStores(dataDirs: string[], say: Say, options: AuditOp
       // itself a place, as the host's is. A fleet child's directory under a
       // place, pointed elsewhere, would be a link there, which the copy keeps
       // as a link.
-      let pointable = !options.fleetChild || options.within === undefined;
+      let dataDirIsAPlace = !options.fleetChild || options.within === undefined;
       try {
-        pointable ||= options.within!.some((place) => realOf(place) === realOf(dataDir));
+        dataDirIsAPlace ||= options.within!.some((place) => realOf(place) === realOf(dataDir));
       } catch { /* its real path, if it can't be had, is said below */ }
       let resident: Directory;
       try {
@@ -493,7 +452,7 @@ export async function auditStores(dataDirs: string[], say: Say, options: AuditOp
       const skip = new Set((options.skip ?? []).map(same));
       for (const store of resident.stores) {
         if (skip.has(same(store))) continue;
-        const outside = reachesPast(store, options.within ?? [dataDir], options.within !== undefined, pointable);
+        const outside = reachesPast(store, options.within ?? [dataDir], options.within !== undefined, dataDirIsAPlace);
         if (outside !== undefined) {
           tell(`Couldn't audit ${store}: ${outside}`, true);
           continue;
@@ -585,7 +544,7 @@ function inside(path: string, places: string[]): boolean {
  *  that can't be read, so it isn't opened uninspected. Each says how to go
  *  on. `onTrial` is whether `places` are a trial's, or else the store's data
  *  directory alone. */
-function reachesPast(store: string, places: string[], onTrial: boolean, pointable: boolean): string | undefined {
+function reachesPast(store: string, places: string[], onTrial: boolean, dataDirIsAPlace: boolean): string | undefined {
   const where = onTrial ? "every place this trial's fallback puts back" : places[0]!;
   try {
     if (realOf(store) === null) {
@@ -596,9 +555,9 @@ function reachesPast(store: string, places: string[], onTrial: boolean, pointabl
       return `it lies outside ${where}, where an update can't put back what opening it changes, so it wasn't ` +
         'opened. ' + goOn(onTrial, "move the store into its data directory, where its session's entry in " +
           'sessions.json names it', 'the store', "its session's entry in sessions.json naming it there",
-          'the directory it lies in', pointable);
+          'the directory it lies in', dataDirIsAPlace);
     }
-    return escapeFrom(store, places, where, onTrial, pointable) ?? undefined;
+    return escapeFrom(store, places, where, onTrial, dataDirIsAPlace) ?? undefined;
   } catch (error) {
     return `it can't be read: ${oneLine(error)}, so it wasn't opened`;
   }
@@ -608,14 +567,14 @@ function reachesPast(store: string, places: string[], onTrial: boolean, pointabl
  *  `first`; the data directory itself pointed at the other disk, with what
  *  it `carries` moved into it and what named it there `repointed`, since an
  *  update follows a data directory that is a link and copies all of it, which
- *  only a data directory that is itself one of the places can be (`pointable`:
+ *  only a data directory that is itself one of the places can be (`dataDirIsAPlace`:
  *  in a fleet child's audit on a trial, its directory, when the trial took it
  *  as a place of its own); and, on an install's trial, the place `declared`
  *  with setup's --extra-state, which each update copies then. */
 function goOn(onTrial: boolean, first: string, carries: string, repointed: string, declared: string,
-  pointable: boolean): string {
+  dataDirIsAPlace: boolean): string {
   const ways = [first];
-  if (pointable) ways.push(`point the data directory itself at the other disk, with ${carries} moved into it and ${repointed}`);
+  if (dataDirIsAPlace) ways.push(`point the data directory itself at the other disk, with ${carries} moved into it and ${repointed}`);
   if (onTrial) {
     ways.push(`declare ${declared} by running setup again with --extra-state PATH for it and for each place already ` +
       'recorded, so each update copies it');
@@ -633,7 +592,7 @@ function goOn(onTrial: boolean, first: string, carries: string, repointed: strin
  *  place stays at the other names. A store that isn't there, or whose path
  *  runs through a file, holds none here, its open says why; one whose
  *  entries can't be read throws, so it isn't opened uninspected. */
-function escapeFrom(store: string, places: string[], where: string, onTrial: boolean, pointable: boolean): string | null {
+function escapeFrom(store: string, places: string[], where: string, onTrial: boolean, dataDirIsAPlace: boolean): string | null {
   const walked = new Set<string>();
   const walk = (dir: string): string | null => {
     let real: string;
@@ -659,7 +618,7 @@ function escapeFrom(store: string, places: string[], where: string, onTrial: boo
           return `it holds ${path}, a link to what lies outside ${where}, which opening it could change where an ` +
             "update can't put it back, so it wasn't opened. " +
             goOn(onTrial, "keep the store's files inside it", 'what the link reaches', 'the link pointed at it there',
-              'the place the link reaches', pointable);
+              'the place the link reaches', dataDirIsAPlace);
         }
         if (statSync(path).isDirectory()) {
           const found = walk(path);
@@ -750,9 +709,9 @@ async function auditNamespace(store: JsStore, resident: Resident, repairs: LoadR
   } catch (error) {
     return { unaudited: `its strategy couldn't be built for it: ${oneLine(error)}` };
   }
-  // context-manager hands a report to a handler a microtask after its load,
-  // which runs at the strategy's first await after it, before that open
-  // resolves. Duck-typed, as the host's alert is.
+  // context-manager hands a report to a handler a microtask after its
+  // load, which runs at the strategy's first await after it, before
+  // that open resolves.
   const repairCapable = strategy as { setLoadRepairHandler?: (fn: (report: LoadRepairReport) => unknown) => void };
   if (typeof repairCapable.setLoadRepairHandler === 'function') {
     repairCapable.setLoadRepairHandler((report) => { repairs.push(report); });
@@ -953,11 +912,9 @@ const STDERR_GRACE_MS = 2_000;
 
 /** How long a fleet child's audit may run, unless the host's environment
  *  gives other minutes (CHILD_AUDIT_MINUTES_ENV): one that hasn't ended by
- *  then, such as one whose extension waits at its import, would otherwise
- *  hold a trial's commit for good, so its group is ended and it isn't
- *  audited. A child whose stores need longer, opened under each agent name
- *  the audit opens them under, gets it from the setting, which the line for
- *  a child that hadn't finished names. */
+ *  then has its group ended and isn't audited. A child whose stores need
+ *  longer gets it from the setting, which the line for a child that hadn't
+ *  finished names. */
 const CHILD_AUDIT_LIMIT_MS = 5 * 60_000;
 export const CHILD_AUDIT_MINUTES_ENV = 'CONNECTOME_FLEET_CHILD_AUDIT_MINUTES';
 
@@ -1027,7 +984,7 @@ async function auditAsFleetChild(
   const listing = `${child.name}'s store audit`;
   // The pid an entry was written for, or may have been, should its write
   // fail after the file was replaced.
-  let listed: number | undefined;
+  let maybeListed: number | undefined;
   let unlisted: string | undefined;
   tell(`${dataDir}: audited as ${child.parent}'s fleet child ${child.name}, under the recipe its entry names, in the ` +
     'environment the fleet starts it with');
@@ -1058,7 +1015,7 @@ async function auditAsFleetChild(
     // A write to one that has ended fails, which its exit says.
     audit.stdin!.on('error', () => {});
     if (audit.pid !== undefined) {
-      if (listIn !== undefined) listed = audit.pid;
+      if (listIn !== undefined) maybeListed = audit.pid;
       const why = listIn === undefined ? null : listAudit(listIn, { name: listing, pid: audit.pid, bootId: bootId(), dataDir });
       if (why === null) {
         audit.stdin!.write('\n');
@@ -1101,17 +1058,17 @@ async function auditAsFleetChild(
   });
   // Listed until its group has no process left, which the launcher's
   // fallback waits for; one that outlasts its SIGKILL stays listed.
-  if (listed !== undefined) {
+  if (maybeListed !== undefined) {
     // One whose listing failed may still be there, should the write have
     // failed once the file was replaced.
-    if (await groupGone(listed, STDERR_GRACE_MS)) unlistAudit(listIn!, listing, listed, unlisted !== undefined);
+    if (await groupGone(maybeListed, STDERR_GRACE_MS)) unlistAudit(listIn!, listing, maybeListed, unlisted !== undefined);
     else {
-      console.error(`[update] ${listing} (pid ${listed}) still has a process in its group after its SIGKILL, ` +
+      console.error(`[update] ${listing} (pid ${maybeListed}) still has a process in its group after its SIGKILL, ` +
         (unlisted === undefined
           ? `so it stays listed in ${listIn} while that group has one. `
           : `and it couldn't be listed in ${listIn}, so an update reading it may not see it. `) +
         'Once sure that group is this audit\'s, whoever runs this host can end it, as a user allowed to signal it, ' +
-        `with \`kill -KILL -- -${listed}\`; a process held in the kernel ends only once the kernel lets it go.`);
+        `with \`kill -KILL -- -${maybeListed}\`; a process held in the kernel ends only once the kernel lets it go.`);
     }
   }
   if (error !== undefined) {
@@ -1240,7 +1197,7 @@ async function residentOf(dataDir: string, read: RecipeRead, loaded?: ExtensionR
   // Built once here, so a recipe whose strategy can't be built is a directory
   // not audited rather than every store refused. Each open takes a new one,
   // since a strategy holds its store's state.
-  strategy();
+  assertBuilds(strategy);
   const { subconscious } = recipe;
   return {
     stores,
@@ -1267,16 +1224,19 @@ async function residentOf(dataDir: string, read: RecipeRead, loaded?: ExtensionR
 /** Whether an open's error is a store's topology refusal: context-manager's
  *  StoreTopologyError, from this host's copy of the library or from one a
  *  strategy's extension brought with it, whose class is its own. */
+function assertBuilds(build: () => unknown): void {
+  build();
+}
+
 function topologyRefused(error: unknown): boolean {
   return error instanceof StoreTopologyError ||
     (error instanceof Error && error.message.startsWith('store topology rejected:'));
 }
 
-/** A refused open's line, the error on one line. context-manager's
- *  StoreTopologyError, from any copy of the library, ends with a remedy,
- *  "set topologyPolicy: 'report'",
- *  which the host's built-in strategies take from no recipe, so the line
- *  names §11.8 in its place. */
+/** context-manager's StoreTopologyError, from any copy of the library, ends
+ *  "Repair the store or set topologyPolicy: 'report' to open it for
+ *  inspection.", an option the host's built-in strategies take from no
+ *  recipe, so the line names §11.8 in its place. */
 function refusal(error: unknown): string {
   const line = oneLine(error);
   if (!topologyRefused(error)) return line;

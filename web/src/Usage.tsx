@@ -36,9 +36,8 @@ export function UsagePanel(props: {
    *  the process usage view rather than pretending it can be split across
    *  fleet children. */
   callLedger: CallLedgerSnapshot | null;
-  /** Subscription quota windows. On a subscription host every dollar figure
-   *  in this panel is list-price fiction: totals and per-agent costs give way
-   *  to these, and the call ledger's are relabelled as list-price equivalents. */
+  /** On a subscription host every dollar figure in this panel is list-price
+   *  fiction: the plan isn't billed per token. */
   quota: QuotaSnapshotData | null;
   onClose(): void;
 }) {
@@ -59,10 +58,8 @@ export function UsagePanel(props: {
       };
     }
     const t = aggregateTokens(props.node);
-    // For an agent-leaf, attach the matching per-agent cost so the panel
-    // shows $X.XX next to its tokens. Aggregates (fleet-child folders) do
-    // not show cost — the framework's UsageTracker is per-process and we
-    // don't aggregate cross-process costs here.
+    // agent-framework's UsageTracker is per-process, so this panel's costs are
+    // this process's own and an aggregate shows none.
     if (props.node.agent) {
       const c = costFor(props.node.label);
       return c ? { ...t, cost: c } : t;

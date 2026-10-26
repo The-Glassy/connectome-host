@@ -20,8 +20,8 @@ const OTHER_MOUNT = 'other_mount' as WorkspaceReadError['code'];
 
 type Alert = { kind: string; agent: string; message: string };
 
-/** A module context that records the ops alerts raised through it, called
- *  through the context object, as the real ModuleContext needs. */
+/** Called on the context object, as agent-framework's ModuleContext.notifyOps
+ *  needs: it reads `this`. */
 function contextFor(alerts: Alert[]): ModuleContext {
   const context = {
     notifyOps(this: unknown, kind: string, agent: string, message: string) {
@@ -237,9 +237,7 @@ describe('InstructionsModule', () => {
   });
 
   test('truncation never splits a multibyte character (no U+FFFD)', async () => {
-    // '€' is 3 bytes in UTF-8; maxBytes: 4 keeps one full '€' plus the lead
-    // byte of the second. The incomplete sequence must be dropped and the
-    // marker report the actual kept byte count.
+    // '€' is 3 bytes in UTF-8.
     writeFileSync(join(dir, 'AGENTS.md'), '€€€€');
     const mod = await moduleOver(workspaceOver('instructions'), { maxBytes: 4 });
 
@@ -260,8 +258,7 @@ describe('InstructionsModule', () => {
   });
 
   test('truncation never splits a 2-byte or a 4-byte character either', async () => {
-    // 'é' is 2 bytes and '😀' is 4: each cap keeps one whole character and
-    // the start of the next, which the backup drops.
+    // 'é' is 2 bytes in UTF-8 and '😀' is 4.
     writeFileSync(join(dir, 'AGENTS.md'), 'éé');
     const twoByte = textOf(await (await moduleOver(workspaceOver('instructions'), { maxBytes: 3 })).gatherContext('a'));
     expect(twoByte).toBe(`${DEFAULT_INSTRUCTIONS_HEADER}\n\né\n\n[truncated: first 2 of 4 bytes]`);
@@ -593,9 +590,9 @@ describe('InstructionsModule', () => {
     // that lets go of the read and the turn's: it runs once the read has
     // settled and before the turn resumes.
     const { outcome } = (mod as unknown as { pending: { outcome: Promise<unknown> } }).pending;
-    const stopped = outcome.then(() => mod.stop());
+    const stopOnceTheModuleHasReacted = outcome.then(() => mod.stop());
     calls[0]!.reject(missing());
-    await stopped;
+    await stopOnceTheModuleHasReacted;
     expect(await stale).toEqual([]);
     expect(alerts).toEqual([]);
     expect(warnSpy).not.toHaveBeenCalled();

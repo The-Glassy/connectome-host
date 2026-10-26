@@ -8,13 +8,9 @@
 import { readFileSync } from 'node:fs';
 
 /**
- * Whether the process `pid` has ended: gone, a zombie (`Z`) its parent
- * hasn't reaped yet, or one being reaped (`X`, dead). On Linux an ended
- * process passes from Z through X to gone, and a read of its status can
- * fail with ESRCH while it goes. Where there's no status to read, as on a
- * system without `/proc`, `kill(pid, 0)` says whether it's gone, and counts
- * a zombie as running. `read` stands in for reading a file, for this
- * module's own test.
+ * On Linux an ended process passes from Z (a zombie its parent hasn't reaped)
+ * through X to gone, and a read of its status can fail with ESRCH while it
+ * goes. kill(pid, 0) counts a zombie as running.
  */
 export function processEnded(pid: number, read: (path: string) => string = (path) => readFileSync(path, 'utf8')): boolean {
   if (!Number.isInteger(pid) || pid <= 0) throw new Error(`processEnded needs a process id, not ${pid}`);

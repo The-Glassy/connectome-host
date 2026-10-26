@@ -1,39 +1,28 @@
 // Checks that bun.lock and package-lock.json resolve the stack's packages
-// (@animalabs/*) the same way. The README's `bun install` installs a
-// checkout from bun.lock, while CI and the publish workflow install with npm
-// from package-lock.json, so a change that moves one lockfile and not the
-// other would test one tree and hand README installs another. It compares
-// what each stack package the host depends on, and each one those depend on
-// in turn, resolves to, following Node's lookup through each lockfile's tree
-// from the root's dependencies: 'host > @animalabs/agent-framework >
-// @animalabs/membrane' is the membrane that agent-framework gets. The two
-// trees are walked together, each import looked up from where each lockfile
-// places its importer, so what's compared is what each importer gets, not
-// where a copy sits, and a chain that comes back to copies it already holds,
-// the same one in each lockfile, is compared there and followed no further.
-// Other packages aren't compared: a dependency is followed by the name it's
-// declared under, so a stack package under an alias outside @animalabs/
-// isn't reached, nor is one that only a third-party package depends on. A
-// registry version compares as the package and version; a GitHub pin as its
-// repository and commit, which bun.lock writes as `github:owner/repo#<sha7>`
-// and package-lock.json as a `git+…github.com/owner/repo.git#<sha40>`
-// source; and a tarball URL as the URL, except the registry's own tarball of
-// the package,
+// (@animalabs/*) the same way. It compares what each stack package the host
+// depends on, and each one those depend on in turn, resolves to, following
+// Node's lookup through each lockfile's tree from the root's dependencies:
+// 'host > @animalabs/agent-framework > @animalabs/membrane' is the membrane
+// that agent-framework gets. Other packages aren't compared: a dependency is
+// followed by the name it's declared under, so a stack package under an alias
+// outside @animalabs/ isn't reached, nor is one that only a third-party
+// package depends on. A registry version compares as the package and version;
+// a GitHub pin as its repository and commit, which bun.lock writes as
+// `github:owner/repo#<sha7>` and package-lock.json as a
+// `git+…github.com/owner/repo.git#<sha40>` source; and a tarball URL as the
+// URL, except the registry's own tarball of the package,
 // `https://registry.npmjs.org/<name>/-/<name without its scope>-<version>.tgz`,
 // which package-lock.json writes as a registry package's source and which
 // compares as its version; a tarball on another host, a mirror's included,
-// is a URL. A package neither lockfile installs agrees. Pins of
-// another kind on both sides, such as a link, can't be compared, and fail
-// saying so; such a pin against one of a known kind differs. CI runs it beside
-// `bun install --frozen-lockfile`, which checks bun.lock against
-// package.json, as Build & Test's `npm ci` checks package-lock.json on each
-// platform. Exits 1 naming each disagreement.
+// is a URL. A package neither lockfile installs agrees. Pins of another kind
+// on both sides, such as a link, can't be compared, and fail saying so; such
+// a pin against one of a known kind differs. Exits 1 naming each
+// disagreement.
 import { readFileSync } from "node:fs";
 
 const SCOPE = "@animalabs/";
 
-/** A lockfile parsed, naming the file when it doesn't parse or has no
- *  `packages` map. bun.lock's trailing commas are removed first. */
+/** bun.lock carries trailing commas, which JSON doesn't allow. */
 function parseLock(file, trailingCommas) {
   const text = readFileSync(file, "utf8");
   let lock;
@@ -72,11 +61,9 @@ function pinOf(text, name) {
   return { kind: "other", text };
 }
 
-/** bun.lock as a tree: an install path ('a/b' for b nested under a) to the
- *  pin there and the stack packages it declares. Each entry's first element
- *  is `<name>@<version or source>`, and its first object element holds its
- *  dependencies: the third for a registry package, the second for a git or
- *  tarball one. */
+/** Each bun.lock entry's first element is `<name>@<version or source>`, and
+ *  its first object element holds its dependencies: the third for a registry
+ *  package, the second for a git or tarball one. */
 function bunTree(lock) {
   const tree = new Map();
   for (const [path, entry] of Object.entries(lock.packages)) {
@@ -90,12 +77,12 @@ function bunTree(lock) {
   return { tree, root: declared({ ...root, dependencies: { ...root.dependencies, ...root.devDependencies } }) };
 }
 
-/** package-lock.json as the same tree: 'node_modules/a/node_modules/b' is
- *  'a/b'. Each package pins its `resolved` source: the registry's tarball
- *  for a registry package, a git source or a tarball URL, or a link's
- *  path. Its `version` is its own package.json's, so it pins only an entry
- *  with no `resolved`, as a lock written without registry sources has. An
- *  alias's entry names the package it installs in `name`. */
+/** package-lock.json's 'node_modules/a/node_modules/b' is 'a/b'. Each package
+ *  pins its `resolved` source: the registry's tarball for a registry package,
+ *  a git source or a tarball URL, or a link's path. Its `version` is its own
+ *  package.json's, so it pins only an entry with no `resolved`, as a lock
+ *  written without registry sources has. An alias's entry names the package
+ *  it installs in `name`. */
 function npmTree(lock) {
   const tree = new Map();
   for (const [path, entry] of Object.entries(lock.packages)) {

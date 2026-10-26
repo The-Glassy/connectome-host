@@ -37,11 +37,9 @@ export interface SettingsState {
 }
 
 /**
- * Honest budget accounting from the server.
- *
  * `preview.fits` from context-manager means "would not throw OverBudgetError",
  * which on a recipe with a grace ratio is NOT the same as "fits the budget you
- * typed". These three flags keep the questions separate.
+ * typed".
  */
 interface PreviewAccounting {
   requestedBudgetTokens: number;
@@ -142,15 +140,9 @@ export function SettingsPanel(props: {
   };
 
   /**
-   * Explicit dry run. NOT wired to input events on purpose.
-   *
-   * A dry run is a real compile: seconds on a large store, and the compile is
-   * synchronous, so it briefly blocks the agent's event loop — no heartbeat, no
-   * Discord, no MCPL for the duration. An earlier version of this panel fired it
-   * on every keystroke (debounced), which stacked agent stalls and made the UI
-   * look hung. The operator asks for it now.
-   *
-   * `render` also fetches the resulting context for the main pane.
+   * Not wired to input events: a dry run is a real compile, and
+   * context-manager's previewContext runs synchronously, so the host's event
+   * loop, and the agent with it, waits while it runs.
    */
   const runDryRun = async (render: boolean) => {
     if (!props.state?.previewAvailable || previewing()) return;

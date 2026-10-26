@@ -43,15 +43,9 @@ export interface PinsState {
 }
 
 /**
- * A pinnable message.
- *
- * MUST be a real message-store id. /debug/context/curve looked like the natural
- * source but is not: on a live store its raw entries carry no `sourceMessageId`
- * (0 of 208 had one) and the entries that DO have an `id` are summaries, whose
- * ids (`L3-544`) are not message ids at all. Pinning with one would create a pin
- * matching no message and silently do nothing. The client's own message list is
- * authoritative — `WelcomeMessageEntry.id` is the store id, and server-sourced
- * rows are exactly those with a store `index`.
+ * MUST be a real message-store id: context-manager keeps a pin whatever ids it
+ * names, so a pin naming no stored message matches nothing and silently does
+ * nothing.
  */
 export interface PinCandidate {
   id: string;

@@ -4,10 +4,10 @@
  * IPC: Unix domain socket at {DATA_DIR}/ipc.sock (override with --socket-path).
  *      Wire format: JSON Lines, one envelope per line, both directions.
  *
- * Output:  framework TraceEvents (filtered by client subscription) +
- *          lifecycle events ({type:"lifecycle",phase:"ready|idle|exiting"}).
- * Input:   {type:"subscribe",events:[...]} | {type:"text",content} |
- *          {type:"command",command:"/..."} | {type:"shutdown",graceful?}
+ * Output:  WireEvents (fleet-types.ts): framework TraceEvents and lifecycle
+ *          events, each sent when the client's subscription matches it, and
+ *          command-output and every command's response, always sent.
+ * Input:   IncomingCommands (fleet-types.ts).
  *
  * process.stdout.write and process.stderr.write are redirected to
  * {DATA_DIR}/headless.log so the IPC channel is the only structured output
@@ -68,6 +68,7 @@ function parseHeadlessArgs(argv: string[]): HeadlessOptions {
 
 /** How long an exit waits for headless.log to take what was written to it. */
 const LOG_FLUSH_LIMIT_MS = 2_000;
+const EXITING_FLUSH_MS = 50;
 
 /** The log stream stdout and stderr writes go to, once runHeadless has
  *  opened it. It stays set after the log ends, so a later endHeadlessLog
@@ -75,15 +76,8 @@ const LOG_FLUSH_LIMIT_MS = 2_000;
  *  the stream has already finished. */
 let activeLog: WriteStream | null = null;
 
-/**
- * End headless.log's stream, resolving once what was written to it is in
- * the file, or after LOG_FLUSH_LIMIT_MS if it never finishes, which the
- * host then says on its own stderr. process.exit drops a stream's pending
- * writes, so the exits made while the log is open wait for this first:
- * runHeadless's graceful shutdown, and main()'s handler for a fatal error.
- * (Other exits, such as an uncaught exception, don't.) Without an open log
- * it resolves at once.
- */
+/** process.exit drops a stream's pending writes, so the exits made while
+ *  headless.log is open wait for this first. */
 export function endHeadlessLog(): Promise<void> {
   const stream = activeLog;
   if (!stream) return Promise.resolve();
@@ -115,10 +109,7 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
   // lifecycle module's self-restart may arm (src/self-restart.ts).
   selfRestart.attachHeadless();
 
-  // -- Redirect stdout/stderr writes BEFORE anything else here may log --
-  // The IPC socket is the only structured output channel; direct
-  // process.stdout/stderr.write calls become a debug log on disk.  Bun's
-  // console.* bypasses these methods and writes to descriptors 1 and 2,
+  // Bun's console.* bypasses these methods and writes to descriptors 1 and 2,
   // which for a fleet child are its startup.log, so console lines from
   // framework code land there, not here.
   //
@@ -131,10 +122,8 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
   // only the current session's (bug-report.ts).
   logStream.write(`\n${sessionMarker(new Date())}\n`);
   type StdWrite = typeof process.stdout.write;
-  // From here, the host's own log lines and every write through
-  // process.stdout.write or process.stderr.write come through here, as one
-  // debug log. Once endHeadlessLog has ended the stream, such a line goes to
-  // the process's own stderr instead, whichever stream it was written to:
+  // Once endHeadlessLog has ended the stream, such a line goes to the
+  // process's own stderr instead, whichever stream it was written to:
   // writing it to the ended stream would make the stream error, drop the
   // lines still pending and, with nothing listening, end the process.
   const toStderr = process.stderr.write.bind(process.stderr) as (...args: unknown[]) => boolean;
@@ -167,10 +156,8 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
   // The recipe was validated before this redirect: its warnings go into this log too.
   for (const warning of takeRecipeWarnings()) log(`warning: ${warning}`);
 
-  // -- Stale socket cleanup --
-  // If a previous instance crashed without unlink, listen() would EADDRINUSE.
-  // The PID file would tell us if a previous instance is still alive, but
-  // for Phase 1 we assume single-tenancy per data dir and just remove.
+  // A previous instance that crashed without unlinking its socket would make
+  // listen() fail with EADDRINUSE.
   if (existsSync(socketPath)) {
     try {
       unlinkSync(socketPath);
@@ -532,11 +519,10 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
     });
 
     // A client is gone at its 'end' (a clean end) or its 'close', whichever
-    // comes first. 'close' follows an end and an error alike, and is the only
-    // sign of a reset where a reset socket gets no 'end', as in Node (Bun
-    // 1.4.2; Bun 1.3.14 gives it an 'end'): a parent that died with events
-    // still unread. Without it, every emit would go to the dead socket until
-    // the next client connected.
+    // comes first. 'close' follows an end and an error alike, and is the
+    // only sign of a reset where a reset socket gets no 'end', as in Node
+    // (Bun 1.4.2; Bun 1.3.14 gives it an 'end'): a parent that died with
+    // events still unread.
     let gone = false;
     const release = (): void => {
       if (gone) return;
@@ -591,7 +577,7 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
     emit({ type: 'lifecycle', phase: 'exiting', reason });
 
     // Give the exiting event a tick to flush onto the socket.
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, EXITING_FLUSH_MS));
 
     let exitCode = cleanExitCode;
     try { await app.framework.stop(); } catch (err) {
@@ -618,10 +604,6 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
     stop: (reason, farewell) => { log(farewell); void gracefulShutdown(reason, RESTART_EXIT_CODE); },
   });
 
-  // ------------------------------------------------------------------
-  // Synthetic wire events: lifecycle:idle (quiescence) + inference:speech
-  // ------------------------------------------------------------------
-  //
   // `lifecycle:idle` fires on every work→quiescent transition so the parent
   // can implement fleet--await (block until child finished its task).
   // --exit-when-idle is a strict overlay: same detection, additionally

@@ -97,12 +97,12 @@ test('clerk channel instructions use live wake tools and a valid persistent rule
 });
 
 test('shipped prompts name MCPL server tools as the model sees them', () => {
-  // The host sets no toolPrefix, so a server's tools reach the model as
-  // `mcpl--<id>--<tool>`. Ids: every server a shipped recipe configures, plus
-  // the optional ones the setup guides tell operators to add.
+  // With no toolPrefix, agent-framework names a server's tools
+  // `mcpl--<id>--<tool>`.
   const files = readdirSync(new URL('../recipes/', import.meta.url)).filter((f) => f.endsWith('.json'));
   const recipes = files.map((file) => ({ file, recipe: readRecipe(file) }));
-  const ids = new Set(['syncntn', 'scribe']);
+  const serversTheSetupGuidesAdd = ['syncntn', 'scribe'];
+  const ids = new Set(serversTheSetupGuidesAdd);
   for (const { recipe } of recipes) {
     for (const [id, server] of Object.entries(recipe.mcpServers ?? {})) {
       if (!(server as { toolPrefix?: string }).toolPrefix) ids.add(id);

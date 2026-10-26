@@ -1,6 +1,4 @@
 /**
- * Slash command handler for Chronicle-backed reversibility.
- *
  * Commands:
  *   /undo          — Revert to state before last agent turn
  *   /redo          — Re-apply last undone action
@@ -9,7 +7,7 @@
  *   /restore N     — Branch from checkpoint, switch to it
  *   /branches      — List all Chronicle branches
  *   /checkout N    — Switch to named branch
- *   /history       — Show recent state transitions
+ *   /history [n]   — Show the last n messages (20 by default)
  *   /lessons       — Show current lesson library
  *   /status        — Show agent/module status
  *   /clear         — Clear conversation display
@@ -23,7 +21,7 @@
  *   /export        — Export lessons to ./output/ (JSON + markdown)
  *   /usage         — Show session token usage and costs
  *   /bug <text>    — Assemble a bug report to file on GitHub (nothing is sent)
- *   /update        — Update, Restart and Go back (src/update/update.ts)
+ *   /update        — Update, Restart and Go back
  *   /help          — List commands
  */
 
@@ -140,18 +138,10 @@ function getAgentCM(framework: AgentFramework, agentName?: string): ContextManag
 }
 
 /**
- * Refuse head-moving commands while the main agent's turn is in flight.
- *
- * Moving the Chronicle head (undo/redo/checkout/restore/branchto/newtopic)
- * is not atomic with respect to a streaming generation: the in-flight reply
- * commits onto whatever branch is current WHEN IT COMPLETES, so a head move
- * mid-stream detaches the reply from its request — it lands on the new
- * branch attached to the wrong parent (orphaned node), including when the
- * move is issued from a second client on the same session. The supported
- * sequence is: stop the generation, then move the head.
- *
- * Returns null when the command may proceed. Agents without a state field
- * (stubs, minimal harnesses) are treated as idle.
+ * agent-framework writes a turn's reply onto whatever branch is current when
+ * it lands, and a branch switch moves the branch of every context manager
+ * sharing the store, so the head moves only between turns: stop the
+ * generation, then move the head.
  */
 function inFlightGuard(app: AppContext, cmd: string): CommandResult | null {
   const framework = app.framework;
@@ -265,10 +255,8 @@ export function handleCommand(command: string, app: AppContext): CommandResult {
     case 'redo':
       return inFlightGuard(app, cmd) ?? handleRedo(app);
 
-    // Name-taking commands join the REST of the line, not just the first
-    // token: names may contain spaces (/checkpoint my test point), and
-    // /session rename already accepts multi-word names — parsing them
-    // differently made multi-word names silently truncate here.
+    // Name-taking commands take the rest of the line, so a name may contain
+    // spaces (/checkpoint my test point).
     case 'checkpoint':
       return handleCheckpoint(app, args.join(' ') || undefined);
 
@@ -333,11 +321,10 @@ export function handleCommand(command: string, app: AppContext): CommandResult {
   }
 }
 
-/** /update: the state, and Update, Restart and Go back
- *  (src/update/update.ts). Each answer's lines come back as the command's
- *  follow-up. Restart and Go back's two ways take the release they're for,
- *  as the Web UI sends them, so the host refuses rather than act on another
- *  one. */
+/** /update: the state, and Update, Restart and Go back. Each answer's
+ *  lines come back as the command's follow-up. Restart and Go back's two
+ *  ways take the release they're for, as the Web UI sends them, so the
+ *  host refuses rather than act on another one. */
 function handleUpdate(args: string[]): CommandResult {
   const say = (lines: string[]): CommandResult => ({ lines: lines.map((text) => ({ text, style: 'system' as const })) });
   const after = (first: string, work: Promise<{ lines: string[] }>): CommandResult =>
@@ -595,9 +582,7 @@ function handleSessionRename(app: AppContext, name?: string): CommandResult {
 function handleSessionDelete(app: AppContext, args: string[]): CommandResult {
   // Deletion is irreversible, so it takes an explicit second step: the bare
   // command shows exactly what matched (name + id + message count) and asks
-  // for --confirm. This also defuses the truncated-name amplifier: a typo'd
-  // or partial name can match a DIFFERENT session, and without the echo the
-  // wrong one died silently.
+  // for --confirm.
   const confirmed = args[args.length - 1] === '--confirm';
   const nameOrId = (confirmed ? args.slice(0, -1) : args).join(' ') || undefined;
 
@@ -663,10 +648,11 @@ function handleRecipe(app: AppContext): CommandResult {
 // ---------------------------------------------------------------------------
 
 /**
- * `/bug <text>`: assemble a report for connectome-host's public issues
- * (bug-report.ts), show it, save it under DATA_DIR, and give the link that
- * opens GitHub's new-issue form with it filled in. Nothing is sent: the
- * reporter reads it in the form and submits it themselves.
+ * `/bug <text>`: assemble a report for connectome-host's public issues, show
+ * it, save it under DATA_DIR where it can, and give the link that opens
+ * GitHub's new-issue form with it filled in, cut to fit the link where it's
+ * long, saying what it leaves out. Nothing is sent: the reporter reads it in
+ * the form and submits it themselves.
  */
 function handleBug(command: string, app: AppContext): CommandResult {
   const text = parseCommand(command).rest.trim();
@@ -891,7 +877,7 @@ export function handleExport(app: AppContext): CommandResult {
   // The JSON is data, read back or kept, so it holds the lessons as stored.
   // The markdown is for reading: each lesson as it's ranked, with the mark
   // the agent's list gives one that needs fixing.
-  const lessons = records.map(r => r.stored);
+  const storedLessons = records.map(r => r.stored);
   const active = records.filter(r => !r.lesson.deprecated);
   const outDir = resolve('./output');
   mkdirSync(outDir, { recursive: true });
@@ -901,9 +887,9 @@ export function handleExport(app: AppContext): CommandResult {
     exportedAt: new Date().toISOString(),
     sessionName: app.sessionManager.getActiveSession()?.name ?? 'unknown',
     recipeName: app.recipe.name,
-    lessonCount: lessons.length,
+    lessonCount: storedLessons.length,
     activeCount: active.length,
-    lessons,
+    lessons: storedLessons,
   };
   const jsonPath = resolve(outDir, 'lessons-export.json');
   writeFileSync(jsonPath, JSON.stringify(exportData, null, 2));
@@ -920,7 +906,7 @@ export function handleExport(app: AppContext): CommandResult {
   let md = `# Lessons Export\n\n`;
   md += `**Exported:** ${new Date().toISOString()}  \n`;
   md += `**Recipe:** ${app.recipe.name}  \n`;
-  md += `**Active lessons:** ${active.length} (${lessons.length - active.length} deprecated)  \n\n`;
+  md += `**Active lessons:** ${active.length} (${storedLessons.length - active.length} deprecated)  \n\n`;
 
   for (const [tag, tagLessons] of [...tagMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     md += `## ${tag}\n\n`;
@@ -939,7 +925,7 @@ export function handleExport(app: AppContext): CommandResult {
 
   return {
     lines: [
-      { text: `Exported ${active.length} lessons (${lessons.length - active.length} deprecated) to:`, style: 'system' },
+      { text: `Exported ${active.length} lessons (${storedLessons.length - active.length} deprecated) to:`, style: 'system' },
       { text: `  ${jsonPath}`, style: 'system' },
       { text: `  ${mdPath}`, style: 'system' },
     ],
@@ -947,20 +933,10 @@ export function handleExport(app: AppContext): CommandResult {
 }
 
 /**
- * /nudge [agent] — admin-level: queue an inference turn on the agent's
- * CURRENT context without adding any message or event (framework
- * `nudgeAgent`). The zero-pollution complement to /undo: rewind, then nudge,
- * and the agent takes another swing at exactly what it already sees.
- */
-/**
- * /puppet <toolName> [json-input] — admin: execute one tool AS the main
- * agent and store the tool_use + tool_result pair in its window, exactly as
- * a model-initiated call (Framework.puppetToolCall). The call runs for real.
- * Refused unless the agent is idle and the tool is on its surface. Does not
- * wake the agent. Born from the princess exemplar surgery (2026-08-23):
- * one first-person pair restores a capacity the model can't find on its own
- * — older models especially. Disclosure to the resident is the operator's
- * call; the precedent was disclosed first.
+ * /puppet <toolName> [json-input]: execute one tool as the main agent, for
+ * real, and store the tool_use and tool_result pair in its window, as a call
+ * the model made. Refused unless the agent is idle and the tool is on its
+ * surface. Doesn't wake the agent.
  */
 function handlePuppet(app: AppContext, args: string[]): CommandResult {
   const toolName = args[0];
@@ -1013,6 +989,11 @@ function handlePuppet(app: AppContext, args: string[]): CommandResult {
   };
 }
 
+/**
+ * /nudge [agent]: queue an inference turn on the agent's current context
+ * without adding any message or event. After an /undo, the agent takes
+ * another turn at exactly what it then sees.
+ */
 function handleNudge(app: AppContext, agentName?: string): CommandResult {
   const r = app.framework.nudgeAgent(agentName, 'host-console');
   if (!r.ok) {
@@ -1056,8 +1037,8 @@ function handleUndo(app: AppContext): CommandResult {
     return { lines: [{ text: 'Nothing to undo (no agent messages found).', style: 'system' }] };
   }
 
-  // Snapshot the current branch's NAME so /redo can return here. Chronicle's
-  // switchBranch is keyed by name, not the internal numeric id.
+  // context-manager's branchAt returns, and switchBranch takes, a branch's
+  // name, not its numeric id.
   const currentBranch = cm.currentBranch();
   const newBranchName = `undo-${Date.now()}`;
 
@@ -1075,10 +1056,8 @@ function handleUndo(app: AppContext): CommandResult {
     messageId: undoPoint,
   });
 
-  // switchBranch is async — it re-initializes the strategy on the new branch
-  // (autobio reloads its persisted summaries / pins / mergeQueue). Without
-  // awaiting, the next /compile or send-message could see stale strategy
-  // state from the prior branch.
+  // context-manager's switchBranch is async: it reloads the strategy's state
+  // for the new branch, so the answer waits for it.
   const asyncWork = Promise.resolve(cm.switchBranch(createdBranchName))
     .then(() => ({
       lines: [{ text: `Undone. Switched to branch "${createdBranchName}".`, style: 'system' as const }],
@@ -1200,10 +1179,9 @@ function handleRestore(app: AppContext, name?: string): CommandResult {
       // the checkpoint message as the fallback for future restores.
       app.branchState.checkpoints.set(name, { branchName: target, messageId: point.messageId });
     } catch {
-      // branchAt resolves ids against the CURRENT branch's view of the log;
-      // after e.g. /undo the checkpoint message may not be reachable from
-      // here. Degrade to the checkpoint's branch head (the pre-messageId
-      // behavior) rather than failing the restore outright.
+      // context-manager's branchAt finds the message on the current branch and
+      // throws when it isn't there, as after an /undo: the restore then goes to
+      // the checkpoint's branch head.
       target = point.branchName;
     }
   }
@@ -1399,10 +1377,9 @@ function handleNewTopic(app: AppContext, args: string[]): CommandResult {
 // ---------------------------------------------------------------------------
 
 /**
- * Every tool with its effective class and the source that decided it, so a
- * surprising class (or a tool left unclassed) is visible before a lifecycle
- * observer grant depends on it. Without an agent: every tool the framework
- * offers to anyone; with one: exactly that agent's surface.
+ * Every tool with its effective class and the source that decided it.
+ * Without an agent: every tool the framework offers to anyone; with one:
+ * exactly that agent's surface.
  */
 function handleTools(framework: AgentFramework, agentName?: string): CommandResult {
   let rows: ReturnType<typeof readToolClasses>;
@@ -1486,11 +1463,9 @@ function handleMcpAdd(args: string[]): CommandResult {
   const [id, command, ...cmdArgs] = args;
   const servers = readMcplServersFile(DEFAULT_CONFIG_PATH);
   const prev = servers[id!];
-  // Overwrite replaces the command line (command + args, which travel as one
-  // unit) but PRESERVES env and other settings: env is edited via /mcp env
-  // and the panel editor, whose contract is "cleared only by explicit empty
-  // save" — a command update silently dropping tokens/settings broke working
-  // servers in a way that only surfaced at next start.
+  // Over an existing id, /mcp add replaces the command line (command and
+  // args, which travel as one unit) and keeps its env and other settings: env
+  // is edited with /mcp env and the panel editor.
   servers[id!] = {
     ...prev,
     command: command!,

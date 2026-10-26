@@ -2,11 +2,11 @@ import { describe, expect, test } from 'bun:test';
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CALL_LOG_READ_BUDGET, readLinesFromEnd } from '../src/call-log-tail.js';
+import { CALL_LOG_READ_BUDGET, CHUNK_BYTES, readLinesFromEnd } from '../src/call-log-tail.js';
 import { MAX_RECORD_BYTES } from '../src/logging-record.js';
 
-// Assertions here compare booleans, lengths and small strings, so a failure
-// never prints a line of megabytes.
+// A failed toBe prints both values, so assertions here compare booleans,
+// lengths and small strings, never a line of megabytes.
 
 function withFile(content: string | Buffer, run: (path: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), 'call-log-tail-'));
@@ -50,7 +50,7 @@ describe('readLinesFromEnd', () => {
 
   test('a last line with no newline, over several chunks, is handed on only if it parses', () => {
     // 2.5 MiB, so its parse check runs on pieces joined from three chunks.
-    const pad = 'x'.repeat(2_621_440);
+    const pad = 'x'.repeat(2.5 * CHUNK_BYTES);
     withFile(`{"a":1}\n{"pad":"${pad}"}`, (path) => {
       const { lines } = read(path);
       expect(lines.length).toBe(2);
@@ -62,9 +62,8 @@ describe('readLinesFromEnd', () => {
   });
 
   test('a line read over several chunks comes back whole, its multibyte text included', () => {
-    // 3 MiB of two-byte characters, so chunk boundaries fall inside lines and
-    // can fall inside a character.
-    const long = 'é'.repeat(1_572_864) + 'end';
+    // é is two bytes in UTF-8, so a chunk boundary can fall inside a character.
+    const long = 'é'.repeat(1.5 * CHUNK_BYTES) + 'end';
     withFile(`first\n${long}\nlast\n`, (path) => {
       const { lines, truncated, bytes } = read(path);
       expect(truncated).toBe(false);
@@ -98,9 +97,9 @@ describe('readLinesFromEnd', () => {
     // fifteen whole lines and the byte before them fit, and sixteen don't.
     const line = (i: number) => String(i).padStart(2, '0') + 'x'.repeat(99_997) + '\n';
     withFile(Array.from({ length: 32 }, (_, i) => line(i)).join(''), (path) => {
-      const { lines, truncated, bytes } = read(path, 1_572_864);
+      const { lines, truncated, bytes } = read(path, 1.5 * CHUNK_BYTES);
       expect(truncated).toBe(true);
-      expect(bytes).toBe(1_572_864);
+      expect(bytes).toBe(1.5 * CHUNK_BYTES);
       expect(lines.length).toBe(15);
       expect(lines[0].slice(0, 2)).toBe('31');
       expect(lines[14].slice(0, 2)).toBe('17');

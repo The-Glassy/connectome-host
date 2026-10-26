@@ -42,20 +42,16 @@ export interface ReasoningSettings {
   /**
    * How thinking content comes back from the API: 'summarized' returns a
    * readable reasoning summary in the `thinking` field; 'omitted' returns an
-   * empty `thinking` field with only the encrypted signature. Models 4.7+
-   * default to 'omitted' server-side — we default to 'summarized' to restore
-   * the pre-4.7 behavior (visible reasoning in stores, webui, estimators).
-   * On the models modelReturnsNotesInThinking lists, a streamed call through
-   * the Anthropic adapter sends 'omitted' as 'updates', so the notes between
-   * tool calls come back as text while reasoning stays hidden
-   * (LoggingAnthropicAdapter.withProgressNotes).
+   * empty `thinking` field with only the encrypted signature. The default is
+   * 'summarized'. On a model that returns its notes as thinking blocks, a
+   * streamed call sends 'omitted' as 'updates', so the notes between tool calls
+   * come back as text while reasoning stays hidden.
    */
   display: 'summarized' | 'omitted';
   /**
    * Reasoning effort for the agent's own turns, sent as Anthropic
    * `output_config.effort`. 'default' sends nothing, leaving the model's
-   * server-side default in force. Independent of `enabled`: on models where
-   * thinking is always on, effort is the only depth control.
+   * server-side default in force. Independent of `enabled`.
    */
   effort: ReasoningEffort;
 }
@@ -301,7 +297,8 @@ function restoreReasoning(saved: unknown, baseline = DEFAULTS.reasoning, warned?
   return restored;
 }
 
-/** Legacy nondefault effort was an agent choice; legacy default means unset. */
+/** A saved effort from before `effortExplicit` is the agent's choice unless
+ *  it's 'default'. */
 function savedEffortOverride(saved: unknown): ReasoningEffort | undefined {
   if (!saved || typeof saved !== 'object') return undefined;
   const s = saved as Record<string, unknown>;

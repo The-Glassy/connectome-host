@@ -331,8 +331,7 @@ describe('the shapes', () => {
     writeFileSync(join(fake, `${CANARY}-client.js`), '// a session wrote this\n');
     const elsewhere = parseErrorLog(['TypeError: x', `    at a (${join(fake, `${CANARY}-client.js`)}:1:1)`].join('\n'), scope);
     expect(elsewhere.errors[0]!.frames).toEqual([]);
-    // The scope found where agent-framework is actually installed, wherever
-    // the install put it (a workspace may hoist it above the checkout).
+    // A workspace install may hoist agent-framework above the checkout.
     const installed = scope.packageRoots.get('agent-framework');
     expect(installed).toBeDefined();
     expect(installed).toBe(realpathSync(installed!));
@@ -567,7 +566,7 @@ describe('the mode', () => {
 });
 
 describe('who runs it', () => {
-  test('the fleet tool refuses /bug, so a session never files one, in a child or here', async () => {
+  test('the fleet tool refuses any line a child would run as /bug, whatever its first character, so a session never files one, in a child or here', async () => {
     const fleet = new FleetModule();
     // Whatever the child's handleCommand would run as /bug: it drops the
     // first character, whatever it is, and trims after it.

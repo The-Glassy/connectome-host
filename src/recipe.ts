@@ -19,6 +19,7 @@ import { parseHandWrittenJson } from './hand-written-json.js';
 import { validateToolClassTable, validateToolLifecycle } from './tool-lifecycle-config.js';
 import { isLoopbackOrTailnetHost } from './history-semantic.js';
 import { REASONING_EFFORTS, type ReasoningEffort } from './modules/settings-module.js';
+import { DEFAULT_INSTRUCTIONS_PATH } from './modules/instructions-module.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -26,9 +27,7 @@ import { REASONING_EFFORTS, type ReasoningEffort } from './modules/settings-modu
 
 export interface RecipeStrategy {
   /** Built-in strategy name, or a custom type registered by a
-   *  `kind: "strategy"` extension (see `Recipe.extensions`). The
-   *  `string & {}` arm keeps literal autocompletion while admitting
-   *  extension-registered names. */
+   *  `kind: "strategy"` extension (see `Recipe.extensions`). */
   type: 'autobiographical' | 'passthrough' | 'frontdesk' | (string & {});
   // Core window/compression sizing
   headWindowTokens?: number;
@@ -107,14 +106,14 @@ export interface RecipeStrategy {
   recallHeaderTemplate?: string;
   /**
    * Where a summary's signed reasoning carriers (the compressor's own
-   * thinking blocks, `responseContent`) are replayed (context-manager #81).
-   * `'full'` (default): unchanged — carriers ride both the live window and
-   * mint/merge recall pairs. `'live-strip'`: carriers are omitted from the
-   * LIVE window only (whole blocks dropped, never mutated — signatures only
-   * verify byte-identical) — the agent's own compiled context renders
-   * recall pairs text-only, while compression/merge requests still carry
-   * the full signed content unconditionally (measured load-bearing there:
-   * some providers refuse a compress request without it). Useful when a
+   * thinking blocks, `responseContent`) are replayed. `'full'` (default):
+   * unchanged — carriers ride both the live window and mint/merge recall
+   * pairs. `'live-strip'`: carriers are omitted from the LIVE window only
+   * (whole blocks dropped, never mutated — signatures only verify
+   * byte-identical) — the agent's own compiled context renders recall
+   * pairs text-only, while compression/merge requests still carry the full
+   * signed content unconditionally (measured load-bearing there: some
+   * providers refuse a compress request without it). Useful when a
    * provider's classifier treats a replayed foreign-request signature
    * inside the LIVE window as reasoning extraction.
    */
@@ -133,9 +132,10 @@ export interface RecipeStrategy {
   toolResultMaxLastN?: number;
   toolUseInputMaxTokens?: number;
   // Adaptive resolution (document-based gradual compression). For the
-  // 'autobiographical' strategy type this defaults ON (see index.ts); set
-  // `adaptiveResolution: false` to opt back to the count-based hierarchical
-  // renderer. The remaining knobs only apply when adaptiveResolution is true.
+  // 'autobiographical' strategy type this defaults ON; set
+  // `adaptiveResolution: false` to opt back to the count-based
+  // hierarchical renderer. The remaining knobs only apply when
+  // adaptiveResolution is true.
   adaptiveResolution?: boolean;
   /** kv-stable: trust region P on per-turn perturbation (tokens re-read).
    *  See context-manager adaptive-resolution-design.md §13. */
@@ -158,10 +158,10 @@ export interface RecipeStrategy {
    *  speculative compression queue (default 1); demand still overrides. */
   l1HoldbackChunks?: number;
   // Self-voice / compression framing. The host defaults summaryParticipant to
-  // `agent.name` (buildFrameworkStrategy), so self-recollections speak as the
-  // agent itself. Set explicitly only to voice summaries as someone else —
-  // a mismatched participant surfaces in the compiled prompt as another voice
-  // speaking in first person about the agent.
+  // `agent.name`, so self-recollections speak as the agent itself. Set
+  // explicitly only to voice summaries as someone else — a mismatched
+  // participant surfaces in the compiled prompt as another voice speaking in
+  // first person about the agent.
   summaryParticipant?: string;
   summarySystemPrompt?: string;
   summaryUserPrompt?: string;
@@ -307,14 +307,13 @@ export interface RecipeAgent {
   cacheTtl?: '5m' | '1h';
   /**
    * Prompt-cache keepalive. With `cacheTtl: '1h'`, an idle agent's cached
-   * prefix expires after an hour and its next wake pays a 2x cache write over
-   * the whole context. Reading an entry refreshes its TTL at 0.1x, so a
-   * periodic `max_tokens: 0` replay holds it warm for pennies.
+   * prefix expires after an hour and its next wake pays a 2x cache write
+   * over the whole context. Reading an entry refreshes its TTL at the
+   * cache-read price (0.1x for most models), so a periodic `max_tokens: 0`
+   * replay holds it warm for pennies.
    *
-   * On by default for the anthropic provider (ignored elsewhere — bedrock has
-   * no 1h cache). Measured on fable-cm 2026-08-11..22: 49.7M tokens of cache
-   * writes followed a >1h idle gap, ~$944 of write premium at fable-5 rates
-   * that this converts to ~$308 of reads.
+   * On by default for the anthropic provider (ignored elsewhere — bedrock
+   * has no 1h cache).
    *
    * Cost is proportional to actual idleness, not to `maxIdleHours` — a busy
    * agent never fires one, because its own traffic already refreshes the TTL.
@@ -437,8 +436,8 @@ export interface RecipeAgent {
   mock?: RecipeMockConfig;
   /**
    * Content-refusal handling, handed whole to agent-framework's
-   * AgentConfig.refusalHandling (framework-agent-config.ts), where
-   * agent-framework documents `retries`, `autoRewind` and `maxRewinds`.
+   * AgentConfig.refusalHandling, where agent-framework
+   * documents `retries`, `autoRewind` and `maxRewinds`.
    */
   refusalHandling?: {
     retries?: number;
@@ -485,7 +484,8 @@ export interface RecipeMockConfig {
 }
 
 export interface RecipeMcpServer {
-  /** Command to spawn (stdio transport). Mutually exclusive with url. */
+  /** Command to spawn (stdio transport). With a url too, `transport` says which
+   *  to use. */
   command?: string;
   args?: string[];
   env?: Record<string, string>;
@@ -501,7 +501,8 @@ export interface RecipeMcpServer {
    * searches); `0` disables the timeout.
    */
   requestTimeoutMs?: number;
-  /** WebSocket URL (WebSocket transport). Mutually exclusive with command. */
+  /** WebSocket URL (WebSocket transport). With a command too, `transport` says
+   *  which to use. */
   url?: string;
   transport?: 'stdio' | 'websocket';
   /** Bearer token for WebSocket auth (appended as ?token= query param). */
@@ -580,8 +581,8 @@ export interface RecipeMcpServer {
    * observe the agent's OTHER tool calls (`observe`) and their requested
    * argument fields (`inputs`), each with an optional narrowing. Both are
    * denied by default; stating a block is the operator's grant. `inputs`
-   * needs a `tools` or `classes` term to deliver anything, and never carries
-   * `comms` or unclassed arguments. See src/tool-lifecycle-config.ts.
+   * needs a `tools` or `classes` term to deliver anything, and never
+   * carries `comms` or unclassed arguments.
    */
   toolLifecycle?: RecipeToolLifecycle;
 }
@@ -738,19 +739,17 @@ export interface RecipeCredentialFileField {
 
 /**
  * A recipe's workspace mount: every key of agent-framework's MountConfig,
- * passed to the framework as given but for `path`, which is resolved
- * (workspace-mounts.ts), with `mode` and `watch` optional because the host
- * defaults them. The maximum file size is
- * operator-configurable because binary service artifacts may legitimately
- * exceed the conservative framework default.
+ * passed to the framework as given but for `path`, which is resolved,
+ * with `mode` and `watch` optional because the host defaults them. The
+ * maximum file size is operator-configurable because binary service
+ * artifacts may legitimately exceed the conservative framework default.
  */
 export interface RecipeWorkspaceMount {
   name: string;
   path: string;
   /**
-   * Left out, the host makes a mount read-write (workspace-mounts.ts). A
-   * direct mount (`backend: 'direct'`) must say its mode, 'read-only', or
-   * 'read-write' from agent-framework 0.27.0; one that doesn't stops the
+   * Left out, the host makes a mount read-write. A direct mount
+   * (`backend: 'direct'`) must say its mode; one that doesn't stops the
    * recipe loading (validateRecipe).
    */
   mode?: 'read-write' | 'read-only';
@@ -884,19 +883,17 @@ export interface RecipeModules {
    * Requires `workspace` (the path below is a workspace mount path);
    * enabling this alongside `workspace: false` fails validation. The mount
    * named by the path is cross-checked at load time in every configuration
-   * (explicit mounts and the implicit "input"+"products" default alike), so
-   * a path naming a nonexistent mount is a load error, never a silent
+   * (explicit mounts and the implicit "input"+"products" default alike),
+   * so a path naming a nonexistent mount is a load error, never a silent
    * no-injection. A read-write instructions mount that isn't configured
    * direct must also set `autoMaterialize: true`: its writes are
    * Chronicle-first and the injection reads disk, so without
    * materialization an agent's own curation edits would never reach the
-   * injection. A direct mount's write is on disk when it answers, and in
-   * a session it runs as 'chronicle' its writes are refused. A read-only
-   * mount is the alternative when the file is maintained outside
-   * the agent (edits then propagate to the injection but not to
-   * `workspace--read`, which serves Chronicle unless the mount runs
-   * direct). A missing FILE remains fail-open at runtime: no
-   * injection, with a log line and an `instructions-unavailable` ops alert.
+   * injection. A direct mount's write is on disk when it answers, and in a
+   * session it runs as 'chronicle' its writes are refused. A read-only
+   * mount is the alternative when the file is maintained outside the
+   * agent. A missing FILE remains fail-open at runtime: no injection, with
+   * a log line and an `instructions-unavailable` ops alert.
    *
    * Cache economics: with position 'system' the injected block sits in the
    * prompt-cache prefix of every agent, so each EDIT to the file is a
@@ -977,14 +974,14 @@ export interface RecipeModules {
   mcplAdmin?: boolean | { surface?: 'tools' | 'utilities' };
 
   /**
-   * Agent-facing history browsing (HistoryModule, agent-framework#158). OPT-IN
-   * — off by default. Adds `history--stats` / `history--extract` /
-   * `history--search` / `history--overview` tools for querying the agent's
-   * own uncompressed chronicle (native secondary indexes: stats, time/channel
-   * extraction, regex search) and for browsing already-compressed spans via
-   * existing summaries (no new LLM calls). Channel-filter arguments on all
-   * four tools accept a live or historical channel label/address, not just
-   * the raw internal channel id, when MCPL is configured (resolved via the
+   * Agent-facing history browsing (HistoryModule). OPT-IN — off by default.
+   * Adds `history--stats` / `history--extract` / `history--search` /
+   * `history--overview` tools for querying the agent's own uncompressed
+   * chronicle (native secondary indexes: stats, time/channel extraction,
+   * regex search) and for browsing already-compressed spans via existing
+   * summaries (no new LLM calls). Channel-filter arguments on all four tools
+   * accept a live or historical channel label/address, not just the raw
+   * internal channel id, when MCPL is configured (resolved via the
    * framework's `ChannelRegistry`).
    *
    * Object form adds `history--semantic_search`: meaning-based search over the
@@ -1001,9 +998,6 @@ export interface RecipeModules {
    * COPIED data dir (staging restore, a local run off a prod snapshot) keeps
    * the session id: give the copy a different `namespace` prefix, or no
    * token, or it will write into the original's index.
-   *
-   * Requires @animalabs/agent-framework >= 0.20.0; startup fails if the
-   * installed HistoryModule does not offer semantic_search.
    *
    * Transport: sync ships raw message text and the token. `url` must be https,
    * or plain http to loopback / the tailnet (100.64.0.0/10, *.ts.net), where
@@ -1040,11 +1034,11 @@ export interface RecipeModules {
    */
   identity?: boolean | { home?: string; audience?: string };
   /**
-   * Cross-process child fleet.  When true (shorthand), FleetModule is attached
-   * with no pre-configured children.  When an object, declares children the
-   * conductor supervises (auto-started by default on framework start) and
-   * optionally an allowlist of recipe paths the conductor may spawn at will.
-   * Recipes outside the allowlist require user approval.
+   * Cross-process child fleet. When true (shorthand), FleetModule is
+   * attached with no pre-configured children. When an object, declares
+   * children the conductor supervises (auto-started by default on framework
+   * start) and optionally an allowlist of recipe paths the conductor may
+   * spawn at will.
    *
    * Recipe path resolution: relative paths in `children[].recipe` are resolved
    * at load time against the directory of the parent recipe file (or URL
@@ -1073,12 +1067,12 @@ export interface RecipeModules {
   /**
    * Live TTS streaming tap (melodeus-tts-relay). Off by default. When set,
    * the host mirrors the agent's streaming generation — chunks, block
-   * boundaries, activation start/end, tagged with the turn's channel — to the
-   * relay's `/bot` WebSocket, where voice clients (Melodeus / iOS) speak it.
-   * Also handles the relay's `interruption` events: the just-posted Discord
-   * message is edited down to the words actually voiced, and a note lands in
-   * the agent's context. Pure trace-bus tap — no effect on the agent loop.
-   * `token` should be `${VAR}`-substituted from .env, never literal.
+   * boundaries, activation start/end, tagged with the turn's channel — to
+   * the relay's `/bot` WebSocket, where voice clients (Melodeus / iOS) speak
+   * it. Also handles the relay's `interruption` events: the just-posted
+   * Discord message is edited down to the words actually voiced, and a note
+   * lands in the agent's context. `token` should be `${VAR}`-substituted
+   * from .env, never literal.
    */
   ttsRelay?: RecipeTtsRelay;
 
@@ -1087,14 +1081,17 @@ export interface RecipeModules {
    * channel, the host counts ambient (non-mention, non-DM) characters since the
    * agent's last activation; when a channel crosses its limit before the next
    * activation, it's auto-unsubscribed (delivery stops, and the surface starts
-   * tracking what's then missed). Counters reset on every activation — the
-   * agent sees all subscribed channels in context, compressed if large — and
-   * persist across restarts. The agent can override the per-channel limit at
-   * runtime via `agent_settings` (field `channel_idle_limits`).
+   * tracking what's then missed). A channel the agent opened itself stays open
+   * unless a limit is configured for it, and a tuned-out channel is left alone.
+   * Counters reset on every activation — the agent sees all subscribed channels
+   * in context, compressed if large — and persist across restarts. The agent
+   * can override the per-channel limit at runtime via `agent_settings` (field
+   * `channel_idle_limits`).
    *
    * `false` disables entirely. `defaultLimitChars` sets the global default
-   * (20000 if omitted). `serverId`/`toolPrefix` target the MCPL surface that
-   * owns subscriptions (defaults: `discord` / `mcpl--discord`).
+   * (20000 if omitted). `serverId` names the MCPL server that owns
+   * subscriptions (default `discord`); `toolPrefix` is deprecated and read by
+   * nothing.
    */
   subscriptionGc?:
     | boolean
@@ -1106,9 +1103,10 @@ export interface RecipeModules {
    * bundles subscribe + a per-channel ambient debounce gate rule + pinning
    * subscription-gc off; mentions mode reverses all three. On by default when
    * the gate (`wake`) is enabled — it only ADDS a tool, inert until called.
-   * `false` disables. `serverId`/`toolPrefix` target the MCPL surface that owns
-   * subscriptions (defaults: `discord` / `mcpl--discord`); `defaultDebounceMs`
-   * sets the debounced-mode quiet window (180000 if omitted).
+   * `false` disables. `serverId` names the MCPL server that owns subscriptions
+   * (default `discord`); `toolPrefix` is deprecated and read by nothing.
+   * `defaultDebounceMs` sets the debounced-mode quiet window (180000 if
+   * omitted).
    */
   channelMode?:
     | boolean
@@ -1191,10 +1189,11 @@ export interface RecipeFleet {
   /** Children to manage. autoStart children launch when the framework starts. */
   children?: RecipeFleetChild[];
   /**
-   * Allowlist for `fleet--launch`.  If omitted, the list is implicitly the
-   * set of recipe paths named in `children`.  A launch call targeting a
-   * recipe outside the allowlist fails with an error the agent should
-   * relay to the user (who can then approve and re-issue).
+   * Allowlist for `fleet--launch`. With neither this nor a recipe in
+   * `children` there is no allowlist; otherwise it holds these patterns
+   * and every recipe path named in `children`. A launch call targeting a
+   * recipe outside the allowlist fails with an error telling the agent to
+   * ask the user to extend `allowedRecipes`.
    *
    * Pattern syntax (intentionally minimal to keep matcher and intent aligned):
    *   - Literal exact match: `"recipes/miner.json"`
@@ -1241,7 +1240,7 @@ export interface RecipeFleetChild {
   subscription?: string[];
   /** Launch this child on framework start. Default: true. */
   autoStart?: boolean;
-  /** Respawn on crash (Phase 5 honours this; schema accepts it now). */
+  /** Respawn on crash. */
   autoRestart?: boolean;
 }
 
@@ -1274,21 +1273,18 @@ export interface RecipeExtension {
  * Client-side programmatic tool calling (af `code_execution` tool), passed to
  * the framework as written, so it is the framework's own config type.
  *
- * SECURITY: from agent-framework 0.24, model-authored JavaScript runs in a
- * QuickJS WebAssembly engine, in a child process of the host, and reaches
- * nothing but its agent's tools: no network, files or environment. The
- * framework claims no containment beyond its engine and glue: the child runs
- * as the host's user, with no operating-system sandbox around it. Enable
- * deliberately.
+ * SECURITY: model-authored JavaScript runs in a QuickJS WebAssembly
+ * engine, in a child process of the host, and reaches nothing but its
+ * agent's tools: no network, files or environment. The framework claims no
+ * containment beyond its engine and glue: the child runs as the host's
+ * user, with no operating-system sandbox around it. Enable deliberately.
  */
 export type RecipeCodeExecution = CodeExecutionConfig;
 
 /**
- * What agent-framework 0.24's JavaScript runner refuses from the Python
- * runner's settings, with what to do instead: its isolateSettings' table,
- * which the package doesn't export. The host refuses them at recipe load, as
- * the framework does at create(), so such a recipe fails before the host
- * starts rather than at the framework's boot.
+ * The Python runner's settings agent-framework's JavaScript runner refuses,
+ * with what to do instead: its isolateSettings' table, which the package
+ * doesn't export.
  */
 const RETIRED_CODE_EXECUTION_KEYS: Readonly<Record<string, string>> = {
   pythonPath: 'scripts are JavaScript now, run by an engine built into agent-framework, so there is no interpreter to name; leave it out',
@@ -1308,11 +1304,11 @@ const CODE_EXECUTION_NUMBER_KEYS = [
 ] as const;
 
 /**
- * The subconscious resident (agent-framework FrameworkConfig.subconscious,
- * issue agent-framework#77 — tune-out): a persistent same-model side-agent
- * that receives traffic from channels the resident has tuned out and
- * reports to them in its own voice. Passed through verbatim; the framework
- * owns the defaults (name `Subconscious`, model = the resident's).
+ * The subconscious resident (agent-framework
+ * FrameworkConfig.subconscious): a persistent same-model side-agent that
+ * receives traffic from channels the resident has tuned out and reports to
+ * them in its own voice. Passed through verbatim; the framework owns the
+ * defaults (name `Subconscious`, model = the resident's).
  */
 export interface RecipeSubconscious {
   /** Master switch. Without it the `tune_out` tool is not offered. */
@@ -1412,7 +1408,7 @@ export interface Recipe {
    * at startup when it is set.
    */
   conversations?: RecipeConversations;
-  /** Tune-out's subconscious resident (agent-framework#77). */
+  /** Tune-out's subconscious resident. */
   subconscious?: RecipeSubconscious;
   /**
    * MCPL RFC-008 operator class overrides: tool-name pattern → classes. The
@@ -1477,9 +1473,9 @@ export function namesEnvReference(text: string): boolean {
 
 /**
  * Walk a parsed-JSON value tree and substitute `${VAR_NAME}` patterns in
- * string values with `process.env.VAR_NAME`.  Applied at recipe-load time,
- * before schema validation, so secrets can live in `.env` (gitignored) while
- * the recipe itself stays commit-safe.
+ * string values with `process.env.VAR_NAME`. Applied at recipe-load time,
+ * before schema validation, so secrets can live in `.env` (gitignored)
+ * while the recipe itself stays commit-safe.
  *
  * Patterns:
  *   - `${FOO}` — required.  Throws if FOO is unset (empty string OK).
@@ -1493,8 +1489,8 @@ export function namesEnvReference(text: string): boolean {
  *   - Non-string values (numbers, booleans, nulls) pass through unchanged.
  *   - Arrays and objects are walked recursively.
  *
- * No escape syntax yet — a literal `${...}` in recipe JSON is not a supported
- * case.  If that becomes needed, add `$$` → `$` unwrapping as a pre-pass.
+ * No escape syntax yet — a literal `${...}` in recipe JSON is not a
+ * supported case.
  */
 export function substituteEnvVars(value: unknown, source: string): unknown {
   if (typeof value === 'string') {
@@ -1608,7 +1604,7 @@ export async function loadRecipeDetailed(source: string, options: { fetchSystemP
       raw = parseHandWrittenJson(text);
     } catch (error) {
       // The parser's message can quote the file's text, and a recipe can
-      // hold a key inline, so it isn't passed on, as for a saved recipe.
+      // hold a key inline, so it isn't passed on.
       if (error instanceof SyntaxError) throw new SyntaxError(`${path} isn't valid JSON`);
       throw error;
     }
@@ -1792,7 +1788,7 @@ function validateKvUnifiedConfig(strategy: Record<string, unknown>): void {
       throw new Error(`Recipe agent.strategy.kvUnified.policy.${key} must be in [0, 1].`);
     }
   }
-  // Mirror context-manager 0.17: src/adaptive/kv-unified-policy.ts (MAX_AGE_BAND_STEPS).
+  // Mirrors context-manager's MAX_AGE_BAND_STEPS (src/adaptive/kv-unified-policy.ts).
   if (
     policy.ageBandSteps !== undefined &&
     (!Number.isInteger(policy.ageBandSteps) || (policy.ageBandSteps as number) < 0 || (policy.ageBandSteps as number) > 64)
@@ -1814,7 +1810,7 @@ function validateKvUnifiedConfig(strategy: Record<string, unknown>): void {
   ) {
     throw new Error('Recipe agent.strategy.kvUnified.adoptEpsilon must be a finite non-negative number.');
   }
-  // Mirror context-manager 0.11.0: src/adaptive/strategies/kv-unified.ts validateExplicitOptions.
+  // Mirrors context-manager's validateExplicitOptions (src/adaptive/strategies/kv-unified.ts).
   for (const key of ['treeifyNonContiguousSummaries', 'preserveGapBearingSummaries'] as const) {
     if (typeof config[key] !== 'boolean') {
       throw new Error(`Recipe agent.strategy.kvUnified.${key} must be an explicit boolean.`);
@@ -1869,9 +1865,7 @@ export const DEFAULT_RECIPE_CLOCK: ClockConfig = Object.freeze({ intervalMinutes
 
 /** `agent.autoContinue`'s keys, when it is an object. */
 const RECIPE_AGENT_AUTO_CONTINUE_KEYS = ['maxConsecutive'] as const;
-/** agent-framework's bounds for `agent.autoContinue.maxConsecutive`
- *  (resolveAutoContinue, agent-framework#744), until a framework release
- *  exports them. */
+/** agent-framework's bounds for `agent.autoContinue.maxConsecutive` (resolveAutoContinue). */
 const AUTO_CONTINUE_MIN = 1;
 const AUTO_CONTINUE_MAX = 20;
 
@@ -2140,9 +2134,7 @@ export function validateRecipe(raw: unknown): Recipe {
   }
 
   const agent = obj.agent as Record<string, unknown>;
-  // Absent or empty systemPrompt is a valid configuration: '' is dropped at
-  // the provider boundary (membrane omits falsy `system`), so the wire
-  // request carries no system block at all.
+  // '' is dropped at the provider boundary: membrane omits a falsy `system`.
   if (agent.systemPrompt === undefined || agent.systemPrompt === null) {
     agent.systemPrompt = '';
   } else if (typeof agent.systemPrompt !== 'string') {
@@ -2294,8 +2286,8 @@ export function validateRecipe(raw: unknown): Recipe {
     throw new Error('Recipe agent.maxStreamTokens must be a positive number.');
   }
 
-  // Recipes are runtime JSON; a typo'd TTL ("1hr", "60m") would otherwise
-  // surface as a 400 from Anthropic at the agent's first inference.
+  // Anthropic answers a TTL it doesn't know ("1hr", "60m") with a 400 at the
+  // agent's first inference.
   if (agent.cacheTtl !== undefined && agent.cacheTtl !== '5m' && agent.cacheTtl !== '1h') {
     throw new Error(`Recipe agent.cacheTtl must be '5m' or '1h', got ${JSON.stringify(agent.cacheTtl)}.`);
   }
@@ -2307,10 +2299,7 @@ export function validateRecipe(raw: unknown): Recipe {
       throw new Error(`Recipe agent.retry must be an object, got ${JSON.stringify(agent.retry)}.`);
     }
     const RETRY_KEYS = ['maxRetries', 'retryDelayMs', 'backoffMultiplier', 'maxRetryDelayMs'] as const;
-    // Reject unknown keys: `{ maxRetires: 4 }` would otherwise validate clean,
-    // Membrane would ignore it, and the agent would sit at zero retries —
-    // exactly the hard-down mode this knob exists to close, wearing a config
-    // that looks like it fixed it.
+    // Membrane ignores a retry key it doesn't know, such as `maxRetires`.
     for (const key of Object.keys(retry)) {
       if (!(RETRY_KEYS as readonly string[]).includes(key) && key !== 'overloaded') {
         throw new Error(`Recipe agent.retry has unknown key ${JSON.stringify(key)} (known: ${RETRY_KEYS.join(', ')}, overloaded).`);
@@ -2365,11 +2354,8 @@ export function validateRecipe(raw: unknown): Recipe {
     );
   }
 
-  // A keepalive that fires AFTER the entry has already expired is the worst of
-  // both worlds: it pays a full 2x cache write on every poke, forever, and
-  // reports success while doing it. Refuse the config rather than discover it
-  // in a bill. (The runtime also self-checks — see membrane cache-keepalive —
-  // but a typo'd recipe should never get that far.)
+  // A keepalive that fires after the entry has expired pays a full cache
+  // write on every poke, and reports success while doing it.
   const keepalive = agent.cacheKeepalive;
   if (keepalive !== undefined) {
     if (typeof keepalive !== 'object' || keepalive === null) {
@@ -2412,9 +2398,7 @@ export function validateRecipe(raw: unknown): Recipe {
     );
   }
 
-  // Validate agent.thinking if present. Catches typos and constraint
-  // violations (notably max_tokens > budget_tokens) at recipe-load time
-  // rather than as a 400 from Anthropic at first inference.
+  // Anthropic refuses, with a 400, a thinking budget that isn't below max_tokens.
   if (agent.thinking !== undefined) {
     if (!agent.thinking || typeof agent.thinking !== 'object' || Array.isArray(agent.thinking)) {
       throw new Error('Recipe agent.thinking must be an object with "enabled" and optional "budgetTokens".');
@@ -2508,10 +2492,8 @@ export function validateRecipe(raw: unknown): Recipe {
     if (strategy.foldingStrategy === 'kv-unified' && strategy.type === 'passthrough') {
       throw new Error('Recipe foldingStrategy "kv-unified" requires an autobiographical or frontdesk strategy.');
     }
-    // Recipes are runtime JSON: the interface's union is not a check. Context
-    // Manager treats every value other than the exact string 'live-strip' as
-    // 'full', so a typo would silently keep replaying the reasoning carriers
-    // this key exists to strip. Fail at load, like foldingStrategy.
+    // context-manager treats every carrierPolicy other than the exact string
+    // 'live-strip' as 'full'.
     if (
       strategy.carrierPolicy !== undefined &&
       strategy.carrierPolicy !== 'full' &&
@@ -2567,8 +2549,7 @@ export function validateRecipe(raw: unknown): Recipe {
       }
     }
     if (strategy.compressionToolProseFallback !== undefined) {
-      // Fail loudly: CM silently treats a malformed value as "rung off", which
-      // on a resident whose compressions are refusing is an outage, not a default.
+      // context-manager reads a malformed compressionToolProseFallback as the rung off.
       const hoist = strategy.compressionToolProseFallback as Record<string, unknown> | null;
       const where = 'Recipe agent.strategy.compressionToolProseFallback';
       if (!hoist || typeof hoist !== 'object' || Array.isArray(hoist)) {
@@ -2618,12 +2599,10 @@ export function validateRecipe(raw: unknown): Recipe {
     }
   }
 
-  // From 0.22.3, agent-framework's create() refuses a refusalHandling that
-  // isn't an object other than an array, null or false, and an autoRewind
-  // that isn't a boolean or null (assertAgentSwitches), which stops the boot
-  // after the recipe has loaded. The host passes refusalHandling on only
-  // when it's truthy (framework-agent-config.ts), so those are refused here
-  // in the recipe's words, and a falsy one loads as before.
+  // agent-framework's create() refuses a refusalHandling that isn't an
+  // object other than an array, null or false, and an autoRewind that isn't
+  // a boolean or null (assertAgentSwitches), which stops the boot after the
+  // recipe has loaded.
   const refusalHandling: unknown = agent.refusalHandling;
   if (refusalHandling) {
     if (typeof refusalHandling !== 'object' || Array.isArray(refusalHandling)) {
@@ -2714,9 +2693,8 @@ export function validateRecipe(raw: unknown): Recipe {
         }
         if (src.systemPackages !== undefined) {
           // The regex bounds these to Debian package names — build tooling
-          // pastes them into an `apt-get install` line, so an unbounded string
-          // is a command-injection vector. Kept in sync with cook's vendored
-          // copy (connectome-cook src/vendor/recipe.ts).
+          // pastes them into an `apt-get install` line, so an unbounded
+          // string is a command-injection vector.
           if (!Array.isArray(src.systemPackages)
             || !(src.systemPackages as unknown[]).every(
               (p) => typeof p === 'string' && /^[a-z0-9][a-z0-9+.\-]+$/.test(p),
@@ -2856,24 +2834,11 @@ export function validateRecipe(raw: unknown): Recipe {
           throw new Error(`${where} is direct, so it must say its mode: add "mode": "read-only", or "read-write" for one the agent writes on disk directly, with no undo`);
         }
       }
-      // What a mount's keys must be together, such as a direct mount's
-      // settings, and an include's patterns, are agent-framework's to say,
-      // and its WorkspaceModule constructor checks each mount and does
-      // nothing else: it reads no file, opens no store and starts no timer
-      // (0.24.0). So the recipe's mounts are built and checked here, before
-      // the recipe is saved, and a refusal is in the framework's words.
-      // Built at start instead, a refused recipe would be saved first and
-      // fail every start that resumes it. A framework release whose
-      // constructor does more is where this has to change.
-      //
-      // The constructor also warns on stderr of a mount nested in another,
-      // which it reads from paths resolved against this process's working
-      // directory. A store audit, a fleet parent or the Web UI can validate
-      // a recipe somewhere other than where it runs, so the warning here
-      // could be false, where the refusals hold wherever validation runs.
-      // Nesting is the start's to report, where the recipe runs, so the
-      // constructor's warnings are kept to this call: it's synchronous, and
-      // nothing else prints during it.
+      // agent-framework's WorkspaceModule constructor checks each mount and does
+      // nothing else: it reads no file, opens no store and starts no timer. It
+      // also warns on stderr of a mount nested in another, from paths resolved
+      // against this process's working directory, which may not be where the
+      // recipe runs.
       const warn = console.warn;
       console.warn = () => {};
       try {
@@ -2959,7 +2924,7 @@ export function validateRecipe(raw: unknown): Recipe {
           typeof mods.instructions === 'object'
               && typeof (mods.instructions as { path?: unknown }).path === 'string'
             ? (mods.instructions as { path: string }).path
-            : 'instructions/AGENTS.md'; // keep in sync with DEFAULT_INSTRUCTIONS_PATH
+            : DEFAULT_INSTRUCTIONS_PATH; // keep in sync with DEFAULT_INSTRUCTIONS_PATH
         const mountName = effectivePath.slice(0, effectivePath.indexOf('/'));
         // Reason over the SAME mount construction the runtime uses — one
         // builder, no validator-vs-host drift (the storePath placeholder is
@@ -3032,9 +2997,9 @@ export function validateRecipe(raw: unknown): Recipe {
         if (semCfg.allowInsecureHttp !== undefined && typeof semCfg.allowInsecureHttp !== 'boolean') {
           throw new Error('modules.history.semantic.allowInsecureHttp must be a boolean when set.');
         }
-        // Parse, don't regex: `http://` has no host (the client would build
-        // `http:///v1/…`, which WHATWG reads as host `v1`), and a query or
-        // fragment in the base swallows the appended API path.
+        // `http://` has no host (the client would build `http:///v1/…`,
+        // which WHATWG reads as host `v1`), and a query or fragment in the
+        // base swallows the appended API path.
         let parsed: URL | null = null;
         if (typeof semCfg.url === 'string') { try { parsed = new URL(semCfg.url); } catch { parsed = null; } }
         if (!parsed || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || !parsed.hostname
@@ -3264,7 +3229,7 @@ export function validateRecipe(raw: unknown): Recipe {
     if (typeof ce.enabled !== 'boolean') {
       throw new Error('Recipe codeExecution.enabled must be a boolean.');
     }
-    // As in the framework, a block that isn't on has nothing else read.
+    // agent-framework reads nothing else from a code-execution block that isn't on.
     if (ce.enabled) {
       for (const [key, instead] of Object.entries(RETIRED_CODE_EXECUTION_KEYS)) {
         if (ce[key] !== undefined && ce[key] !== null) {
@@ -3413,12 +3378,10 @@ export function savedRecipePath(dataDir: string): string {
 }
 
 /**
- * Marker key stamped into saved `.recipe.json` snapshots that were written in
- * unresolved form (post-fix). Its presence tells loadSavedRecipe to run the
- * full substitute-and-validate pipeline on read; its absence means a legacy
- * snapshot saved fully resolved, which must be loaded verbatim — running
- * substitution over legacy content could hard-fail on a literal `${...}`
- * that survived in prose (e.g. a systemPrompt documenting env-var syntax).
+ * Marker key stamped into saved `.recipe.json` snapshots that were written
+ * in unresolved form. Its presence tells loadSavedRecipe to run the full
+ * substitute-and-validate pipeline on read; its absence means a legacy
+ * snapshot saved fully resolved, which must be loaded verbatim.
  */
 export const SAVED_RECIPE_UNRESOLVED_KEY = '$unresolved';
 
@@ -3435,32 +3398,22 @@ export const SAVED_RECIPE_UNRESOLVED_KEY = '$unresolved';
  * The file is written 0600 and chmod'd to 0600 even when it already exists,
  * as defense in depth for legacy resolved snapshots being overwritten.
  */
-export function saveRecipe(dataDir: string, persistable: Record<string, unknown>): void {
+export function saveRecipe(dataDir: string, unresolvedRecipe: Record<string, unknown>): void {
   mkdirSync(dataDir, { recursive: true });
   const path = savedRecipePath(dataDir);
-  const withMarker = { [SAVED_RECIPE_UNRESOLVED_KEY]: true, ...persistable };
+  const withMarker = { [SAVED_RECIPE_UNRESOLVED_KEY]: true, ...unresolvedRecipe };
   writeFileSync(path, JSON.stringify(withMarker, null, 2) + '\n', { encoding: 'utf-8', mode: 0o600 });
   // writeFileSync's mode only applies on creation — enforce on overwrite too.
   chmodSync(path, 0o600);
 }
 
 /**
- * A directory at the saved recipe's path, itself or through a link, such as
- * one a Docker bind mount makes for a recipe file the host didn't have yet.
- * It was never a saved recipe. Moving or removing it is the fix that works
- * for both kinds, since a recipe file can't be written over a directory, even
- * through a link, and --no-recipe leaves a directory itself in place. So
- * startup says that in place of its usual ways out.
+ * A Docker bind mount makes a directory at a source path that doesn't exist
+ * yet, such as a recipe file the host didn't have.
  */
 export class SavedRecipeDirectoryError extends Error {}
 
-/**
- * "it's a directory" or "it's a link to a directory" when a directory sits at
- * the saved recipe's path, itself or through a link; null for anything else,
- * and where that can't be told, as under a directory that can't be searched.
- * It reads what's there, whatever a failed read or write said about it: a
- * directory the host can't read fails a read with EACCES, not EISDIR.
- */
+/** A directory the host can't read fails a read with EACCES, not EISDIR. */
 export function savedRecipeDirectory(dataDir: string): string | null {
   const path = savedRecipePath(dataDir);
   try {
@@ -3514,8 +3467,8 @@ export async function loadSavedRecipe(dataDir: string, options: { fetchSystemPro
   try {
     raw = JSON.parse(text);
   } catch {
-    // The parser's message can quote the file's text, and a snapshot from
-    // before 0.8.0 can hold a key inline, so it isn't passed on.
+    // The parser's message can quote the file's text, and a snapshot can
+    // hold a key inline, so it isn't passed on.
     throw new Error("it isn't JSON");
   }
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
@@ -3538,10 +3491,8 @@ export async function loadSavedRecipe(dataDir: string, options: { fetchSystemPro
 }
 
 /**
- * Remove whatever is at the saved recipe's path, so the next start without a
- * recipe argument starts the default: a file, or a link, one to nothing
- * included, and never a link's target. A directory there was never a saved
- * recipe, so it's left in place: rmSync refuses it, naming the path.
+ * rmSync removes a link, one to nothing included, never its target, and
+ * refuses a directory, naming the path.
  */
 export function clearSavedRecipe(dataDir: string): void {
   rmSync(savedRecipePath(dataDir), { force: true });
@@ -3552,8 +3503,9 @@ export function clearSavedRecipe(dataDir: string): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Parse argv to find a recipe source. Returns null if none provided.
- * Skips known flags (--no-tui, --no-recipe).
+ * Parse argv to find a recipe source: the first argument after argv's first
+ * two that doesn't start with `--`, or a `source` of null when there is none.
+ * `noRecipe` says whether `--no-recipe` was given.
  */
 export function parseRecipeArg(argv: string[]): { source: string | null; noRecipe: boolean } {
   const noRecipe = argv.includes('--no-recipe');

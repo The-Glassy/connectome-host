@@ -303,7 +303,7 @@ describe('AgentTreeReducer (continued)', () => {
     expect(tokens.output).toBe(30);
     expect(tokens.cacheRead).toBe(50);
     expect(tokens.cacheWrite).toBe(10);
-    // A completion that repeats the last sample, as agent-framework's does, changes nothing.
+    // agent-framework's completion repeats the last sample.
     r.applyEvent({ type: 'inference:completed', agentName: 'a', durationMs: 100, tokenUsage: { input: 700, output: 30, cacheRead: 50, cacheCreation: 10 }, timestamp: ts(3) });
     expect(r.getNode('a')!.tokens).toEqual(tokens);
   });

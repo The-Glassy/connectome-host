@@ -57,8 +57,7 @@ function parseArgs(argv: string[]) {
   return { source, outDir, agentName };
 }
 
-/** Reconstruct the provider's current input window. A `compacted` record
- * replaces all prior response-item history with its canonical
+/** A `compacted` record replaces all prior response-item history with its
  * `replacement_history`; later response items append normally. */
 export function reconstructEffectiveHistory(records: RolloutRecord[]): EffectiveItem[] {
   let history: EffectiveItem[] = [];
@@ -102,8 +101,8 @@ function textFromContent(content: unknown): string {
     .join('\n');
 }
 
-/** A human-readable Chronicle projection. `rawItem` is the load-bearing field:
- * the Responses formatter emits it verbatim and ignores the projection. */
+/** `rawItem` is the load-bearing field: membrane's Responses formatter emits
+ * it verbatim and ignores the projection. */
 export function projectItem(item: NativeItem): ContentBlock[] {
   const carrier = <T extends ContentBlock>(block: T): ContentBlock =>
     ({ ...block, rawItem: item } as ContentBlock);

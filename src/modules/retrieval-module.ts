@@ -158,10 +158,10 @@ function lessonLine(l: Lesson): string {
   return `- [${(l.confidence * 100).toFixed(0)}%] ${l.content} (tags: ${l.tags.join(', ')})`;
 }
 
-// Tokens are counted as context-manager's estimateTextOnlyTokens counts them
-// (characters / 4, rounded up), and a cap that isn't a positive number is
-// none, as its capContent reads it, so the block fits exactly when the
-// strategy wouldn't cut it.
+// Tokens are counted as context-manager's estimateTextOnlyTokens counts a
+// text block (its length in UTF-16 code units / 4, rounded up), and a cap
+// that isn't a positive number is none, as its capContent reads it, so the
+// block fits exactly when the strategy wouldn't cut it.
 function fitUnderCap(heading: string, lessons: Lesson[], cap: number | undefined): { text: string; lessons: Lesson[] } {
   const compose = (kept: string[], leftOut: number): string => [
     heading,
@@ -358,10 +358,9 @@ export class RetrievalModule implements Module {
       }
       const injections: ContextInjection[] = [{
         namespace: 'retrieval',
-        // 'afterUser', NOT 'system': retrieval content changes with each
-        // turn's message, so injecting it into the system prompt churns the
-        // very front of the KV cache and invalidates the entire prefix every
-        // turn. Tail injection keeps the stable prefix cached.
+        // Not 'system': this changes every turn, and a provider caches a prompt
+        // by its prefix, so a changing system prompt would lose the whole
+        // cached prefix each turn.
         position: 'afterUser',
         content: [{ type: 'text', text: fitted.text }],
       }];
@@ -581,9 +580,9 @@ export class RetrievalModule implements Module {
   private getRecentContext(agentName: string): RecentRetrievalContext | null {
     if (!this.ctx) return null;
 
-    // agent-framework marks a write it still holds for a later boundary
-    // `held`, and keeps a tuned-out channel's rows (`heldFromResidents`) and
-    // rows a tune-out diverted (`metadata.tuneOut`) out of a resident's view.
+    // agent-framework marks a write it still holds `held`, and a row a tune-out
+    // holds from the residents `heldFromResidents` (stamped
+    // `metadata.tuneOut`), and shows a resident neither.
     const { messages } = this.ctx.queryMessages({}, { forAgent: agentName });
     const shown = messages.filter(m =>
       m.held !== true && m.heldFromResidents !== true && !(m.metadata as { tuneOut?: unknown } | undefined)?.tuneOut

@@ -61,9 +61,8 @@ export interface ObservedHost {
   /** Bind the same app again, as a session switch does: every client is
    *  welcomed again once the bind's waits are over. */
   rebind(): void;
-  /** Welcome every client again and wait for each of `connections` to have
-   *  it: a frame sent before this has reached them by its end, since a
-   *  socket keeps its frames in order. */
+  /** A socket keeps its frames in order, so a frame sent before the fence's
+   *  welcome reaches each client before it. */
   fence(connections: Connection[]): Promise<void>;
   stop(): Promise<void>;
 }

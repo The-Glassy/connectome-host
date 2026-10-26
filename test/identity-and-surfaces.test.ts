@@ -19,10 +19,10 @@ import { McplAdminModule } from '../src/modules/mcpl-admin-module.ts';
 import { ObserversModule } from '../src/modules/observers-module.ts';
 
 // agent-framework's code for a link among a path's directories that stays
-// inside the mount, from its release with anima-research/agent-framework#468.
+// inside the mount.
 const PARENT_SYMLINK = 'parent_symlink' as WorkspaceReadError['code'];
-// anima-research/agent-framework#460's code for a path in another mount's
-// directory nested in the one named.
+// agent-framework's code for a path in another mount's directory nested in
+// the one named.
 const OTHER_MOUNT = 'other_mount' as WorkspaceReadError['code'];
 
 const REQUEST_BODY_MAX_FOR_TEST = 256 * 1024;
@@ -91,7 +91,7 @@ describe('identity module', () => {
     // The home node's response token must NOT reach the agent.
     expect(JSON.stringify(res.data)).not.toContain('aid1.');
 
-    // Wire-level: the signed statement is the spec's, verifiable by the module's own key.
+    // The signed statement is archipelago-home's enrollment format.
     const raw = Buffer.from(seen.id.slice('ed25519:'.length), 'base64url');
     const key = createPublicKey({
       key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), raw]),
@@ -276,7 +276,7 @@ describe('identity module', () => {
     expectSays(missing.error, 'Nothing was sent to "music"', '"files/nope.mp3" couldn\'t be read');
   });
 
-  it('request: every writing method carries a JSON body or a workspace file; GET carries neither', async () => {
+  it('request: a writing method carries the JSON body or workspace file it is given, and neither when given neither; GET carries neither', async () => {
     const dir = tempDir('ident-');
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00, 0x7f]);
     const sent: Array<{ url: string; method: string; type: string; auth: string; body: unknown }> = [];
@@ -1110,7 +1110,7 @@ describe('identity: what the agent reads when a call fails', () => {
         'service holds for this registration.',
     );
     expect(byHand).not.toContain('"sub":');
-    // The record can't be written: a directory where its temporary file goes.
+    // A directory where the record's temporary file goes fails its write.
     mkdirSync(join(dir, 'k.json.tmp'));
     enroll = () => new Response(JSON.stringify({ sub: 'agent:a@guest' }), { status: 200 });
     let unrecorded: Awaited<ReturnType<IdentityModule['handleToolCall']>> | undefined;
@@ -1269,10 +1269,7 @@ describe('identity: what the agent reads when a call fails', () => {
     expect(seen.orrery).toBe(0);
   });
 
-  // A key of another type, such as an X25519 key, which loads but can't sign,
-  // fails where it loads, as a key that can't be read does: status, request
-  // and accept_invite alike. The agent gets the one sentence, the log the
-  // key's type, and the file stays the operator's to replace.
+  // An X25519 key loads but can't sign.
   it("refuses a key that isn't ed25519 where it loads, and leaves its file as it is", async () => {
     const { mod, dir, ready, seen } = registeredModule();
     await ready;
@@ -1302,11 +1299,8 @@ describe('identity: what the agent reads when a call fails', () => {
     expect(readdirSync(fresh.dir)).toEqual(['k.pem']);
   });
 
-  // A call to /enroll or /token that hangs ends after 15 seconds: a
-  // registration as no reply, and access as unreachable. The limit is asked
-  // of AbortSignal.timeout, which here answers with a 20 ms signal, and the
-  // service never answers: each call ends only when its signal fires, with
-  // the signal's own reason, as fetch's does.
+  // The stand-in ends each call only when its signal fires, with the signal's
+  // own reason, as fetch does.
   it('gives /enroll and /token 15 seconds each, after which a hung registration reads as no reply and access as unreachable', async () => {
     const real = AbortSignal.timeout.bind(AbortSignal);
     const limits: number[] = [];
@@ -1479,7 +1473,7 @@ describe('identity: what the agent reads when a call fails', () => {
   // same, since the log line written when it began keeps every field of it.
   it('drops the hold for a record written by hand that differs from it, whose fields its log line kept', async () => {
     const { mod, dir } = registeredModule({ register: false });
-    // The record can't be written: a directory where its temporary file goes.
+    // A directory where the record's temporary file goes fails its write.
     mkdirSync(join(dir, 'k.json.tmp'));
     const lines = await logged(async () => { await mod.handleToolCall(call('accept_invite', { invite: 'inv', name: 'A' })); });
     expect((await mod.handleToolCall(call('status', {}))).data).toMatchObject({ registeredAs: 'A', id: 'agent:a@guest' });
@@ -1852,7 +1846,7 @@ describe('identity request: fromFile reads only what the mount allows', () => {
 
   it('refuses a file over the upload cap, having read no more of it than the cap', async () => {
     const { mountDir, diskReads, bodies, upload } = await mounted();
-    // A sparse file one byte over the cap: nothing that large is written to the test's disk.
+    // truncate makes a sparse file, so nothing that large is written to disk.
     writeFileSync(join(mountDir, 'huge.bin'), '');
     truncateSync(join(mountDir, 'huge.bin'), CAP + 1);
     expect((await upload('files/huge.bin')).error).toContain(`"files/huge.bin" is ${CAP + 1} bytes, over the ${CAP}-byte upload limit`);

@@ -1,36 +1,25 @@
 /**
- * What a release on trial wrote as it ended, kept for the release that falls
- * back from it (contract.ts). A trial writes to the service's stdout and
- * stderr, which the launcher's execve leaves it, and headless.log opens only
- * once a start has committed, so none of the install's own files would hold
- * what a trial that ends before its commit wrote.
+ * A trial writes to the service's stdout and stderr, which the launcher's
+ * execve leaves it, and headless.log opens only once a start has committed,
+ * so none of the install's own files would hold what a trial that ends
+ * before its commit wrote.
  *
  * While a host runs on trial, armTrialLog keeps the end of what it writes
  * through console's log, info, warn, error and debug and through
- * process.stdout's and process.stderr's write, each passed on unchanged. Bun's console writes to
- * the descriptors itself, past those write methods, so both are wrapped, and
- * a console call is kept as node:util's format renders its arguments, which
- * lays out an object on fewer lines than Bun's console does. What's kept is
- * one text in the order it was written, so a write to stdout that leaves its
- * line open shares that line with a write to stderr after it. If the process
- * exits before its commit, the last lines are written to the install's trial
- * log (installPaths' trialLog) with the trial's mark. The commit disarms it
- * (disarmTrialLog), so nothing is kept after, and the wraps only pass what's
- * written on, formatting and decoding nothing.
+ * process.stdout's and process.stderr's write, each passed on unchanged.
+ * Bun's console writes to the descriptors itself, past those write methods,
+ * so both are wrapped, and a console call is kept as node:util's format
+ * renders its arguments, which lays out an object on fewer lines than Bun's
+ * console does.
  *
  * What doesn't pass through those isn't kept: console's other methods, such
  * as dir, table and trace; Bun's own report of an error nothing caught,
- * which its printer writes past console; everything, if a
- * signal ends the process, such as a stop's SIGTERM or the OOM killer's
- * SIGKILL, since a signal nothing handles runs no exit handler, and the
- * host's own handlers start only after the commit (headless.ts); what a start
- * writes before it knows its release (releaseHere); and what a child process
- * writes to the descriptors it inherits, such as an MCPL server's stderr. Only
- * the service's log, or the terminal the host was started in, has those.
- *
- * There is one trial log: the next trial that ends before its commit
- * replaces it, and readTrialLog gives it only for the fallback whose mark it
- * names.
+ * which its printer writes past console; everything, if a signal ends the
+ * process, such as a stop's SIGTERM or the OOM killer's SIGKILL, since a
+ * signal nothing handles runs no exit handler; and what a child process
+ * writes to the descriptors it inherits, such as an MCPL server's stderr.
+ * Only the service's log, or the terminal the host was started in, has
+ * those.
  */
 import { writeSync } from 'node:fs';
 import { format } from 'node:util';
@@ -85,7 +74,10 @@ export function armTrialLog(here: ReleaseHere): void {
       // A console line starts a line of its own, even after a write that left
       // one open; the empty lines this leaves are dropped at the exit. Once
       // disarmed, nothing is formatted.
-      if (armed !== null) keep(`\n${format(...args)}\n`);
+      if (armed !== null) {
+        const onItsOwnLine = `\n${format(...args)}\n`;
+        keep(onItsOwnLine);
+      }
       original.apply(this, args);
     };
   }

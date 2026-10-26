@@ -1,24 +1,7 @@
 /**
- * MCPL tool lifecycle (RFC-007) and tool classes (RFC-008): recipe and
- * mcpl-servers.json policy, validated here and handed to the framework.
- *
- * - `toolLifecycle` on a server entry is the operator's grant and narrowing
- *   for that server's `toolLifecycle.observe` / `.inputs` paths (both are
- *   denied by default in the framework; stating a block is the grant).
- * - `toolClassOverrides` (recipe top level) re-classes tools by name — the
- *   way to class third-party MCP servers that will never declare
- *   `_meta["mcpl/class"]` themselves (RFC-008 §5.1 source 1).
- * - HOST_TOOL_CLASSES is this host's own knowledge of the tools its modules
- *   expose (RFC-008 §5.1 source 2). agent-framework classes its own built-in
- *   tools; this table covers connectome-host's modules on top.
- *
- * The vocabulary is mirrored rather than imported so recipe validation does
- * not depend on the framework version installed (older ones lack it).
- *
- * The read side lives here too: `readToolClasses` / `formatToolClassRows`
- * turn the framework's effective-class listing (RFC-008 §6) into what the
- * operator surfaces show (`/tools`, `GET /debug/tool-classes`, the web UI's
- * MCP tab).
+ * MCPL tool lifecycle (RFC-007) and tool classes (RFC-008). agent-framework
+ * denies a server's `toolLifecycle.observe` and `.inputs` paths by default;
+ * stating a block is the grant.
  */
 
 /** RFC-008 §4. Amended only by MCPL spec change, never per deployment. */
@@ -30,18 +13,9 @@ export type ToolClass = (typeof TOOL_CLASSES)[number];
 const CLASS_SET: ReadonlySet<string> = new Set(TOOL_CLASSES);
 
 /**
- * Classes of connectome-host's module tools (`<module>--<tool>`, patterns in
- * the RFC-007 §6.2 grammar). A tool not matched here, not overridden by the
- * recipe and not declared by its server is UNCLASSED — the restrictive
- * answer (observers may see that it ran, never its arguments). So when in
- * doubt, a tool is left out rather than guessed.
- *
- * Not listed, on purpose:
- * - `identity--request` calls an arbitrary private service API (it can write
- *   with POST, PUT, PATCH and DELETE as well as read), so no single class
- *   describes it.
- * - modules with no agent tools (webui, retrieval, instructions, tts-relay,
- *   tui, settings, subscription-gc).
+ * Patterns in the RFC-007 §6.2 grammar. A tool not matched here, not
+ * overridden by the recipe and not declared by its server is unclassed,
+ * which agent-framework handles as the most restrictive class (RFC-008 §5.2).
  */
 export const HOST_TOOL_CLASSES: Readonly<Record<string, readonly ToolClass[]>> = {
   // Presence: the typing/composition indicator policy.
@@ -78,10 +52,8 @@ const NARROWING_KEYS = new Set(['tools', 'classes', 'conversations']);
 const LIFECYCLE_KEYS = new Set(['observe', 'inputs', 'maxInputBytes']);
 
 /**
- * Validate a server's `toolLifecycle` block. Throws with a message naming
- * `where` on anything malformed: these are grants, and the framework treats a
- * malformed narrowing as admitting nothing, so a typo would silently turn an
- * intended grant off — better to fail at load.
+ * agent-framework reads a narrowing of the wrong shape as admitting nothing,
+ * so a malformed block would turn an intended grant off without a word.
  */
 export function validateToolLifecycle(value: unknown, where: string): void {
   if (!isPlainObject(value)) throw new Error(`${where} must be an object`);

@@ -58,8 +58,8 @@ async function makeHarness(opts: { maxExecutionMs: number; subagentRunMs: number
     agents: Map<string, unknown>;
   };
   fw.runEphemeralToCompletion = (agent: unknown) => {
-    // Register ephemeral agent into the framework's agents map the way the
-    // real implementation does, so any downstream dispatch still works.
+    // agent-framework's runEphemeralToCompletion registers the agent in its
+    // agents map while it runs.
     const a = agent as { name: string };
     fw.agents.set(a.name, agent);
     return new Promise((resolve) => {

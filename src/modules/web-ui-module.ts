@@ -241,6 +241,10 @@ interface ClientState {
 /** Default port — picked to be memorable and unlikely to collide. */
 const DEFAULT_PORT = 7340;
 
+const REPLY_FLUSH_BEFORE_SIGTERM_MS = 150;
+
+const FLEET_REQUEST_TTL_MS = 30_000;
+
 /** What to do about a missing bundle: a checkout builds it, and the npm
  *  package carries it built, without the web/ sources to build it from. */
 const BUNDLE_REMEDY =
@@ -585,12 +589,8 @@ export class WebUiModule implements Module {
         close: (ws) => this.onWsClose(ws as ServerWebSocket<WsData>),
       },
     });
-    // When port=0 is passed (test setups, ephemeral binds), the OS picks a
-    // free port and Bun.serve exposes it via `.port`. Re-read so the cached
-    // port and the default Origin allowlist match the actual listener.
-    // Bun's typings widen `port` to `number | undefined` for some socket
-    // listener types; fall back to the requested port if the runtime didn't
-    // expose one.
+    // With port 0 the OS picks the port, and Bun.serve gives it as `.port`,
+    // which Bun's types make optional (undefined on a unix socket).
     const boundPort = state.server.port ?? port;
     state.port = boundPort;
     if (this.config.allowedOrigins === undefined) {
@@ -608,10 +608,9 @@ export class WebUiModule implements Module {
       );
     }
 
-    // Provider calls include auxiliary compression requests that never emit a
-    // framework usage trace, so subscribe at the adapter ledger itself. This
-    // keeps the panel live for both conversational and memory-maintenance
-    // calls without polling the JSONL log.
+    // agent-framework traces usage only for agents' turns, not for the other
+    // calls through the adapter, such as compression's, so the panel follows
+    // the adapter's ledger.
     state.callLedgerDetacher = this.config.callLedger?.onUpdate((ledger) => {
       state.latestCallLedger = ledger;
       this.broadcast({ type: 'call-ledger', ledger });
@@ -672,11 +671,9 @@ export class WebUiModule implements Module {
     ss.autoStartRecords = null;
     ss.bindGeneration++;
 
-    // Live message pushes: assistant turns and tool results never surface as
-    // `message:added` traces (those fire only for external/MCPL sources), so
-    // subscribe to the message store itself. Feature-detected — older
-    // context-manager copies without onMessage simply don't get live pushes
-    // (clients still see streamed text via traces).
+    // agent-framework traces `message:added` only for messages added from
+    // outside a turn, never for an agent's turns or its tool results, so the
+    // pushes follow the message store, which hears every message.
     const cm0 = app.framework.getAllAgents()[0]?.getContextManager() as unknown as WindowCapableCm | undefined;
     if (cm0 && typeof cm0.onMessage === 'function' && typeof cm0.getMessageCount === 'function') {
       ss.messageListenerDetacher = cm0.onMessage((ev) => {
@@ -719,11 +716,9 @@ export class WebUiModule implements Module {
     // Only clear if the entire app reference changed in a way that matters —
     // for now, retain across setApp (keeps welcome fast).
 
-    // Single fan-out listener, which iterates the live client set while the
-    // WS lifecycle owns membership. Cheap as long as the client count stays
-    // small (admin UI). The framework this module followed before a session
-    // switch is stopped but keeps its listeners, so its subscription ends
-    // here, and the new framework's begins.
+    // A stopped agent-framework keeps its trace listeners, so the
+    // subscription to the framework followed before a session switch ends
+    // here.
     ss.stopFollowing?.();
     ss.stopFollowing = app.framework.onTrace((event: TraceEvent) => this.fanOutTrace(event));
 
@@ -1124,10 +1119,7 @@ export class WebUiModule implements Module {
   private async handleHttp(req: Request, server: ReturnType<typeof Bun.serve>): Promise<Response> {
     const url = new URL(req.url);
 
-    // Every HTTP route here is read-only — mutation happens over the WS.
-    // Wrong methods used to fall through to the same handlers (a POST
-    // /debug/context behaved exactly like the GET), which lies to API
-    // consumers probing the surface.
+    // Every route answers GET and HEAD only; anything else is a 405.
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       return new Response('Method Not Allowed', { status: 405, headers: { allow: 'GET, HEAD' } });
     }
@@ -1141,16 +1133,11 @@ export class WebUiModule implements Module {
 
     // WebSocket upgrade
     if (url.pathname === '/ws') {
-      // Origin check FIRST — drive-by CSRF on a localhost-bound WS is the
-      // failure mode this guards. Browsers do not enforce same-origin on
-      // `new WebSocket(...)` the way they do on fetch, so without an
-      // explicit check, any tab the operator opens could connect here.
+      // Browsers don't enforce same-origin on `new WebSocket(...)` as they do
+      // on fetch, so the Origin check comes first.
       if (!this.checkOrigin(req)) return new Response('Forbidden', { status: 403 });
-      // Full authority = basic auth OR a full session cookie (minted by
-      // /auth/basic). The cookie path exists because browsers reliably send
-      // cookies on WS upgrades but Chrome does NOT send cached basic-auth
-      // credentials — without it, password sign-in bounced back to the
-      // observer gate in a loop.
+      // Full authority: basic auth, or the full session cookie /auth/basic
+      // mints.
       const wsSession = sharedServer!.observerSessions.lookup(sessionTokenFromRequest(req));
       const basicOk = this.checkAuth(req) || (wsSession?.full ?? false);
       // Without full auth the upgrade is allowed only when observer grants
@@ -1162,15 +1149,14 @@ export class WebUiModule implements Module {
         data: { id, authed: basicOk, host: req.headers.get('host') ?? '' } satisfies WsData,
       });
       if (!ok) return new Response('Upgrade failed', { status: 400 });
-      // Bun returns undefined on success; the response is taken over by the upgrade.
+      // Once upgrade() returns true, Bun has answered with its own 101, and
+      // this Response is never sent.
       return new Response(null, { status: 101 });
     }
 
-    // HTTP auth: basic auth grants everything (historical behavior); an
-    // observer session cookie (minted after WS key auth) grants by scope;
-    // when observers are active the static app shell is public — it carries
-    // no data, and key-only devices must be able to load the SPA to
-    // authenticate at all.
+    // Basic auth, or a full session cookie, opens every route. An observer's
+    // session cookie opens routes by its grant's scopes. While observers are
+    // active the static app shell is public, since it carries no data.
     const session = sharedServer!.observerSessions.lookup(sessionTokenFromRequest(req));
     const basicOk = this.checkAuth(req) || (session?.full ?? false);
     const operatorAuthenticated = this.config.basicAuth !== undefined && basicOk;
@@ -1208,7 +1194,8 @@ export class WebUiModule implements Module {
       return this.unauthorized(isRetrievalTraceRoute);
     }
 
-    // Per-route scope gates for observer sessions (basic auth passes all).
+    // An observer session's scope for each route: 'debug' for /debug/* and
+    // /curve, 'health' for /healthz, /quota and /credential.
     if ((url.pathname.startsWith('/debug/') || url.pathname === '/curve') && !httpAllowed('debug')) {
       return this.unauthorized(isRetrievalTraceRoute);
     }
@@ -1223,9 +1210,8 @@ export class WebUiModule implements Module {
       return this.unauthorized();
     }
 
-    // Retrieval traces can include lesson contents, raw selector output, and
-    // opt-in recent conversation. Keep them operator-only: a password-authenticated
-    // full session is equivalent to Basic Auth, but observer `debug` scope is not.
+    // /debug/retrieval and its view are operator-only: basic auth, or the full
+    // session it mints; an observer's 'debug' scope isn't enough.
     if (isRetrievalTraceRoute && !operatorAuthenticated) return this.unauthorized(true);
 
     if (url.pathname === '/debug/retrieval/view') {
@@ -1240,14 +1226,10 @@ export class WebUiModule implements Module {
       return this.handleRetrievalTraces(url);
     }
 
-    // Fleet-scope proxying: every debug/health route accepts ?scope=<child>.
-    // The request is forwarded to that fleet child over the panel IPC verb
-    // and the child's JSON comes back as it sent it — same URLs, same
-    // payloads, whether the process answering is this one or a child, and an
-    // observer without 'ops' gets a health route's answer without its failure
-    // text from either (HEALTH_ROUTE_STRINGS). Keeps these endpoints
-    // curl-able for operators / connectome-doctor / the fleet hub without
-    // teaching any of them a second transport.
+    // Every debug and health route takes ?scope=<child>: the request goes to
+    // that fleet child, and its JSON comes back as it sent it, with the same
+    // URLs and payloads; an observer without 'ops' gets a health route's
+    // answer without its failure text from either.
     const scopeParam = url.searchParams.get('scope');
     if (scopeParam && scopeParam !== 'local') {
       const op = HTTP_PANEL_OPS[url.pathname];
@@ -1263,9 +1245,7 @@ export class WebUiModule implements Module {
       return this.handleContextMakeup(url);
     }
 
-    // Context curve: per-entry provenance of the live compiled window —
-    // cumulative raw-history tokens vs rendered tokens, by fold level.
-    // JSON at /debug/context/curve; the visualization page at /curve.
+    // The context curve: JSON at /debug/context/curve, its page at /curve.
     if (url.pathname === '/debug/context/curve') {
       return this.handleContextCurve(url);
     }
@@ -1294,11 +1274,9 @@ export class WebUiModule implements Module {
       return this.handleToolClasses(url);
     }
 
-    // Inline image bytes for transcript media refs (see serveMedia). A
-    // message's own image, at a top-level block path (`<n>`), is the same
-    // sensitivity tier as the transcript itself. Any other path, such as a
-    // nested one (`<n>.<m>`), which buildMediaBlock resolves only inside a
-    // tool's result, is the tool result's tier.
+    // A message's own image, at a top-level block path (`<n>`), needs the
+    // 'messages' scope; any other path, such as a tool result's image
+    // (`<n>.<m>`), needs 'tools' as well.
     if (url.pathname.startsWith('/media/')) {
       if (!httpAllowed('messages')) return this.unauthorized();
       const blockPath = url.pathname.slice('/media/'.length).split('/').slice(1).join('/');
@@ -1306,9 +1284,7 @@ export class WebUiModule implements Module {
       return this.serveMedia(url);
     }
 
-    // Liveness/health JSON for connectome-doctor and the fleet hub. Behind
-    // the same basic auth as everything else (checked above). Assembly lives
-    // in panel-data so fleet children serve the identical snapshot.
+    // Liveness and health JSON for connectome-doctor and the fleet hub.
     if (url.pathname === '/healthz') {
       const app = this.panelApp();
       if (!app) return Response.json({ error: 'app not bound yet' }, { status: 503 });
@@ -1339,28 +1315,19 @@ export class WebUiModule implements Module {
       return Response.json(keptStrings ? keepNamedStrings(credential, keptStrings) : credential);
     }
 
-    // Workspace file passthrough: /files/<mount>/<path...>
-    // Reads through WorkspaceModule.readFileFromDisk, which refuses a file
-    // that is itself a link unless the mount follows links (and, from
-    // agent-framework's release with anima-research/agent-framework#468, a
-    // link among its directories too), and reads a file only if its
-    // canonical path lies inside the mount.
+    // readFileFromDisk keeps the route inside the mount: it refuses a link the
+    // mount doesn't follow, and a file whose real path lies outside it.
     if (url.pathname.startsWith('/files/')) {
       return this.serveWorkspaceFile(url.pathname.slice('/files/'.length));
     }
 
-    // API namespace exhausted: anything still unmatched under /debug/ is a
-    // typo, wrong casing, or trailing slash — an honest 404 beats the SPA
-    // shell with a 200, which API consumers can't tell from data. (This was
-    // also the mechanism that swallowed real failures like the tokenizer
-    // 404 — the client saw 200/HTML instead of the error.)
+    // Anything still unmatched under /debug/ is a JSON 404, not the app shell.
     if (url.pathname.startsWith('/debug/')) {
       return Response.json({ error: `Unknown debug route: ${url.pathname}` }, { status: 404 });
     }
 
-    // Static SPA. Bundle assets get real 404s: falling back to index.html
-    // for a missing /assets/*.js serves HTML where the browser expects JS —
-    // a blank page with a MIME error instead of a diagnosable miss.
+    // Bundle assets get real 404s: a browser refuses an HTML page served
+    // where it expects a module script.
     const requested = url.pathname === '/' ? '/index.html' : url.pathname;
     return this.serveStatic(requested, { spaFallback: !url.pathname.startsWith('/assets/') });
   }
@@ -1411,11 +1378,8 @@ export class WebUiModule implements Module {
     return Response.json(keptStrings ? keepNamedStrings(result.data, keptStrings) : result.data);
   }
 
-  /**
-   * Counts-only state and bounded history for periodic context maintenance.
-   * Authentication is enforced by handleHttp before this method is reached.
-   * The framework snapshot deliberately contains no message or summary text.
-   */
+  /** GET /debug/context/maintenance: counts-only state and bounded history
+   *  of periodic context maintenance, with no message or summary text. */
   private handleContextMaintenance(): Response {
     const app = this.panelApp();
     if (!app) return Response.json({ error: 'app not bound yet' }, { status: 503 });
@@ -1449,14 +1413,14 @@ export class WebUiModule implements Module {
   }
 
   /**
-   * Preview the fold plan at a HYPOTHETICAL budget / tail, without applying it.
+   * A preview of the fold plan at a hypothetical budget and tail, applying
+   * nothing:
    *
    *   GET /debug/context/preview?budget=<tokens>[&tail=<tokens>][&agent=<name>][&render=1]
    *
-   * Delegates to panel-data's runContextPreview, which owns the honest budget
-   * accounting AND the process-wide single-flight + cooldown guard (a preview
-   * is a real compile that blocks the agent's event loop — see panel-data).
-   * 429 responses here are the guard, not failures.
+   * A preview is a synchronous compile, which pauses the agent while it
+   * runs, so previews run one at a time, with a cooldown after each: a 429
+   * is that guard, not a failure.
    */
   private handleContextPreview(url: URL): Response {
     const app = this.panelApp();
@@ -1470,14 +1434,16 @@ export class WebUiModule implements Module {
   }
 
   /**
-   * Debug endpoint: return the membrane-normalized request the framework would
-   * hand to the model if the agent were activated right now. Auth is already
-   * enforced by the caller (`handleHttp`).
+   * The membrane-normalized request the framework would hand the model if the
+   * agent were activated now:
    *
-   * Transparent by default: no inference of its own, no Chronicle writes, no
-   * external MCPL calls. Pass `?injections=1` to gather the dynamic injections
-   * (lessons/retrieval/MCPL context) too, which is NOT transparent: it can run
-   * inference and fire MCPL `beforeInference` hooks.
+   *   GET /debug/context[?agent=<name>][&injections=1][&pretty=1]
+   *
+   * By default it commits nothing of its own: no inference, no MCPL calls,
+   * and, as any compile does, it releases only a compression hold whose
+   * deadline has passed. `?injections=1` gathers the dynamic injections too
+   * (lessons, retrieval, MCPL context), which can run inference and fire MCPL
+   * `beforeInference` hooks.
    */
   private async handleDebugContext(url: URL): Promise<Response> {
     const app = this.panelApp();
@@ -1496,12 +1462,11 @@ export class WebUiModule implements Module {
   }
 
   /**
-   * Context curve (GET /debug/context/curve[?agent=<name>]): per-entry
-   * provenance of the live compiled window, with a feasibility verdict. The
-   * compile is a dry run, so it commits no fold resolutions; the one effect
-   * it keeps, releasing a compression hold whose deadline has passed, is
-   * described on buildContextCurve. No inference of its own, no message
-   * writes.
+   * GET /debug/context/curve[?agent=<name>]: per-entry provenance of the
+   * live compiled window, with a feasibility verdict. The compile is a dry
+   * run: it commits no fold resolutions and queues no compression, and, as
+   * any compile does, it releases a compression hold whose deadline has
+   * passed. No inference of its own, no message writes.
    */
   private async handleContextCurve(url: URL): Promise<Response> {
     const app = this.panelApp();
@@ -1548,11 +1513,14 @@ export class WebUiModule implements Module {
   }
 
   /**
-   * Context makeup: the segment breakdown of the agent's last live compile,
-   * beside an exact count of the next request as a preview builds it, via
-   * count_tokens (buildContextMakeup, which says what the preview does).
+   * The segment breakdown of the agent's last live compile, beside an exact
+   * count of the next request as a preview builds it:
    *
    *   GET /debug/context/makeup[?agent=<name>]
+   *
+   * The preview commits nothing of its own and, as any compile does,
+   * releases a compression hold whose deadline has passed; the count is one
+   * count_tokens call.
    */
   private async handleContextMakeup(url: URL): Promise<Response> {
     const app = this.panelApp();
@@ -1671,9 +1639,8 @@ export class WebUiModule implements Module {
     sharedServer!.clients.set(id, client);
 
     if (client.auth === 'pending') {
-      // In-band observer auth: tell the client what host its statement must
-      // bind, and give it a bounded window to present a verifiable hello.
-      // No data flows on this connection until then.
+      // The client has 15 s to present a verifiable hello, or the connection
+      // closes with 4401; nothing else flows on it until then.
       this.send(client, { type: 'observer-auth-required', host: ws.data.host });
       client.authTimer = setTimeout(() => {
         if (client.auth === 'pending') ws.close(4401, 'observer auth timeout');
@@ -1882,8 +1849,8 @@ export class WebUiModule implements Module {
       this.broadcastHostMode();
     } catch (err) {
       let message = err instanceof Error ? err.message : String(err);
-      // ResumeBlockedError: say which agent's context would not fit and why,
-      // not just "blocked".
+      // agent-framework's resume() refuses with ResumeBlockedError, whose
+      // verdicts name each agent whose context wouldn't fit.
       const verdicts = (err as { verdicts?: unknown } | null)?.verdicts;
       if (Array.isArray(verdicts) && verdicts.length > 0) {
         const lines = verdicts.map((v) => {
@@ -1921,15 +1888,8 @@ export class WebUiModule implements Module {
     }
   }
 
-  /**
-   * `/media/<messageId>/<blockPath>` — one inline image, streamed as bytes.
-   * Transcript frames carry only a `ref`; the browser fetches on render, so
-   * multi-MB base64 never rides the WebSocket and never inflates a welcome.
-   * Observer sessions need the `messages` scope (same tier as the transcript)
-   * for a message's own image, at a top-level block path, and `tools` as well
-   * for any other path, such as a tool result's image; the route checks both
-   * before a fleet child's request is sent on.
-   */
+  /** `/media/<messageId>/<blockPath>`: one inline image of a stored message,
+   *  as bytes. */
   private async serveMedia(url: URL): Promise<Response> {
     const rest = url.pathname.slice('/media/'.length);
     const slash = rest.indexOf('/');
@@ -1998,9 +1958,9 @@ export class WebUiModule implements Module {
       return;
     }
 
-    // Observer auth interlock: a pending connection may ONLY hello; a
-    // key-authenticated observer is read-only within its scopes. Full
-    // (basic-auth) clients skip both gates — historical behavior.
+    // A pending connection may send only observer-hello, and a
+    // key-authenticated observer only what observerMaySend allows; full
+    // clients skip both gates.
     if (parsed.type === 'observer-hello') {
       if (client.auth === 'pending') this.handleObserverHello(client, parsed.identity);
       // hello on an already-authenticated connection is a no-op
@@ -2475,7 +2435,7 @@ export class WebUiModule implements Module {
       kind,
       // 30s TTL — lessons/workspace queries are quick; if the child is wedged,
       // we don't want pending entries piling up forever.
-      expiresAt: Date.now() + 30_000,
+      expiresAt: Date.now() + FLEET_REQUEST_TTL_MS,
     });
     const ok = dispatch(corrId, fleet);
     if (!ok) {
@@ -2497,7 +2457,7 @@ export class WebUiModule implements Module {
       if (!client) continue;
       this.send(client, {
         type: 'error',
-        message: `${entry.kind} request timed out (child unresponsive after 30s)`,
+        message: `${entry.kind} request timed out (child unresponsive after ${FLEET_REQUEST_TTL_MS / 1000}s)`,
       });
     }
   }
@@ -2715,15 +2675,13 @@ export class WebUiModule implements Module {
     return out;
   }
 
-  /** Defer SIGTERM so the WS frame flushes. The signal runs the host's own
-   *  stop: headless mode's graceful shutdown, or in TUI mode the TUI's quit,
-   *  since OpenTUI ends the TUI on it. Readline and batch mode register no
-   *  SIGTERM listener. The exit covers a kill that throws. */
+  /** In TUI mode OpenTUI ends the TUI on SIGTERM, one of its default exit
+   *  signals. */
   private scheduleShutdown(): void {
     setTimeout(() => {
       try { process.kill(process.pid, 'SIGTERM'); }
       catch { process.exit(0); }
-    }, 150);
+    }, REPLY_FLUSH_BEFORE_SIGTERM_MS);
   }
 
   /** Honor the operator's response to a quit-confirm-required prompt.
@@ -3256,11 +3214,16 @@ export class WebUiModule implements Module {
     if (!current()) return;
     const childRecipes = await this.loadWelcomeRecipes();
     if (!current()) return;
+    this.welcomeAndJoinStream(client, childRecipes);
+  }
+
+  private welcomeAndJoinStream(
+    client: ClientState,
+    childRecipes: Parameters<WebUiModule['buildWelcome']>[0],
+  ): void {
     const welcome = this.buildWelcome(childRecipes);
     this.send(client, client.scopes === null ? welcome : this.observerWelcome(welcome, client.scopes));
     client.welcomed = true;
-    // Live trace forwarding is driven by the single fan-out listener
-    // installed in setApp(); membership is implicit in `sharedServer!.clients`.
   }
 
   /** The welcome as an observer with `scopes` gets it (scopeWelcome). When
@@ -3465,12 +3428,9 @@ export class WebUiModule implements Module {
   }
 
   /**
-   * Validate the Origin header against the configured allowlist. An empty
-   * allowlist means "no Origin check" — only sensible behind a proxy that
-   * enforces it for us. Same-origin native clients (curl, custom MCP
-   * tooling) typically send no Origin at all; we accept those as well, since
-   * the threat model here is browsers cross-origin connecting from another
-   * tab. Auth still gates anything sensitive.
+   * Checks the upgrade's Origin against the allowlist. An empty allowlist
+   * turns the check off. A request with no Origin is accepted: browsers send
+   * one on every WebSocket upgrade, and other clients usually don't.
    */
   private checkOrigin(req: Request): boolean {
     if (!sharedServer) return false;
@@ -3482,13 +3442,9 @@ export class WebUiModule implements Module {
     // don't.)
     if (!origin) return true;
     if (allow.includes(origin)) return true;
-    // Same-origin: the page making this upgrade was served by this very
-    // server, just via a hostname the static default list can't predict —
-    // Tailscale IP, MagicDNS name, LAN hostname. A hostile page on another
-    // origin cannot forge its Origin header, so "Origin host equals the
-    // request's Host header" is safe to allow and is exactly the case the
-    // localhost-only default was wrongly rejecting (page loads over HTTP,
-    // then every ws:// upgrade 403s).
+    // An Origin whose host and port are the request's Host is accepted: a page
+    // this server served under a name the default list can't predict, such as
+    // a Tailscale or LAN name. A page elsewhere can't forge its Origin.
     try {
       const originHost = new URL(origin).host;
       const host = req.headers.get('host');
@@ -3559,11 +3515,9 @@ function defaultAllowedOrigins(port: number): string[] {
 }
 
 /**
- * Constant-time string equality. Hashes both inputs with SHA-256 first so the
- * underlying compare runs on fixed-length 32-byte buffers — `timingSafeEqual`
- * itself throws on length mismatch, which leaks length, and direct buffer
- * compares of the raw strings would leak length too. Two HMAC-style
- * comparisons (same input through SHA-256 twice) is a standard pattern.
+ * Constant-time string equality: timingSafeEqual throws on unequal
+ * lengths, which would leak the length, so both inputs are hashed to
+ * 32-byte SHA-256 digests first.
  */
 function constantTimeStringEq(a: string, b: string): boolean {
   const ha = createHash('sha256').update(a, 'utf-8').digest();
@@ -3619,7 +3573,7 @@ function capText(s: string, cap: number): { text: string; truncated?: boolean } 
 export function toWireEntry(
   msg: MessageLike,
   index: number,
-  opts: { mediaRefs?: boolean } = {},
+  opts: { storedBlockIndices?: boolean } = {},
 ): WelcomeMessageEntry {
   const blocks: import('../web/protocol.js').MessageBlock[] = [];
   const textParts: string[] = [];
@@ -3629,7 +3583,7 @@ export function toWireEntry(
   // /media/. Only when the entry maps 1:1 onto one stored message (coalesced
   // shard runs do not — their block indices are synthetic).
   const mediaRef = (blockPath: string, mediaType: string): string | undefined =>
-    opts.mediaRefs !== false && typeof msg.id === 'string' && msg.id.length > 0 && mediaType.startsWith('image/')
+    opts.storedBlockIndices !== false && typeof msg.id === 'string' && msg.id.length > 0 && mediaType.startsWith('image/')
       ? `${encodeURIComponent(msg.id)}/${blockPath}`
       : undefined;
 
@@ -3792,8 +3746,8 @@ function coalesceAndFlatten(messages: readonly MessageLike[], startIndex: number
       .map((shard, k) => ({ shard, k }))
       .sort((a, b) => (a.shard.shardIndex ?? a.k) - (b.shard.shardIndex ?? b.k))
       .map(({ shard }) => shard);
-    // Merge adjacent text blocks with NO separator — shard cuts land
-    // mid-text, so reassembly must be byte-faithful concatenation.
+    // context-manager's shards are substrings of one body that join back with
+    // no separator, so their text is merged without one.
     const mergedContent: unknown[] = [];
     for (const blk of shards.flatMap((s) => [...s.content])) {
       const prev = mergedContent[mergedContent.length - 1] as { type?: string; text?: string } | undefined;
@@ -3806,7 +3760,7 @@ function coalesceAndFlatten(messages: readonly MessageLike[], startIndex: number
       }
     }
     const merged: MessageLike = { ...shards[0]!, content: mergedContent };
-    out.push(toWireEntry(merged, startIndex + runStart, { mediaRefs: false }));
+    out.push(toWireEntry(merged, startIndex + runStart, { storedBlockIndices: false }));
   }
   return out;
 }
@@ -3849,19 +3803,15 @@ function readHistory(
   }
 }
 
-/** The framework stores assistant turns under the agent's name (e.g.
- *  "commander", "miner") rather than the literal "assistant" string. The TUI
- *  treats anything not 'user' as agent output; mirror that here so the WebUI
- *  doesn't render restored agent turns as user messages on session resume. */
+/** agent-framework stores an agent's turns under the agent's name, not
+ *  'assistant'. */
 function normalizeParticipant(raw: string): WelcomeMessageEntry['participant'] {
   if (raw === 'user' || raw === 'system' || raw === 'tool') return raw;
   return 'assistant';
 }
 
-/** Build a human label for an MCPL trigger origin. The exact metadata shape
- *  varies by MCPL flavor (channel-incoming carries channelId; push-event has
- *  serverId + featureSet) — surface what's most informative without
- *  over-fitting to one server's schema. */
+/** MCPL channel-incoming metadata carries channelId, and push-event
+ *  metadata serverId and featureSet. */
 function describeTriggerOrigin(source: string, md: Record<string, unknown>): string {
   const serverId = typeof md.serverId === 'string' ? md.serverId : '?';
   if (source === 'mcpl:channel-incoming') {
@@ -3875,8 +3825,8 @@ function describeTriggerOrigin(source: string, md: Record<string, unknown>): str
   return source;
 }
 
-/** MCPL channel-incoming carries `author: { id, name }` in metadata; push
- *  events sometimes do via origin spread. Best-effort extraction. */
+/** MCPL channel-incoming metadata carries `author: { id, name }`; a push
+ *  event's carries one only where its origin does. */
 function extractAuthorName(md: Record<string, unknown>): string | undefined {
   const author = md.author;
   if (author && typeof author === 'object' && 'name' in author) {
@@ -3959,11 +3909,9 @@ function aggregateFleetUsage(ss: SharedServerState): TokenUsage {
 }
 
 /**
- * Cache policy for the SPA. Vite emits content-hashed files under
- * `assets/`, so those are safe to cache forever; `index.html` is the one
- * mutable entry point and must always be revalidated — with no header at
- * all, browsers applied heuristic caching and a tab could keep pairing a
- * stale index with a stale bundle across bundle swaps (2026-09-21, Fable).
+ * Vite names the files under `assets/` by their content, so they're
+ * cached for good, while `index.html` is revalidated every time: with no
+ * header a browser caches it heuristically.
  */
 function cacheControlFor(path: string): string {
   if (/[\\/]assets[\\/][^\\/]+-[A-Za-z0-9_-]{6,}\.[a-z0-9]+$/.test(path)) {

@@ -33,9 +33,8 @@ for (const [override, expected] of cases) {
         membrane: new Membrane(new MockAdapter({ defaultResponse: 'ok' }), { formatter: new NativeFormatter() }),
         agents: [{ name: 'resident', model: 'mock', systemPrompt: 'Resident.' }],
         modules: [],
-        // The framework's own awareness option, which connectome-host doesn't
-        // set: the default follows the framework's configuration, so 🔕
-        // joins 💤 there.
+        // agent-framework's own awareness option, which connectome-host doesn't set:
+        // the default follows it, so 🔕 joins 💤.
         discordAwarenessEmoji: '🔕',
         mcplServers: [{
           id: 'probe',

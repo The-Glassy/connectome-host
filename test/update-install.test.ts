@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import {
   ContractError, copyLabelPath, installPaths, moveCurrent, releaseDir, writeJsonAtomic, type CopyLabel, type Mark,
 } from '../src/update/contract.js';
-import { installRelease, machineInstallOps, type InstallOps } from '../src/update/install.js';
+import { SYNC_WIDTH, installRelease, machineInstallOps, type InstallOps } from '../src/update/install.js';
 import { HOST_ENTRY, LAUNCHER, RELEASE_HOST } from '../src/update/launcher.js';
 
 let dir: string;
@@ -38,10 +38,8 @@ function release(name: string, version = name, files: Record<string, string> = {
   return path;
 }
 
-/** A package manager that installs the host the last argument asks for, and
- *  pins it in package.json as npm and bun do, unless `outcome` says
- *  otherwise. Each call records what it was given: the files in its
- *  directory, with their bytes. */
+/** npm's `install --save-exact` and bun's `add --exact` write the version they
+ *  install into package.json. */
 function manager(outcome: {
   status?: number | null; output?: string; version?: string; manifest?: string | null; entry?: boolean; launcher?: boolean;
   files?: number;
@@ -394,7 +392,7 @@ describe('installing a release beside the running one', () => {
 
   test('syncs every file and directory it installed before its rename, and the releases directory after', async () => {
     const tmp = `${releaseDir(root, '0.12.0')}.tmp`;
-    const seen = await steps(() => installRelease(here(), '0.12.0', manager({ files: 40 })));
+    const seen = await steps(() => installRelease(here(), '0.12.0', manager({ files: SYNC_WIDTH * 2.5 })));
     const at = (step: string) => seen.indexOf(step);
     const renamed = at(`rename ${tmp}`);
     for (const path of [join(tmp, 'package.json'), join(tmp, 'package-lock.json'), join(tmp, HOST_ENTRY), join(tmp, LAUNCHER),
@@ -404,13 +402,13 @@ describe('installing a release beside the running one', () => {
     }
     // More entries than SYNC_WIDTH, each synced through fs/promises and its handle closed, all before the rename,
     // and no entry of the tree by a sync call.
-    const extra = Array.from({ length: 40 }, (_, i) => join(tmp, 'node_modules', 'many', `f${i}`));
+    const extra = Array.from({ length: SYNC_WIDTH * 2.5 }, (_, i) => join(tmp, 'node_modules', 'many', `f${i}`));
     for (const path of extra) {
       expect(at(`synced ${path}`)).toBeGreaterThan(-1);
       expect(at(`synced ${path}`)).toBeLessThan(renamed);
     }
     const synced = seen.filter((step) => step.startsWith('synced '));
-    expect(synced.length).toBeGreaterThan(40);
+    expect(synced.length).toBeGreaterThan(SYNC_WIDTH * 2.5);
     for (const step of synced) {
       expect(at(step.replace('synced', 'closed'))).toBeGreaterThan(-1);
       expect(at(step.replace('synced', 'closed'))).toBeLessThan(renamed);
@@ -449,7 +447,7 @@ describe('installing a release beside the running one', () => {
     expect(installed()).toEqual(['0.11.0', '0.13.0-rc.1']);
   });
 
-  test('runs one install at a time', async () => {
+  test('runs one install at a time, and the next one removes the release nothing names', async () => {
     let finish!: () => void;
     let entered!: () => void;
     const inRun = new Promise<void>((done) => { entered = done; });
@@ -485,7 +483,7 @@ describe('installing a release beside the running one', () => {
 });
 
 describe('removing releases nothing needs', () => {
-  test('keeps current, the running release, the copy\'s, the mark\'s and the one being installed; removes the rest and cut installs', async () => {
+  test('keeps current, the running release, the copy\'s, the mark\'s and the one being installed; removes the rest and what cut installs and removals left', async () => {
     for (const name of ['0.9.0', '0.10.0', '0.10.2', '0.13.0']) release(name);
     mkdirSync(join(installPaths(root).releases, 'notes'));
     mkdirSync(join(installPaths(root).releases, '0.12.0.tmp', 'node_modules'), { recursive: true });

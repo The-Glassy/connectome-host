@@ -992,8 +992,7 @@ describe('mcpl_restart', () => {
     expect(calls).toEqual(['connect:discord', 'restart:discord']);
   });
 
-  // An inherited name read straight off the overlay would be a function,
-  // which the note would call a malformed entry.
+  // An inherited name read straight off the overlay would be a function.
   test('a server named like an inherited key gets no note about an entry it lacks', async () => {
     const { stub } = makeStubFramework();
     await (stub as unknown as { connectMcplServer: (c: { id: string; command: string }) => Promise<void> })
@@ -1198,12 +1197,9 @@ describe('mcpl_list', () => {
   });
 });
 
-// Since agent-framework scrubs a stdio child's environment, an overlay entry
-// that replaces the operator's definition runs without whatever of it the
-// entry lacks: a resident's shell came back from mcpl_restart without
-// SESSION_SERVER_TOKEN (2026-10-08), the restart reported success, and the
-// first call said only "Connection lost". The receipts now say what the host
-// knows, by name only.
+// agent-framework gives a stdio child only an allowlist of the host's
+// environment and the server's declared env, so an overlay entry that replaces
+// the operator's definition runs without whatever of its env the entry lacks.
 describe('an overlay entry that replaces the operator definition', () => {
   const operatorShell = {
     id: 'shell',
@@ -2231,10 +2227,11 @@ describe('a failed call says what changed and what to do', () => {
 
     // One whose read after the disconnect is refused has unloaded the server
     // and recorded nothing, and the unload is the call to make again.
+    const readAfterTheDisconnect = 2;
     let reads = 0;
     read = spyOn(mcplConfig, 'readAgentOverlay').mockImplementation((path: string) => {
       reads += 1;
-      return reads === 2 ? own('EMFILE', path) : original(path);
+      return reads === readAfterTheDisconnect ? own('EMFILE', path) : original(path);
     });
     let unrecorded: string;
     try {
@@ -2301,7 +2298,7 @@ describe('a failed call says what changed and what to do', () => {
       'Nothing was restarted: "reason" isn\'t a field of mcpl-admin--mcpl_restart, which takes id.',
     );
     expect(calls).toEqual(['connect:shell']);
-    // A key given no value is absent, as the utils validator reads it.
+    // A key given no value is absent, as agent-framework's utils validator reads it.
     expect((await call(mod, 'mcpl_restart', { id: 'shell', reason: undefined })).success).toBe(true);
     expect(calls).toEqual(['connect:shell', 'restart:shell']);
   });

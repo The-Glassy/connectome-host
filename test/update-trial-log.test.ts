@@ -70,7 +70,7 @@ describe('a release on trial', () => {
     expect(log).toMatchObject({ v: 1, release: '0.13.0', mark: 'm1' });
     expect(log.lines.slice(0, 4)).toEqual(['one 2', 'three four', 'five', 'Error: six']);
     expect(log.lines.at(-1)).toBe('err-partial');
-    // An error nothing caught is Bun's to report, past console: the service's log alone has it.
+    // Bun reports an error nothing caught itself, past console.
     expect(stderr).toContain('Bun reports this itself');
     expect(log.lines.join('\n')).not.toContain('Bun reports this itself');
     expect(statSync(installPaths(root).trialLog).mode & 0o777).toBe(0o600);

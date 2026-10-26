@@ -1,6 +1,4 @@
 /**
- * Reading agent-framework's usage samples.
- *
  * `inference:usage` and `inference:completed` carry a stream's usage so far,
  * not one provider call's. Membrane's `TurnUsageAccumulator.addRound` adds
  * each call into the stream's totals, the stream emits the sum after each
@@ -11,20 +9,15 @@
  * again.
  *
  * `input` is the calls' fresh input alone: membrane reports usage with cache
- * reads and writes outside it, so one call's prompt is its fresh input plus its
- * cache reads and writes. That holds for an adapter that declares its cache
- * convention. Membrane passes an `unknown` adapter's counts through unchanged,
- * and where that input already includes the cached span, the prompt counts the
- * span twice. Gemini's very likely does: Google defines `promptTokenCount` as
- * the whole prompt, including explicitly cached content. Membrane's hits would
- * be implicit, which Google doesn't address, so until membrane declares that
- * adapter `cache-inclusive`, a Gemini cache hit likely reads high here.
+ * reads and writes outside it, so one call's prompt is its fresh input plus
+ * its cache reads and writes. That holds for an adapter that declares its
+ * cache convention. Membrane passes an `unknown` adapter's counts through
+ * unchanged, and where that input already includes the cached span, the
+ * prompt counts the span twice.
  */
 
-/** A usage sample as the trace events carry it. membrane 0.5.87 leaves a
- *  cache count out until a call in the stream reports a nonzero one;
- *  membrane #104 keeps a reported 0, and leaves out only a count no call
- *  reported. The fold reads a missing count and 0 alike, as no tokens. */
+/** Membrane can leave a cache count out of a sample; the fold reads a
+ *  missing count and 0 alike, as no tokens. */
 export interface UsageSample {
   input?: number;
   output?: number;

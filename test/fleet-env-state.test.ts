@@ -68,7 +68,7 @@ describe('Fleet child environment stays outside Chronicle state', () => {
     expect(await restoredEnv([{ ...configured, dataDir: 'data/other' }])).toBeUndefined();
   });
 
-  test('identity mismatch warns about withheld restart overrides without logging values', () => {
+  test('identity mismatch warns about withheld restart overrides without logging values, and a matching or absent declaration warns nothing', () => {
     const configured = {
       name: 'leaf', recipe: 'test/mock-recipe.json',
       env: { TOKEN: 'current-secret' }, autoStart: false,

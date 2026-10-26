@@ -74,8 +74,7 @@ describe('quarantineAlarm', () => {
     });
   });
 
-  // agent-framework bounds each data field to 2,000 characters of JSON, and
-  // nothing reads a spans list there: the words carry the span count.
+  // agent-framework bounds each alert data field to 2,000 characters of JSON.
   test("the data never carries context-manager's spans, whatever they hold", () => {
     const lists = [[span(1, 2), span(2, 1)], [], [span(1, 1), span(2, 1), span(3, 1), span(4, 1)], null, 'two'];
     for (const spans of lists) {

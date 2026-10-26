@@ -400,15 +400,7 @@ describe('what grant and revoke say', () => {
     const later = await m.handleToolCall(call('grant', { key: key('C'), label: 'phone', scopes: ['health'], expires: '2999-01-01T00:00:00Z' }));
     expect((later.data as { message: string }).message).toBe('Updated: phone → [health] until 2999-01-01T00:00:00Z. Live within ~3s.');
     expect(stored(path).observers).toEqual([{ key: key('C'), label: 'phone', scopes: ['health'], expires: '2999-01-01T00:00:00Z' }]);
-    // Each form taken is written in ECMAScript's own form, with T, Z and an
-    // offset's colon, and the answer names that text. The grant stores it,
-    // apart from a time without a zone, which it stores as the instant it
-    // read, in UTC. The registry's Date.parse reads what's stored as meant:
-    // a date alone as its start in UTC, a time without a zone in the host's
-    // time zone (UTC under bun test, unless TZ is set as the run starts; the
-    // next test takes another), and a zone as given. The answer names the
-    // instant for a date alone or a time without a zone, which don't say
-    // their zone.
+    // bun test runs in UTC unless TZ is set as the run starts.
     const local = (y: number, mo: number, d: number, h: number) => new Date(y, mo - 1, d, h).toISOString().replace('.000Z', 'Z');
     for (const [typed, written, expires, meant, zoned] of [
       ['2999-01-01', '2999-01-01', '2999-01-01', '2999-01-01T00:00:00Z', false],
@@ -445,10 +437,7 @@ describe('what grant and revoke say', () => {
   });
 
   test('a time without a zone is read in the host\'s zone and stored as that instant, which reads the same in any zone', async () => {
-    // This grants in Europe/Berlin, then reads the stored expiry back in the
-    // zone the run started in: bun test's UTC, unless TZ was set as it
-    // started. The finally restores that zone, or UTC when none was set:
-    // deleting TZ would put the process in the machine's own zone, not bun
+    // Deleting TZ would put the process in the machine's own zone, not bun
     // test's UTC.
     const zone = process.env.TZ;
     const noonHere = new Date(2999, 0, 1, 12).getTime();

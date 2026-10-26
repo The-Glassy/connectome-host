@@ -11,7 +11,8 @@
  *   bun src/index.ts --headless --exit-when-idle   # One-shot: exit when agents go idle after first inference
  *
  * Environment variables:
- *   ANTHROPIC_API_KEY   - Required (not needed for recipe provider "mock")
+ *   ANTHROPIC_API_KEY   - Recipe provider "anthropic" needs this or one of
+ *                         the next two
  *   ANTHROPIC_AUTH_TOKEN - Subscription (OAuth) bearer instead of the API key
  *   ANTHROPIC_OAUTH_CREDENTIALS_FILE - JSON credentials file (accessToken +
  *                         refreshToken + expiresAt, Claude Code's shape or flat);
@@ -19,7 +20,8 @@
  *                         Point it at a COPY, never at ~/.claude/.credentials.json.
  *   ANTHROPIC_OAUTH_AUTO_REFRESH - 1/true: rotate on a 401 without asking
  *                         (default: alert + operator action)
- *   MODEL               - Override model (default: from recipe or claude-opus-4-6)
+ *   MODEL               - Override model (default: from recipe, else
+ *                         claude-opus-4-6, or gpt-5.4 for openai-codex)
  *   DATA_DIR            - Data directory for sessions (default: ./data)
  */
 
@@ -125,9 +127,8 @@ const config = {
   anthropicAutoRefresh: ['1', 'true'].includes((process.env.ANTHROPIC_OAUTH_AUTO_REFRESH ?? '').trim().toLowerCase()),
   openaiApiKey: process.env.OPENAI_API_KEY,
   openrouterApiKey: process.env.OPENROUTER_API_KEY,
-  // Deliberately NO fallback to OPENAI_API_KEY: agent.baseUrl is
-  // recipe-controlled, so a fallback would silently send a real OpenAI
-  // credential as a Bearer token to whatever endpoint a recipe names.
+  // The key for recipe provider "openai-compatible"; OPENAI_API_KEY is never
+  // used in its place, since the recipe names the endpoint.
   openaiCompatibleApiKey: process.env.OPENAI_COMPATIBLE_API_KEY,
   codexBinary: process.env.CODEX_BINARY,
   model: process.env.MODEL,
@@ -240,14 +241,8 @@ async function resolveRecipe(): Promise<Recipe> {
 const SAVED_RECIPE_DIRECTORY_LINE =
   'Move or remove it, then start again: the host saves its recipe there as a file, so the source of a bind mount there has to be a file that exists before the container starts.';
 
-/**
- * Stop startup on a failure to save or clear the saved recipe, naming its
- * path, and saying so where the cause is a directory there: a save fails with
- * EISDIR, and a clear with ERR_FS_EISDIR, when a directory there is what
- * stopped it, itself or (for a save) through a link. Any other failure, such
- * as a clear of a link in a data directory the host can't write, prints its
- * own error.
- */
+/** A save that a directory stops fails with EISDIR, and a clear with
+ *  ERR_FS_EISDIR. */
 function stopAtSavedRecipe(failedTo: string, err: unknown): never {
   const code = (err as NodeJS.ErrnoException | null)?.code;
   const directory = code === 'EISDIR' || code === 'ERR_FS_EISDIR' ? savedRecipeDirectory(config.dataDir) : null;
@@ -373,7 +368,8 @@ async function createFramework(
   let historyModule: HistoryModule | null = null;
   if (modules.history) {
     // storePath is sessionManager.getStorePath(id) → basename = session id.
-    const historyOpts = historyModuleOptions(modules.history, agentName, basename(storePath));
+    const sessionId = basename(storePath);
+    const historyOpts = historyModuleOptions(modules.history, agentName, sessionId);
     historyModule = new HistoryModule(historyOpts);
     assertSemanticSearchRegistered(historyModule, historyOpts.semantic !== undefined);
     moduleInstances.push(historyModule);
@@ -387,9 +383,10 @@ async function createFramework(
     if (typeof modules.wake === 'object' && 'policies' in modules.wake) {
       gateOptions.config = modules.wake as import('@animalabs/agent-framework').GateConfig;
     }
-    // Privileged-users file for the `sleep` tool — users who may wake the agent
-    // through a sleep window. Stable across sessions (install-dir relative);
-    // override with SLEEP_PRIVILEGED_FILE. Edit the file to change the list.
+    // The `sleep` tool's privileged users, who may wake the agent through a
+    // sleep window: ./sleep-privileged.json in the working directory, shared by
+    // every session, unless SLEEP_PRIVILEGED_FILE names another. Edit the file
+    // to change the list.
     gateOptions.privilegedUsersPath =
       process.env.SLEEP_PRIVILEGED_FILE || resolve('./sleep-privileged.json');
   }
@@ -532,11 +529,9 @@ async function createFramework(
   let webUiModule: WebUiModule | null = null;
   if (modules.webui !== undefined && modules.webui !== false) {
     const webuiConfig = typeof modules.webui === 'object' ? modules.webui : {};
-    // Observer grants (docs/observability.md): data/observers.json by
-    // default, overridable via OBSERVERS_FILE. The feature is inert until
-    // the file holds at least one grant. The companion ObserversModule
-    // gives the agent grant/revoke tools over the same file — interiority
-    // access is the agent's to give.
+    // The Web UI's observer grants: $DATA_DIR/observers.json unless
+    // OBSERVERS_FILE names another; with no grant in it, no observer is
+    // admitted.
     const observersPath = process.env.OBSERVERS_FILE || resolve(config.dataDir, 'observers.json');
     webUiModule = new WebUiModule({
       port: webuiConfig.port,
@@ -664,8 +659,8 @@ agents: [agentConfig],
     // Client-side programmatic tool calling (code_execution) — recipe opt-in.
     ...(recipe.codeExecution ? { codeExecution: recipe.codeExecution } : {}),
     ...(conversations ? { conversations } : {}),
-    // Tune-out's subconscious resident (agent-framework#77) — recipe opt-in,
-    // passed through verbatim; the framework owns the defaults.
+    // Passed through as written: agent-framework fills in the subconscious's
+    // defaults.
     ...(recipe.subconscious ? { subconscious: recipe.subconscious } : {}),
     // MCPL RFC-008 tool classes: this host's module table, and the recipe's
     // operator overrides. Spread as an untyped object so an agent-framework
@@ -1027,8 +1022,6 @@ function countLines(path: string): number {
 let beforeFatalExit: (() => Promise<void>) | undefined;
 
 async function main() {
-  // The store audit runs in place of a host: it opens the stores of the data
-  // directories given as a start of this release would, and starts no agent.
   // It exits as soon as what it wrote has gone out, since an extension the
   // saved recipe names can keep the process alive, as a timer can.
   if (process.argv[2] === AUDIT_STORES_FLAG) {
@@ -1069,10 +1062,7 @@ async function main() {
   // framework's module list inside createFramework().
   const settingsModule = new SettingsModule(recipe.agent.thinking?.effort);
 
-  // Append each LLM request/response/error to a JSONL log per process lifetime
-  // (matches the Hermes-era `llm-calls.<iso>.jsonl` visibility). The adapter
-  // also reads SettingsModule.getReasoning() per call to inject `thinking`
-  // when the agent has toggled reasoning on.
+  // One JSONL call log per process lifetime.
   const llmLogPath = join(
     config.dataDir,
     `llm-calls.${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`,
@@ -1088,9 +1078,8 @@ async function main() {
   // Credential monitor, bound below once the adapters exist; the Codex
   // login prompt needs to reach it, and the adapter is built first.
   let credentialsRef: CredentialMonitor | null = null;
-  // The Codex subscription adapter owns ChatGPT login/refresh independently
-  // of the API-key transports below — unless an inference gate holds the
-  // logins (CODEX_GATE_TOKEN + CODEX_BASE_URL), in which case no Codex CLI runs.
+  // With CODEX_GATE_TOKEN and CODEX_BASE_URL set, an inference gate holds the
+  // Codex logins and no Codex CLI runs.
   const codexGate = provider === 'openai-codex' ? codexGateAuth(process.env) : undefined;
   const codexAdapter = provider === 'openai-codex'
     ? new CodexSubscriptionAdapter({
@@ -1145,23 +1134,9 @@ async function main() {
         xTitle: recipe.agent.name ?? recipe.name,
       })
     : undefined;
-  // Bedrock: an alternate Claude transport. (Historically for models that
-  // left the direct API — as of 2026-07-31 every 3.5-era id and opus-4-0514
-  // are EOL on Bedrock too, so what actually runs here is the 4-era via
-  // inference profiles.) The adapter reads AWS_* env vars (AWS_REGION
-  // defaults us-west-2) and maps standard Claude model IDs to Bedrock IDs.
-  // Uses the Anthropic-native message shape, so NativeFormatter applies
-  // unchanged. Prompt caching is model-gated
-  // (bedrockModelSupportsPromptCaching): pre-GA families (Claude 3,
-  // 3.5 Sonnet) off, everything currently invokable caches — verified by
-  // live probe 2026-07-31. Still no CallLedger — it's
-  // anthropic-transport-only for now; cache metrics are visible in
-  // llm-calls.jsonl via the logging wrapper.
-  // BEDROCK_BASE_URL routes bedrock-runtime calls through an inference
-  // gateway (gate.animalabs.ai/bedrock/<credSet>) — mirrors the
-  // ANTHROPIC_BASE_URL hook below. The gate reads the agent token from the
-  // SigV4 Credential (AWS_ACCESS_KEY_ID slot), discards the client
-  // signature, and re-signs with real AWS creds held on the gate box.
+  // The Bedrock adapter reads the AWS_* variables (AWS_REGION defaults to
+  // us-west-2). BEDROCK_BASE_URL routes its bedrock-runtime calls through an
+  // inference gateway.
   const bedrockAdapter = provider === 'bedrock'
     ? new LoggingBedrockAdapter(
         { baseURL: process.env.BEDROCK_BASE_URL || undefined },
@@ -1224,10 +1199,10 @@ async function main() {
       const fw = appRefForDebt?.framework;
       if (!fw) return null;
       const agents = fw.getAllAgents();
-      // ONE adapter serves every agent in this process, so this hook cannot
-      // tell whose request it is decorating: stamp the primary's trigger only
-      // while no other agent (subconscious, fork, ephemeral) has a turn in
-      // flight — see stampedTrigger().
+      // membrane's dynamicHeaders callback is told only the request's lane, and
+      // one adapter serves every agent in this process, so it can't tell whose
+      // request it stamps: the primary's trigger is stamped only while no other
+      // agent has a turn in flight.
       const t = stampedTrigger({
         agents: agents.map((a) => a.name),
         primary: primaryAgent()?.name,
@@ -1283,15 +1258,13 @@ async function main() {
                   : {}),
               }),
           baseURL: process.env.ANTHROPIC_BASE_URL || undefined,
-          // Double-gated (see src/gate-telemetry.ts): GATE_TELEMETRY=1 AND a
-          // configured base URL, so the stamp can only ever go to a
-          // gateway the operator has declared — never to the vendor's
-          // default endpoint (review finding on the first wiring).
+          // Only with GATE_TELEMETRY=1 and ANTHROPIC_BASE_URL set, so the stamp
+          // goes only to a gateway the operator has named, never to the
+          // vendor's default endpoint.
           ...(gateTelemetryDynamicHeaders ? { dynamicHeaders: gateTelemetryDynamicHeaders } : {}),
-          // Hold this agent's cached prefix warm across idle gaps. Only fires
-          // when the entry is actually near expiry, so a busy agent costs
-          // nothing; only the 1h-TTL primary lane is eligible (the module
-          // skips anything else). Off with cacheKeepalive.enabled: false.
+          // membrane refreshes the cached prefix once it has gone
+          // refreshAfterMs (45 minutes by default) untouched, so a busy agent
+          // costs nothing, and only on the primary lane.
           cacheKeepalive: {
             enabled: recipe.agent.cacheKeepalive?.enabled !== false,
             ...(recipe.agent.cacheKeepalive?.maxIdleHours !== undefined
@@ -1352,10 +1325,9 @@ async function main() {
     // promptCaching:false must disable internal calls too, and on bedrock
     // the model gate decides (see bedrockModelSupportsPromptCaching).
     ...membraneCachingOverride(recipe, resolveModel(recipe)),
-    // Anchor the assistant role for internal callers that don't set
-    // request.assistantParticipant themselves (autobio compression,
-    // executeMerge). Mismatch here flips stored assistant turns to
-    // role: 'user' and the API rejects tool_use blocks riding along.
+    // membrane sends this participant's messages as assistant turns for a
+    // request that names no assistant participant ('Claude' otherwise), and the
+    // API refuses a tool_use block in a user turn.
     assistantParticipant: agentName,
   });
 

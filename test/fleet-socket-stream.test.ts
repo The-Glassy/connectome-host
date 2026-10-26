@@ -56,7 +56,6 @@ async function connectionFixture() {
 }
 
 // A transport callback may contain only part of a line or ordered batch.
-// Completion belongs to Fleet's decoded event observation, not socket data.
 function observeEvents(fleet: FleetModule) {
   const received: any[] = [];
   let progress: (() => void) | undefined;
@@ -83,7 +82,6 @@ function observeEvents(fleet: FleetModule) {
 }
 
 // An incomplete UTF-8 byte can be received without producing decoded data.
-// Observe raw receipt on a later turn, after the transport pushed those bytes.
 async function writePrefix(socket: Socket, peer: Socket, prefix: Buffer) {
   const target = socket.bytesRead + prefix.length;
   const deadline = performance.now() + 3000;

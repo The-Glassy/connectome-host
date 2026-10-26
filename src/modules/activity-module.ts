@@ -1,10 +1,6 @@
 /**
- * ActivityModule — surfaces agent composition activity (typing indicators)
- * to a configurable set of MCPL channels while inference is active.
- *
- * Recipe-seeded initial channels; agent can add/remove at runtime via tools.
- * State persists via Chronicle. Typing refresh is owned by the framework's
- * ChannelRegistry (~7s interval, matches Discord/Zulip expiry).
+ * agent-framework's ChannelRegistry refreshes a channel's typing indicator
+ * every 7 s while it shows.
  */
 
 import type {
@@ -37,22 +33,14 @@ interface ActivityState {
 const ORIGIN_HEAD_BYTES = 2048;
 
 /**
- * Parse a loose origin hint out of a file's top lines. Used when an inference
- * is triggered by a workspace file rather than an incoming channel message:
- * if the file's head declares the conversation it's replying to, we route the
- * typing indicator to that topic. Returns null if no hint is found.
- *
- * Recognized shapes:
+ * A workspace file's head can name the conversation it answers, and typing
+ * for an inference the file triggers shows there. Recognized shapes:
  *   - `origin: zulip#<channel>#<topic>`
  *   - `reply-to: zulip:<channel>/<topic>`
- *   - YAML frontmatter (delimited by leading `---` ... `---`) containing both
- *     `channel: <name>` and `topic: <name>` — matches the clerk's existing
- *     knowledge-request ticket convention. Loose `channel:`/`topic:` lines
- *     outside a frontmatter block are ignored to avoid mis-routing on prose
- *     files (e.g. README headings, mined artifacts quoting Zulip metadata).
- *
- * All platform hints currently resolve to `zulip:<channel>` — extend here when
- * another MCPL server wants in on origin-routing.
+ *   - YAML frontmatter (between leading `---` lines) holding both
+ *     `channel: <name>` and `topic: <name>`; `channel:` and `topic:` lines
+ *     outside a frontmatter block are ignored.
+ * Every hint names `zulip:<channel>`. Returns null if the head holds none.
  */
 function parseOriginHint(text: string): { channelId: string; topic: string } | null {
   const compact = text.match(/origin:\s*zulip#([^\s#]+)#(\S+)/i);
@@ -80,10 +68,8 @@ export class ActivityModule implements Module {
   private ctx: ModuleContext | null = null;
   private framework: AgentFramework | null = null;
   private channels = new Set<string>();
-  /** Whether a turn is under way, as far as typing shows it. One flag for
-   *  every agent: the framework itself clears every channel's typing when
-   *  any turn's stream reaches its end, so a turn's end, whoever's, is when
-   *  the channels stop showing it. */
+  /** One flag for every agent: agent-framework clears every channel's typing
+   *  when any turn's stream ends, unless it hands the turn to a successor. */
   private typingActive = false;
   /** The framework's trace subscription, ended in stop(), as onTrace's
    *  contract asks, and when setFramework replaces the framework. */
@@ -128,8 +114,8 @@ export class ActivityModule implements Module {
     this.typingActive = false;
     this.unsubscribeTrace = framework.onTrace((event: TraceEvent) => {
       if (event.type === 'inference:started') {
-        // A silent wake's prose is suppressed. agent-framework's own Discord
-        // module shows no typing for one either.
+        // agent-framework suppresses a silent wake's prose, and its own Discord
+        // module shows no typing for one.
         if ((event as { silent?: unknown }).silent === true) return;
         this.onInferenceStarted();
       } else if (STREAM_END_TRACES.has(event.type)) {

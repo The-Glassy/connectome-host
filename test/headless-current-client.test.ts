@@ -71,8 +71,8 @@ const count = (text: string, needle: string) => text.split(needle).length - 1;
 
 // The reset tests need a client that never reads. On CI they must run, so a
 // runner without python3 fails them; elsewhere they skip, and say so.
-const noPython = !Bun.which('python3') && !process.env.CI;
-if (noPython) console.warn('headless-current-client: python3 not found, so the reset test is skipped');
+const pythonMissingOutsideCi = !Bun.which('python3') && !process.env.CI;
+if (pythonMissingOutsideCi) console.warn('headless-current-client: python3 not found, so the reset test is skipped');
 
 test('a client that ends cleanly stops being current, and its disconnect is logged once', async () => {
   await withChild(async ({ log, open }) => {
@@ -141,13 +141,9 @@ test.skipIf(!nodeSockets)("a superseded client's later commands are dropped, not
   });
 }, 20_000);
 
-// A client that exits with the child's writes unread in its receive queue
-// resets its socket: on Linux the child reads ECONNRESET, as when a parent
-// dies with events queued. Where sockets behave as in Node (Bun 1.4.2) the
-// socket then closes with an error and no 'end', which only 'close' sees.
-// Bun 1.3.14 gives it an 'end' instead, so there this test passes on main's
-// source too: it shows the reset is handled, not that 'close' is needed.
-test.skipIf(noPython)('a client whose socket is reset stops being current, and its disconnect is logged once', async () => {
+// A client that exits with the child's writes unread resets its socket,
+// which then gets an error and 'close' but no 'end'.
+test.skipIf(pythonMissingOutsideCi)('a client whose socket is reset stops being current, and its disconnect is logged once', async () => {
   await withChild(async ({ dir, log, open }) => {
     const raw = spawn('python3', ['-c', [
       'import select, socket, sys, time',

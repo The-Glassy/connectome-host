@@ -18,12 +18,12 @@ import {
 
 type Post = { channelId: string; text: string; agentName: string };
 
-/** How agent-framework 0.24 refuses a publish: its words, and the `reason`
- *  that names the cause, where the destination refused it; `throw` makes the
+/** How agent-framework refuses a publish: its words, and the `reason` that
+ *  names the cause, where the destination refused it; `throw` makes the
  *  publish throw instead. */
 type Refusal = { error: string; reason?: string } | 'throw';
-/** agent-framework 0.24's refusal for a channel whose server is down while
- *  the host reconnects (channel-registry.ts, handleToolPublish's sendRefusal). */
+/** agent-framework's refusal for a channel whose server is down while the
+ *  host reconnects. */
 const serverDown = (server: string, channelId: string): Refusal => ({
   error: `Nothing was posted to channel "${channelId}": the "${server}" server isn't connected, and this host is reconnecting to it, so try again later.`,
   reason: 'server-down',
@@ -47,10 +47,10 @@ function harness(cfg: Partial<NoticesModuleConfig> = {}, opts: { brokenServers?:
         // String(): a malformed push's channel reaches here as whatever it was.
         const id = String(channelId);
         const server = id.slice(0, id.indexOf(':'));
-        const absent = broken.has(server);
+        const absentAtCall = broken.has(server);
         const hold = holds.get(channelId);
         if (hold) { holds.delete(channelId); await hold; }
-        if (absent) {
+        if (absentAtCall) {
           const refusal = (opts.refusal ?? serverDown)(server, id);
           if (refusal === 'throw') throw new Error(`Server not found: ${server}`);
           return { success: false, ...refusal };
@@ -909,7 +909,8 @@ describe('absent chat server', () => {
     const after = h.calls.n;
     for (let i = 0; i < 6; i++) await h.settle();
     expect(h.calls.n).toBe(after); // quiescent
-    expect(after).toBeLessThanOrEqual(6); // 2 attempts + at most 2 re-flushes × 2 channels
+    const firstPosts = 2, reflushesAtMost = 2, channels = 2;
+    expect(after).toBeLessThanOrEqual(firstPosts + reflushesAtMost * channels); // 2 attempts + at most 2 re-flushes × 2 channels
     expect(h.module.episodeState()[0]!.pending.sort()).toEqual(['zulip:a', 'zulip:b']);
     expect(h.posts).toEqual([]);
   });

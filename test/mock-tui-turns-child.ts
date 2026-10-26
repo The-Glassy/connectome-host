@@ -1,14 +1,6 @@
 /**
- * runTui driven through its own key handler and its own trace subscription,
- * for test/tui-turns.test.ts. The fake app's framework sends the traces each
- * step names to every listener, as agent-framework's emitTrace calls each
- * one, and its abortInference aborts only once told an agent's model call is
- * in flight, then sends `inference:aborted` alone, as agent-framework
- * 0.22.3's does. In the `subagents`, `subagent-exhausted`, numbered-fork,
- * fork-figures and fleet-parents scenarios its subagent module stands in for
- * the host's.
- * Prints one `TUI_STEP` line of JSON per step: the frame's text and the
- * aborts asked for so far.
+ * The fake framework sends each trace to every listener in turn, as
+ * agent-framework's emitTrace calls each one.
  */
 import { mock } from 'bun:test';
 import * as core from '@opentui/core';
@@ -109,17 +101,20 @@ const watchdog = setTimeout(() => { process.stdout.write(`TUI_ERROR timed out in
 void runTui(app as unknown as Parameters<typeof runTui>[0]);
 await initialized;
 
-// runTui registered its key handler before it followed the framework, so a
-// listener registered now hears each key after runTui's handler has run.
+// keyInput calls its keypress listeners in the order they were added, and
+// runTui added its key handler before it followed the framework, so a
+// listener added now hears each key after runTui's handler has run.
 let keysHandled = 0;
 renderer.keyInput.on('keypress', () => { keysHandled++; });
+
+const letAKeptInterruptTry = (): Promise<void> => Promise.resolve();
 
 async function pressed(press: () => void, what: string): Promise<void> {
   const before = keysHandled;
   press();
   await until(() => keysHandled > before, `${what} handled`);
   // A kept interrupt's abort runs on a microtask.
-  await Promise.resolve();
+  await letAKeptInterruptTry();
 }
 
 const escape = (): Promise<void> => pressed(() => mockInput.pressEscape(), 'Escape');
@@ -155,9 +150,9 @@ async function play(): Promise<void> {
     // the follower has none of.
     await command('hello');
     await until(async () => (await frame()).includes('You: hello'), 'the message to show');
-    await step('sent');
+    await step('sent, before its turn starts');
     await escape();
-    await step('sent, Escape');
+    await step('sent, before its turn starts, Escape');
 
     first.send('inference:started');
     first.setAbortable(true);
@@ -169,7 +164,7 @@ async function play(): Promise<void> {
     await step('compiling');
     first.setAbortable(true);
     first.send('inference:tokens');
-    await Promise.resolve();
+    await letAKeptInterruptTry();
     await step('compiled');
 
     // A turn moved to the background with Ctrl+B, which the status line
@@ -188,10 +183,10 @@ async function play(): Promise<void> {
     await escape();
     await step('retry wait, Escape');
     first.send('inference:started');
-    await Promise.resolve();
+    await letAKeptInterruptTry();
     first.setAbortable(true);
     first.send('inference:tokens');
-    await Promise.resolve();
+    await letAKeptInterruptTry();
     await step('retried');
 
     first.send('inference:started');
@@ -252,7 +247,7 @@ async function play(): Promise<void> {
     // spawn-1's call goes out: its kept interrupt aborts it.
     first.setAbortable(true, 'spawn-1');
     first.send('inference:tokens', { agentName: 'spawn-1' });
-    await Promise.resolve();
+    await letAKeptInterruptTry();
     await step('subagent compiled');
   } else if (scenario === 'numbered-fork-failed' || scenario === 'numbered-fork-exhausted') {
     for (const name of ['web', 'web-1']) {

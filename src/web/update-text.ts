@@ -16,7 +16,7 @@
  */
 
 /** What one version in an update's range records of its cost: null where it
- *  records nothing (releases.ts, Release). */
+ *  records nothing. */
 export interface Cost {
   version: string;
   breaking: boolean | null;
@@ -29,8 +29,8 @@ export interface ReadCheck {
   ok: true;
   /** The release Update would install, or null when none is newer. */
   candidate: string | null;
-  /** Every version after the running one up to the candidate, oldest first
-   *  (rangeOf). */
+  /** Every version after the running one up to the candidate, oldest
+   *  first. */
   costs: Cost[];
   /** The candidate's Bun floor when this Bun is below it. */
   bunFloorUnmet: string | null;
@@ -42,16 +42,16 @@ export interface ReadCheck {
 export type Check = ReadCheck | { at: string; ok: false; error: string };
 
 /** How the last switch or Go back ended, by the journal. A fallback carries
- *  the last lines the failed release kept itself (trial-log.ts), or null when
- *  it kept none. */
+ *  the last lines the failed release kept itself, or null when it kept
+ *  none. */
 export type SwitchOutcome =
   | { outcome: 'committed'; from: string; to: string; at: string }
   | { outcome: 'fell-back'; from: string; to: string; at: string; reason: string; trialLog: string[] | null }
   | { outcome: 'refused'; step: string; from: string; to: string; at: string; reason: string };
 
-/** One host's state after a switch's quiesce (quiesce.ts): `host` is "this
- *  host" or the child's name. A host that can't be counted, such as a child
- *  that didn't answer or a host serving again, says why. */
+/** One host's state after a switch's quiesce: `host` is "this host" or the
+ *  child's name. A host that can't be counted, such as a child that didn't
+ *  answer or a host serving again, says why. */
 export type HostQuiet =
   | { host: string; answered: true; drained: boolean; activeTurnAgents: string[]; backgroundScripts: number }
   | { host: string; answered: false; why: string };
@@ -225,7 +225,7 @@ function busyHostLines(hosts: HostQuiet[]): string[] {
         host.activeTurnAgents.length > 0
           ? `mid-turn: ${list(host.activeTurnAgents)}`
           : 'not drained, though no agent holds a turn: a wake is waiting on an auxiliary call before its turn starts',
-        // Drain doesn't wait for them, and the stop ends them.
+        // Drain doesn't wait for them.
         ...(host.backgroundScripts > 0
           ? [`${host.backgroundScripts} background script${host.backgroundScripts === 1 ? '' : 's'}, which a stop ends`]
           : []),

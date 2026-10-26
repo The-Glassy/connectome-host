@@ -1,7 +1,4 @@
-// Serializes one llm-calls record to its JSONL line. Shared by the three
-// writers: the generic decorator (logging-provider-wrapper.ts) and the
-// Anthropic and Bedrock subclasses (logging-adapter.ts,
-// logging-bedrock-adapter.ts), so the size guard has one owner.
+// Serializes one llm-calls record to its JSONL line.
 //
 // Every line, its newline included, stays within MAX_RECORD_BYTES of UTF-8.
 // A record that fits is written exactly as JSON.stringify gives it. One over
@@ -15,11 +12,6 @@
 // the line, so a restored call has only what its line kept. Every step keeps
 // an anomalous call's `anomaly` and the call's `messageId` and `requestId`,
 // the handles a call is reported upstream by (the last step bounded).
-//
-// Serializing never throws; each writer still guards its own append.
-// serializeRecordOutcome also says which step the line came from, so a
-// writer can tell what its line kept (the Anthropic adapter's anomaly alert
-// says whether the request was saved).
 
 import { Buffer } from 'node:buffer';
 import { boundText } from './logging-error-fields.js';
@@ -128,9 +120,7 @@ function lastResort(record: Record<string, unknown>, unserializable: boolean): {
 
 /**
  * The record's JSONL line, its newline included, within MAX_RECORD_BYTES of
- * UTF-8. Each fallback's `truncated` marker says what it dropped: the
- * generic writer's existing markers, and "raw request dropped" for a line
- * that keeps its raw response.
+ * UTF-8. Each fallback's `truncated` marker says what it dropped and why.
  */
 export function serializeRecord(record: Record<string, unknown>): string {
   return serializeRecordOutcome(record).line;

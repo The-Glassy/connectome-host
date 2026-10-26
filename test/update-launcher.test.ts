@@ -26,6 +26,8 @@ import {
 } from '../src/update/launcher.js';
 import { copyTree, removeTree, spaceTaken } from '../src/update/data-swap.js';
 
+const ROOM_MARGIN = 256 * 2 ** 20;
+
 let dir: string;
 let root: string;
 let data: string;
@@ -83,7 +85,7 @@ function child(name: string, path: string, pid: number | null = null, bootId: st
   writeJsonAtomic(childrenFilePath(data), { v: 1, children: [{ name, pid, bootId, dataDir: path }] });
 }
 
-/** Stand in a read-only filesystem for `paths`: access with W_OK answers EROFS. */
+/** On a read-only filesystem, access with W_OK fails with EROFS. */
 function readOnlyFilesystem(paths: string[]): { mockRestore(): void } {
   const realAccess = fs.accessSync;
   return spyOn(fs, 'accessSync').mockImplementation(((path: fs.PathLike, mode?: number) => {
@@ -314,7 +316,7 @@ describe('what a switch copies', () => {
     const group = Bun.spawn(['sh', '-c', 'sleep 300 & exit 0'], { detached: true, stdio: ['ignore', 'ignore', 'ignore'] });
     try {
       await group.exited;
-      // The leader has ended and been reaped; its sleep runs on in its group.
+      // A process group outlives its reaped leader while a member runs.
       expect(machineOps().pidAlive(group.pid)).toBe(false);
       expect(machineOps().groupAlive(group.pid)).toBe(true);
       process.kill(-group.pid, 'SIGKILL');
@@ -922,7 +924,7 @@ describe('a switch', () => {
   });
 
   test("a settings file on a read-only filesystem needs no room for its writing in place", async () => {
-    const need = 2 * spaceTaken(data) + 2 * spaceTaken(settings) + 256 * 2 ** 20;
+    const need = 2 * spaceTaken(data) + 2 * spaceTaken(settings) + ROOM_MARGIN;
     mark({ to: '0.11.0', why: 'update' });
     free = need;
     const ro = readOnlyFilesystem([settings]);
@@ -936,7 +938,7 @@ describe('a switch', () => {
   test('refused one byte short of the room for the copy and its restore, summed on one filesystem, and goes ahead with it', async () => {
     // The copy and the staged restore of the data directory, and of the settings
     // file the copy, the kept content and the content written back in place.
-    const need = 2 * spaceTaken(data) + 3 * spaceTaken(settings) + 256 * 2 ** 20;
+    const need = 2 * spaceTaken(data) + 3 * spaceTaken(settings) + ROOM_MARGIN;
     mark({ to: '0.11.0', why: 'update' });
     free = need - 1;
     expect(await decide(root, ops())).toEqual({ release: '0.10.2', trial: false });
@@ -1297,7 +1299,7 @@ describe('a Go back', () => {
   test("a place the newer release removed: the Go back puts it back from the copy, and makes nothing before its line", async () => {
     const kid = join(dir, 'kid');
     mkdirSync(kid);
-    // A mode the usual umasks (022, 002, 077) would each cut.
+    // Each usual umask (022, 002, 077) would cut this mode.
     chmodSync(kid, 0o777);
     writeFileSync(join(kid, 'store.txt'), 'the child wrote this');
     child('kid', kid);
@@ -1371,7 +1373,7 @@ describe('a Go back', () => {
     await committedSwitch();
     mark({ id: 'g1', to: '0.10.2', why: 'go-back' });
     await decide(root, ops());
-    // A directory where the settings file was: no file can be put back there.
+    // A directory where the settings file was, which no file can replace.
     rmSync(settings);
     mkdirSync(settings);
     await expect(decide(root, ops())).rejects.toThrow(/going back to 0\.11\.0 and its data failed: .*is a directory now/);
@@ -1389,7 +1391,7 @@ describe('a Go back', () => {
     mark({ id: 'g1', to: '0.10.2', why: 'go-back' });
     const o: LauncherOps = { ...ops(), importModule: async (path) => {
       if (LINE_OK()) {
-        // A directory where the settings file was: no file can be put back there.
+        // A directory where the settings file was, which no file can replace.
         if (statSync(settings).isFile()) {
           rmSync(settings);
           mkdirSync(settings);
@@ -1758,7 +1760,7 @@ describe('a Go back', () => {
     }
   }
   // Every capability but CAP_FOWNER, bit 3.
-  const NO_CAPS = '000001fffffffff7';
+  const CAPS_BUT_FOWNER = '000001fffffffff7';
   const FOWNER = '0000000000000008';
 
   test("a Go back refuses, before its line, to take away a file another owns from a sticky directory another owns, unless it holds CAP_FOWNER", async () => {
@@ -1766,7 +1768,7 @@ describe('a Go back', () => {
     const agent = join(work, 'mcpl-servers.agent.json');
     writeFileSync(agent, '{"agent":1}');
     mark({ id: 'g1', to: '0.10.2', why: 'go-back' });
-    await owned({ under: [work], others: [work, agent], sticky: [work], caps: NO_CAPS }, async () => {
+    await owned({ under: [work], others: [work, agent], sticky: [work], caps: CAPS_BUT_FOWNER }, async () => {
       expect(await decide(root, ops())).toEqual({ release: '0.11.0', trial: false });
     });
     expect(reports.find((l) => l.includes("didn't go ahead"))).toContain(`${agent} is in ${work}, which has the sticky bit, and ` +
@@ -1791,7 +1793,7 @@ describe('a Go back', () => {
     const agent = join(work, 'mcpl-servers.agent.json');
     writeFileSync(agent, '{"agent":1}');
     mark({ id: 'g1', to: '0.10.2', why: 'go-back' });
-    for (const [self, caps] of [[4242, null], [4242, ''], [0, NO_CAPS]] as const) {
+    for (const [self, caps] of [[4242, null], [4242, ''], [0, CAPS_BUT_FOWNER]] as const) {
       reports = [];
       mark({ id: 'g1', to: '0.10.2', why: 'go-back' });
       await owned({ self, under: [work], others: [work, agent], sticky: [work], caps }, async () => {
@@ -1829,7 +1831,7 @@ describe('a Go back', () => {
       writeFileSync(agent, '{"agent":1}');
       mark({ id: 'g1', to: '0.10.2', why: 'go-back' });
       const sticky = name.includes('without the sticky bit') ? [] : [work];
-      await owned({ under: [work], others: others(agent), sticky, caps: NO_CAPS }, async () => {
+      await owned({ under: [work], others: others(agent), sticky, caps: CAPS_BUT_FOWNER }, async () => {
         expect(await decide(root, ops())).toEqual({ release: '0.10.2', trial: true });
       });
       expect(reports.some((l) => l.includes('sticky bit'))).toBe(false);
@@ -1841,7 +1843,7 @@ describe('a Go back', () => {
     await committedSwitch();
     const sessions = join(data, 'sessions');
     mark({ id: 'g1', to: '0.10.2', why: 'go-back' });
-    await owned({ under: [data], others: [data, sessions], sticky: [data], caps: NO_CAPS }, async () => {
+    await owned({ under: [data], others: [data, sessions], sticky: [data], caps: CAPS_BUT_FOWNER }, async () => {
       expect(await decide(root, ops())).toEqual({ release: '0.11.0', trial: false });
     });
     expect(reports.find((l) => l.includes("didn't go ahead"))).toContain(`${sessions} is in ${data}, which has the sticky bit, and ` +
@@ -1852,7 +1854,7 @@ describe('a Go back', () => {
     reports = [];
     // A refused request is dropped, so it is asked for again.
     mark({ id: 'g1', to: '0.10.2', why: 'go-back' });
-    await owned({ under: [data], others: [data], sticky: [data], caps: NO_CAPS }, async () => {
+    await owned({ under: [data], others: [data], sticky: [data], caps: CAPS_BUT_FOWNER }, async () => {
       expect(await decide(root, ops())).toEqual({ release: '0.10.2', trial: true });
     });
     expect(reports.some((l) => l.includes('sticky bit'))).toBe(false);
@@ -1876,7 +1878,7 @@ describe('a Go back', () => {
     reports = [];
     // A refused request is dropped, so it is asked for again.
     mark({ id: 'g1', to: '0.10.2', why: 'go-back' });
-    await owned({ under: [data], unwritable: [sessions], caps: NO_CAPS }, async () => {
+    await owned({ under: [data], unwritable: [sessions], caps: CAPS_BUT_FOWNER }, async () => {
       expect(await decide(root, ops())).toEqual({ release: '0.10.2', trial: true });
     });
     expect(store()).toBe('A wrote this');
@@ -1886,7 +1888,7 @@ describe('a Go back', () => {
     await committedSwitch();
     const sessions = join(data, 'sessions');
     mark({ id: 'g1', to: '0.10.2', why: 'go-back', keepData: true });
-    await owned({ under: [data], others: [sessions], unwritable: [sessions], caps: NO_CAPS }, async () => {
+    await owned({ under: [data], others: [sessions], unwritable: [sessions], caps: CAPS_BUT_FOWNER }, async () => {
       expect(await decide(root, ops())).toEqual({ release: '0.11.0', trial: false });
     });
     const said = reports.find((l) => l.includes("didn't go ahead"))!;
@@ -1902,7 +1904,7 @@ describe('a Go back', () => {
     writeFileSync(loose, 'newer');
     const sessions = join(data, 'sessions');
     mark({ id: 'g1', to: '0.10.2', why: 'go-back' });
-    await owned({ under: [data], others: [loose, sessions], unwritable: [loose], caps: NO_CAPS }, async () => {
+    await owned({ under: [data], others: [loose, sessions], unwritable: [loose], caps: CAPS_BUT_FOWNER }, async () => {
       expect(await decide(root, ops())).toEqual({ release: '0.10.2', trial: true });
     });
     expect(store()).toBe('A wrote this');
@@ -1913,7 +1915,7 @@ describe('a Go back', () => {
     const link = join(data, 'link');
     symlinkSync(join(data, 'sessions'), link);
     mark({ id: 'g1', to: '0.10.2', why: 'go-back' });
-    await owned({ under: [data], others: [data], linkOthers: [link], sticky: [data], caps: NO_CAPS }, async () => {
+    await owned({ under: [data], others: [data], linkOthers: [link], sticky: [data], caps: CAPS_BUT_FOWNER }, async () => {
       expect(await decide(root, ops())).toEqual({ release: '0.11.0', trial: false });
     });
     expect(reports.find((l) => l.includes("didn't go ahead"))).toContain(`${link} is in ${data}, which has the sticky bit`);
@@ -1921,12 +1923,12 @@ describe('a Go back', () => {
 
   for (const [name, arrangement, says] of [
     ['a directory in the data directory that another owns and this process can\'t write',
-      () => ({ under: [data], others: [join(data, 'sessions')], unwritable: [join(data, 'sessions')], caps: NO_CAPS }),
+      () => ({ under: [data], others: [join(data, 'sessions')], unwritable: [join(data, 'sessions')], caps: CAPS_BUT_FOWNER }),
       () => `${join(data, 'sessions')} is a directory another owns that this process can't write, and the fallback, if 0.11.0 ` +
         `fails before it commits, moves it out of ${data}, which a directory allows only to a process that may write it. Give ` +
         `this user write on ${join(data, 'sessions')}, or make this user its owner`],
     ['an entry another owns in a sticky data directory another owns',
-      () => ({ under: [data], others: [data, join(data, 'sessions')], sticky: [data], caps: NO_CAPS }),
+      () => ({ under: [data], others: [data, join(data, 'sessions')], sticky: [data], caps: CAPS_BUT_FOWNER }),
       () => `${join(data, 'sessions')} is in ${data}, which has the sticky bit, and this process owns neither, so the fallback, ` +
         `if 0.11.0 fails before it commits, couldn't move it. Make this user the owner of ${join(data, 'sessions')} or of ` +
         `${data}, or take the sticky bit off ${data}`],
@@ -1935,7 +1937,7 @@ describe('a Go back', () => {
         const kid = join(dir, 'kid');
         mkdirSync(join(kid, 'store'), { recursive: true });
         child('kid', kid);
-        return { under: [kid], others: [join(kid, 'store')], unwritable: [join(kid, 'store')], caps: NO_CAPS };
+        return { under: [kid], others: [join(kid, 'store')], unwritable: [join(kid, 'store')], caps: CAPS_BUT_FOWNER };
       },
       () => `${join(dir, 'kid', 'store')} is a directory another owns that this process can't write, and the fallback`],
   ] as const) {
@@ -1952,7 +1954,7 @@ describe('a Go back', () => {
 
   for (const [name, others, caps] of [
     ['while it holds CAP_FOWNER', () => [data, join(data, 'sessions')], FOWNER],
-    ['while it owns the entries', () => [data], NO_CAPS],
+    ['while it owns the entries', () => [data], CAPS_BUT_FOWNER],
   ] as const) {
     test(`a switch goes ahead over a sticky data directory another owns ${name}`, async () => {
       mark({ to: '0.11.0', why: 'update' });
@@ -1968,7 +1970,7 @@ describe('a Go back', () => {
     const sessions = join(data, 'sessions');
     mark({ id: 'g1', to: '0.10.2', why: 'go-back' });
     mounts = ['/', sessions];
-    await owned({ under: [data], others: [sessions], unwritable: [sessions], caps: NO_CAPS }, async () => {
+    await owned({ under: [data], others: [sessions], unwritable: [sessions], caps: CAPS_BUT_FOWNER }, async () => {
       expect(await decide(root, ops())).toEqual({ release: '0.11.0', trial: false });
     });
     const said = reports.find((l) => l.includes("didn't go ahead"))!;
@@ -2025,7 +2027,7 @@ describe('a Go back', () => {
     }
   });
 
-  test("a Go back that would take away a file refuses when the list of mounts can't be read", async () => {
+  test("a Go back that would take away a file refuses when the list of mounts can't be read, with no directory to check", async () => {
     await committedSwitch();
     // With no directory to check, the file is what needs the list.
     rmSync(data, { recursive: true });
@@ -2164,7 +2166,7 @@ describe('a Go back', () => {
     const copied = (path: string) => join(installPaths(root).copy, label.items.find((i) => i.path === path)!.name);
     // The data's staging; the settings file's newer content kept and written
     // back by a fallback, and the older content kept and written in place.
-    const need = spaceTaken(copied(data)) + 2 * spaceTaken(settings) + 2 * spaceTaken(copied(settings)) + 256 * 2 ** 20;
+    const need = spaceTaken(copied(data)) + 2 * spaceTaken(settings) + 2 * spaceTaken(copied(settings)) + ROOM_MARGIN;
     mark({ id: 'g1', to: '0.10.2', why: 'go-back' });
     free = need - 1;
     expect(await decide(root, ops())).toEqual({ release: '0.11.0', trial: false });
@@ -2523,7 +2525,7 @@ describe('the lock', () => {
 
   test('a stale lock another start took first under the same number, and one another removed first, are told apart', () => {
     const { lock } = installPaths(root);
-    // The other start's number is the stale holder's own, reused; its time isn't.
+    // A pid can be reused, so the other start's is the stale holder's; its time isn't.
     writeJsonAtomic(lock, { v: 1, pid: 4242, bootId: boot, at: '2026-10-20T00:00:00Z' });
     let raced = false;
     const reused: LauncherOps = {
@@ -2622,7 +2624,8 @@ describe('a Go back from a shell', () => {
     expect(reports.at(-1)).toContain('restoring the copy of its data taken');
     expect(reports.at(-1)).toContain('This replaces the request to 0.12.0 that stood');
     // A standing mark this release can't read is replaced too, and named so.
-    writeJsonAtomic(installPaths(root).mark, { v: 1, id: '../x', at: '2026-10-20T00:00:00Z', to: '0.12.0', why: 'update' });
+    const idThisReleaseCantRead = '../x';
+    writeJsonAtomic(installPaths(root).mark, { v: 1, id: idThisReleaseCantRead, at: '2026-10-20T00:00:00Z', to: '0.12.0', why: 'update' });
     expect(goBackFromShell(root, [], ops())).toBe(0);
     expect(reports.at(-1)).toContain("This replaces the request to a release this release can't read that stood");
   });

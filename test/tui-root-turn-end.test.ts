@@ -40,9 +40,8 @@ describe('rootTurnEnd', () => {
   });
 
   test('an exhausted stream that nothing ended before shows as a failure, with the framework\'s words', () => {
-    // agent-framework 0.22.3 sends it alone, as "Stream aborted: <reason>",
-    // for a stream aborted for a reason other than a stop, which it doesn't
-    // treat as deliberate; a stop ends with `aborted`.
+    // agent-framework sends inference:exhausted alone, as "Stream aborted: <reason>",
+    // for a stream aborted other than by a stop, which ends with `aborted`.
     expect(rootTurnEnd({ type: 'inference:exhausted', error: 'Stream aborted: timeout' }, true)).toEqual({
       status: 'error', background: 'drop', line: { text: '(turn ended: Stream aborted: timeout)', tone: 'error' },
     });

@@ -11,7 +11,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { createServer, type Server } from 'node:net';
 import { tmpdir, uptime } from 'node:os';
 import { join, resolve } from 'node:path';
-import { FleetModule, type FleetModuleConfig } from '../src/modules/fleet-module.js';
+import { CLOCK_SLACK_MS, FleetModule, type FleetModuleConfig } from '../src/modules/fleet-module.js';
 
 const dirs: string[] = [];
 const fleets: FleetModule[] = [];
@@ -487,13 +487,8 @@ describe('fleet refusals name what the agent can do', () => {
     }
   }, 20_000);
 
-  // No process outlives a boot, so a record from an earlier boot has none,
-  // whatever holds its pid now: after a reboot, a daemon often does. pid 1
-  // stands in for it, since it's always in use. A socket that a power loss
-  // left, beside a pid a process of this user took, gets as far as a
-  // reattach, which fails. Where the record and the host both have a boot
-  // id, it decides, whatever the clock says, as on a machine whose clock
-  // stepped forward after it booted; otherwise the record's start time does.
+  // pid 1 stands in for a pid something took after a reboot, since it's always
+  // in use.
   test('a record from an earlier boot holds neither its name nor its directory', async () => {
     const helper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
     const servers: Server[] = [];
@@ -512,7 +507,7 @@ describe('fleet refusals name what the agent can do', () => {
         old: record('old', 1, beforeBoot),
         recent: record('recent', 1, Date.now()),
         // Within the minute of slack, a record counts as this boot's.
-        edge: record('edge', 1, Date.now() - uptime() * 1000 - 30_000),
+        edge: record('edge', 1, Date.now() - uptime() * 1000 - CLOCK_SLACK_MS / 2),
         skewed: record('skewed', 1, beforeBoot, 'this-boot'),
         'other-boot': record('other-boot', 1, Date.now(), 'an-earlier-boot'),
         'old-socket': record('old-socket', helper.pid!, beforeBoot),
@@ -747,7 +742,7 @@ describe('fleet refusals name what the agent can do', () => {
     const { dir, call, launch } = setup();
     const shared = join(dir, 'shared');
     expect((await launch('first', {}, { dataDir: shared })).success).toBe(true);
-    // Killed outright, it leaves its socket and pid file behind.
+    // A SIGKILL runs no cleanup, so the socket and pid file stay.
     process.kill((await call('status', { name: 'first' })).data.pid, 'SIGKILL');
     await until(async () => (await call('status', { name: 'first' })).data.status === 'crashed');
     expect((await launch('second', {}, { dataDir: shared })).error).toBe(

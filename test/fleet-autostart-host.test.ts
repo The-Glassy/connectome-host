@@ -44,8 +44,7 @@ afterEach(() => {
     try { if (host.exitCode === null) host.kill('SIGKILL'); } catch { /* gone */ }
   }
   // SIGKILL skips the host's exit handler, which stops its children, and a
-  // child runs detached, so one a failed run leaves is stopped here, once it
-  // has written its pid file.
+  // detached child outlives it.
   for (const pidFile of pidFiles.splice(0)) {
     const pid = Number(pidIn(pidFile));
     try { if (pid > 0) process.kill(pid, 'SIGKILL'); } catch { /* gone */ }

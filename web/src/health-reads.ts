@@ -17,14 +17,8 @@
  * child's snapshot and a failed read's error aren't ordered.
  */
 
-/** Whether a /healthz answer passed the grant check. The host checks the
- *  grant before anything else can fail (src/modules/web-ui-module.ts: the
- *  route's grant ahead of the fleet child's proxy and of the read's own
- *  503, 500 or panel error), so every status the host answers but 401 and
- *  403 says the grant holds, a failed read's included. A proxy in front of
- *  the host can answer 502 or 504 with no grant checked; that counts as a
- *  pass too, which lets the next read go out, and a refusal then stops the
- *  reads again. */
+/** A proxy in front of the host can answer 502 or 504 with no grant checked;
+ *  that counts as a pass too. */
 export const passedGrant = (status: number): boolean => status !== 401 && status !== 403;
 export class HealthReads {
   private asked = 0;

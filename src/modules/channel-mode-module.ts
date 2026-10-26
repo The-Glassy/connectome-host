@@ -79,14 +79,9 @@ export class ChannelModeModule implements Module {
   constructor(config: ChannelModeConfig = {}) {
     this.serverId = config.serverId ?? 'discord';
     this.gcModuleName = config.gcModuleName ?? 'subscription-gc';
-    // The default goes to the gate whenever a call leaves debounceMs out,
-    // and the gate (agent-framework's EventGate) refuses a debounce outside
-    // its bounds, so passing such a default through would fail every one of
-    // those calls. A number above zero, Infinity included, is clamped to the
-    // nearer bound, the closest the gate allows to what the operator asked
-    // for. Zero, a negative number or anything else gives the fallback, as
-    // the module has always read zero and negatives as unset. Either way,
-    // whoever runs the host is told.
+    // agent-framework's EventGate refuses a policy whose debounce is outside its
+    // bounds, and the default goes to the gate whenever a call leaves debounceMs
+    // out.
     const configured = config.defaultDebounceMs;
     if (typeof configured === 'number' && configured > 0) {
       const asked = Math.round(configured);
@@ -262,15 +257,11 @@ export class ChannelModeModule implements Module {
     // 1. Subscribe to ambient traffic.
     steps.push(await this.callToolStep('open', 'channel_open', { channelId, serverId: this.serverId }));
 
-    // 2. Upsert the per-channel ambient debounce policy (prepend so it beats a
-    //    broad ambient defer/debounce — first match wins). handleToolCall has
-    //    checked debounceMs against the gate's bounds; a refusal here is the
-    //    gate's own.
-    // The module may have stopped while the channel opened.
     if (!this.ctx || !this.framework) {
       steps.push({ step: 'gate-policy', ok: false, detail: 'the channel-mode module stopped before this step' });
     } else {
       try {
+        // Prepended: agent-framework's gate takes the first rule that matches.
         this.framework.addGatePolicy(
           {
             name: this.policyName(channelId),
@@ -302,7 +293,7 @@ export class ChannelModeModule implements Module {
   private async applyMentions(channelId: string): Promise<StepResult[]> {
     const steps: StepResult[] = [];
 
-    // 1. Drop the debounce policy (delivers any pending batch first).
+    // agent-framework sends a removed rule's pending batch.
     try {
       const removed = this.framework!.removeGatePolicy(this.policyName(channelId));
       steps.push({ step: 'gate-policy', ok: true, detail: removed ? 'removed' : 'no rule to remove' });

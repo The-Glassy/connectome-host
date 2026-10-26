@@ -1,19 +1,7 @@
 /**
- * The switch's quiesce: before Restart stops the install's host to switch
- * release or go back, it quiesces the host and each running fleet child, so
- * no new turn starts, and waits for the turns in flight to end. The operator
- * sees which hosts drained and who is still mid-turn on each, and chooses:
- * wait longer (quiesceForSwitch again), try later (resumeAfterSwitchQuiesce),
- * or stop now, which the host's stop does as any stop does. A child's side is
- * answerSwitchRequest, over its socket.
- *
  * The quiesce persists through the stop, so the release that starts next
  * boots quiesced, connects its servers with their data planes paused, and
- * commits. startFramework then ends it once framework.start() has run
- * (resumeIfSwitch), in the install's host and in each child alike: only a
- * quiesce under the switch's reason, so one under any other reason stays.
- * That holds too when the same release comes back, after a crash or a
- * fallback.
+ * commits; startFramework then ends it (resumeIfSwitch).
  */
 import type { HostModeStatus } from '@animalabs/agent-framework';
 import type { HostQuiet } from '../web/update-text.js';
@@ -22,9 +10,8 @@ import { isSwitchQuiesce, switchQuiesceReason } from './contract.js';
 /** What the switch's quiesce uses of a framework. Its status's
  *  `activeTurnAgents` lists the agents with a turn alive, a turn whose
  *  continuation is on its way to its start included, as `drained` counts
- *  them (agent-framework 0.26.1). `drained` also waits for a wake parked on
- *  provider admission, which names no agent, so a host can be undrained with
- *  none listed. */
+ *  them. `drained` also waits for a wake parked on provider admission,
+ *  which names no agent, so a host can be undrained with none listed. */
 export type QuiesceFramework = {
   quiesce(opts?: { reason?: string; timeoutMs?: number }): Promise<HostModeStatus>;
   resume(opts?: { force?: boolean }): Promise<HostModeStatus>;
@@ -40,8 +27,8 @@ export interface SwitchFleet {
   requestSwitch(name: string, request: SwitchRequest, timeoutMs: number): Promise<{ ok: boolean; data?: unknown; error?: string }>;
 }
 
-/** A request the install's host makes of a fleet child (answerSwitchRequest):
- *  quiesce under the switch's reason for `to`, or end the switch's quiesce. */
+/** A request the install's host makes of a fleet child: quiesce under the
+ *  switch's reason for `to`, or end the switch's quiesce. */
 export type SwitchRequest = { op: 'quiesce'; to: string; waitMs: number } | { op: 'resume' };
 
 /** What quiesceForSwitch found: drained when every host answered drained. */
@@ -57,6 +44,8 @@ export interface SwitchResumed {
   hosts: Array<{ host: string; resumed: boolean; why?: string }>;
 }
 
+export const SERVING = 'it was serving';
+export const NOT_THE_SWITCHS = 'its quiesce isn\'t the switch\'s';
 const THIS_HOST = 'this host';
 /** How often the wait on a host that was quiesced already reads whether it has drained. */
 const DRAIN_POLL_MS = 200;
@@ -79,11 +68,9 @@ function quiet(host: string, status: HostModeStatus): HostQuiet {
   return { host, answered: true, drained: status.drained, activeTurnAgents: status.activeTurnAgents, backgroundScripts: status.backgroundScripts };
 }
 
-/** Quiesce under `reason`, and wait up to `waitMs` for every turn to end, or
- *  until the host is serving again. agent-framework bounds its own part of
- *  the wait (1 second to 10 minutes), and a host quiesced already answers its
- *  quiesce at once, keeping the reason it has, so the rest of the wait reads
- *  the host's status here. */
+/** agent-framework bounds its own part of the wait (1 second to 10 minutes),
+ *  and a host quiesced already answers its quiesce at once, keeping the
+ *  reason it has, so the rest of the wait reads the host's status here. */
 async function quiesceAndWait(framework: QuiesceFramework, reason: string, waitMs: number): Promise<HostModeStatus> {
   const deadline = Date.now() + waitMs;
   let status = await framework.quiesce({ reason, timeoutMs: waitMs });
@@ -194,8 +181,8 @@ export async function answerSwitchRequest(framework: QuiesceFramework, request: 
  *  with `refused` set; one that fails after the host serves again says so. */
 export async function resumeIfSwitch(framework: QuiesceFramework): Promise<{ resumed: boolean; why?: string; refused?: true }> {
   const status = framework.getHostModeStatus();
-  if (!status.quiesced) return { resumed: false, why: 'it was serving' };
-  if (!isSwitchQuiesce(status.reason)) return { resumed: false, why: `its quiesce isn't the switch's (${status.reason ?? 'no reason'}), so it stays` };
+  if (!status.quiesced) return { resumed: false, why: SERVING };
+  if (!isSwitchQuiesce(status.reason)) return { resumed: false, why: `${NOT_THE_SWITCHS} (${status.reason ?? 'no reason'}), so it stays` };
   try {
     await framework.resume();
     return { resumed: true };

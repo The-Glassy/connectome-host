@@ -1,13 +1,6 @@
 /**
- * What the registry says of connectome-host's releases, for the update notice
- * and Update (update.ts). One read of the package's full manifest gives every
- * version with its own package.json fields: `deprecated`, `engines.bun`, and
- * `connectomeRelease`, which the cut writes (scripts/release-changelog.ts).
  * The abbreviated manifest npm installs from leaves `connectomeRelease` out,
  * so this asks for the full one.
- *
- * Nothing here is kept between reads: the candidate and the costs are worked
- * out from the manifest each time it's read.
  */
 import { EXACT_VERSION, PACKAGE } from './install.js';
 
@@ -34,11 +27,11 @@ export interface Release {
   cacheWrite: boolean | null;
 }
 
-/** The registry the host reads, with a closing `/`: the one
- *  `npm_config_registry` names, else npm's own. A registry set only in an
- *  `.npmrc`, such as a scoped `@animalabs:registry=`, isn't read, and the
- *  read carries no token, so a mirror is named in the service's environment
- *  for the notice to read it. */
+/** The registry the host reads: the one `npm_config_registry` names, else
+ *  npm's own. A registry set only in an `.npmrc`, such as a scoped
+ *  `@animalabs:registry=`, isn't read, and the read carries no token, so
+ *  a mirror is named in the service's environment for the notice to read
+ *  it. */
 export function registryOf(env: Record<string, string | undefined> = process.env): string {
   const registry = env.npm_config_registry || DEFAULT_REGISTRY;
   return registry.endsWith('/') ? registry : `${registry}/`;

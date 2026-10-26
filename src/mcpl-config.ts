@@ -16,14 +16,8 @@ import { resolveServerBinding, serverConfigProblems } from '@animalabs/agent-fra
 export const DEFAULT_CONFIG_PATH = resolve(process.cwd(), 'mcpl-servers.json');
 
 /**
- * The operator's servers file's root, as JSON.parse reads it past one
- * leading byte order mark (parseHandWrittenJson), for the boot
- * (loadMcplServers) and for editing (readMcplServersFile). A file that isn't
- * valid JSON throws a SyntaxError naming the file, never JSON.parse's own
- * message, which can quote a stretch of the text, and the file can hold a
- * token in an env block. A root of null, which neither reader can take
- * entries from, throws a TypeError naming the file, the class main threw for
- * it unnamed (reading `mcplServers` of null).
+ * JSON.parse's message can quote a stretch of the text it refuses, and the
+ * file can hold a token in an env block.
  */
 function parseServersFile(path: string): unknown {
   const raw = readFileSync(path, 'utf-8');
@@ -39,7 +33,7 @@ function parseServersFile(path: string): unknown {
 }
 
 /**
- * Serializable subset of McplServerConfig (everything except callbacks and scopes).
+ * Serializable subset of McplServerConfig.
  */
 export interface ServerFileEntry {
   command: string;
@@ -62,8 +56,7 @@ export interface ServerFileEntry {
    * Name of a network access grant (an archipelago audience, e.g.
    * "eidoverse"). Purely declarative here: at load/deploy time the host
    * attaches a credential provider that fetches something fresh on every
-   * dial via the identity module. The agent (and this file) never holds a
-   * credential — `access` is a name, not a secret.
+   * dial via the identity module. `access` is a name, not a secret.
    */
   access?: string;
   /** MCPL tool lifecycle (RFC-007) policy — see RecipeMcpServer.toolLifecycle. */
@@ -143,9 +136,8 @@ function checkedToolLifecycle(value: unknown, id: string): RecipeToolLifecycle {
 }
 
 /**
- * Policy fields a recipe may set on a server it takes from mcpl-servers.json
- * by id. The file supplies the spawn command and credentials; the recipe
- * decides how the agent uses the server.
+ * Policy fields a recipe may set on a server it takes from
+ * mcpl-servers.json by id.
  */
 export const RECIPE_OVERRIDABLE_SERVER_FIELDS = [
   'channelSubscription', 'toolPrefix', 'enabledFeatureSets', 'disabledFeatureSets',
@@ -217,7 +209,9 @@ export { AGENT_OVERLAY_FILE_NAME, AGENT_OVERLAY_FILE_ENV } from './update/agent-
 
 export const CHILD_AGENT_OVERLAY_FILE_NAME = 'mcpl-servers.agent.child.json';
 
-/** Default agent-owned overlay path, resolved from cwd (per-agent deploy dir). */
+/** The agent overlay's path: MCPL_AGENT_OVERLAY_FILE where the environment
+ *  sets it, else mcpl-servers.agent.json, resolved from the working
+ *  directory. */
 export const DEFAULT_AGENT_OVERLAY_PATH = agentOverlayPath(process.cwd(), process.env);
 
 /**
@@ -225,11 +219,12 @@ export const DEFAULT_AGENT_OVERLAY_PATH = agentOverlayPath(process.cwd(), proces
  * unconditionally — no recipe opt-in needed) or a tombstone `{disabled: true}`
  * that suppresses a recipe/file server the agent unloaded.
  *
- * Unlike `ServerFileEntry`, `command` is optional here: an entry has EITHER
- * a `command` (stdio) or a `url` (WebSocket), and tombstones have neither.
+ * Unlike `ServerFileEntry`, `command` is optional here: an entry has a
+ * `command` (stdio) or a `url` (WebSocket), or both with a `transport`
+ * saying which, and tombstones have neither.
  */
 export interface AgentOverlayEntry extends Partial<ServerFileEntry> {
-  /** WebSocket URL (WebSocket transport). Mutually exclusive with command. */
+  /** WebSocket URL (WebSocket transport). */
   url?: string;
   transport?: 'stdio' | 'websocket';
   /** Bearer token for WebSocket auth. */
@@ -341,9 +336,8 @@ export type OverlayEntryReading =
 const isPlain = (v: unknown): v is string | number | boolean =>
   typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean';
 
-/** Plain, as a new write takes it: a number JSON can't write, Infinity or
- *  NaN (a call's 1e400 parses as Infinity), doesn't count, since the file
- *  would hold null in its place, not the number given. */
+/** JSON writes null in place of Infinity or NaN (a call's 1e400 parses as
+ *  Infinity), so neither counts as plain to write. */
 const isPlainToWrite = (v: unknown): v is string | number | boolean =>
   isPlain(v) && !(typeof v === 'number' && !Number.isFinite(v));
 
@@ -354,12 +348,7 @@ export const NAMES_NOTHING = 'it names no command to run and no url to dial';
 /**
  * Fields only the operator's own config grants: the boot reads an agent
  * overlay entry without them, and the startup warnings name each one an
- * entry sets, with where the operator grants it (OPERATOR_FIELD_HOME).
- * enabledCapabilities would lift the deny every self-deployed server gets; a
- * toolLifecycle block is itself the framework's grant of tool lifecycle;
- * inheritEnv passes the host's whole environment; allowHostCommands is the
- * authority for host/command, which agent-framework gives only the
- * operator's config.
+ * entry sets, with where the operator grants it.
  */
 export const OPERATOR_ONLY_OVERLAY_FIELDS = ['enabledCapabilities', 'toolLifecycle', 'inheritEnv', 'allowHostCommands'] as const;
 type OperatorOnlyField = (typeof OPERATOR_ONLY_OVERLAY_FIELDS)[number];
@@ -380,18 +369,13 @@ const OPERATOR_FIELD_HOME: Record<OperatorOnlyField, string> = {
   allowHostCommands: "a server the recipe defines itself, with its own command or url and an id mcpl-servers.json doesn't define",
 };
 
-/** What an overlay entry can use where it listed enabledCapabilities to
- *  narrow what its server may advertise: the overlay keeps its
- *  disabledCapabilities beside the deploy deny, and agent-framework drops
- *  every advertised capability a disabled pattern matches, whatever the
- *  enabled list says (capability-mask.ts). */
+/** agent-framework drops every advertised capability a disabledCapabilities
+ *  pattern matches, whatever the enabled list says (capability-mask.ts). */
 const NARROW_INSTEAD = '; to narrow what the server may advertise, list what to deny in its disabledCapabilities';
 
-/** Whether a field's value sets anything: any value but absent, null,
- *  false, 0 or empty text, which set nothing, so leaving them out needs no
- *  warning. A list sets something even when it's empty: agent-framework
- *  0.22.3 reads any enabledCapabilities list as a mask of what the server
- *  may advertise, and an empty one lets nothing through. */
+/** A list sets something even when it's empty: agent-framework reads any
+ *  enabledCapabilities list as a mask of what the server may advertise, and
+ *  an empty one lets nothing through. */
 function setsSomething(value: unknown): boolean {
   return Boolean(value);
 }
@@ -522,14 +506,8 @@ export function readOverlayEntry(raw: unknown, opts: { strict?: boolean } = {}):
       notes.push(`its ${k} is one name, read as a list of one`);
     }
   }
-  // agent-framework 0.22.3 refuses a server whose reconnect is anything but
-  // true, false or null (anima-research/agent-framework#379), so the
-  // framework is handed true or false. A value that isn't one still reads by
-  // its truth, as 0.22.2 read it, so an entry keeps the retrying it had,
-  // except the text "false" in any case and with any spaces around it, such
-  // as Python's "False", which reads as false, as its writer meant, where
-  // its truth turned retrying on. Each is named. null was main's way of
-  // saying off, and reads as false, unnamed.
+  // agent-framework refuses a server whose reconnect is anything but true,
+  // false or null.
   if (e.reconnect === null) e.reconnect = false;
   else if (e.reconnect !== undefined && typeof e.reconnect !== 'boolean') {
     const read = typeof e.reconnect === 'string' && e.reconnect.trim().toLowerCase() === 'false' ? false : Boolean(e.reconnect);
@@ -559,8 +537,7 @@ export function readOverlayEntry(raw: unknown, opts: { strict?: boolean } = {}):
     // main's String() stopped the start on such an item.
     notes.push('its disabledCapabilities holds an item that can\'t be read as text, which denies nothing, where the host used to stop the start');
   }
-  // agent-framework 0.22 chose by url and command when transport was null,
-  // as when it was absent; 0.23 refuses a null transport (resolveServerBinding).
+  // agent-framework refuses a null transport (resolveServerBinding).
   if (e.transport === null) delete e.transport;
   if (!e.command && !e.url) return { problem: NAMES_NOTHING };
   // Passed on as main passed it, and named: such an entry replaces any
@@ -617,9 +594,10 @@ export function cleartextCredential(
   }
   if (url.protocol !== 'ws:' || isLoopbackHost(url.hostname)) return undefined;
   // A token counts as any value the transport would send but a blank one,
-  // which holds no secret (the transport sends a token of spaces, and an
-  // empty parameter). A grant counts whenever it's given, since its name,
-  // even a blank one, says nothing about the credential it resolves to.
+  // which holds no secret (in query mode it sends a token of spaces, and an
+  // empty parameter; in header mode it sends neither). A grant counts
+  // whenever it's given, since its name, even a blank one, says nothing
+  // about the credential it resolves to.
   const given = (v: unknown): boolean => (typeof v === 'string' ? v.trim() !== '' : Boolean(v));
   const granted = typeof entry.access === 'string' ? entry.access !== '' : Boolean(entry.access);
   const carrier = granted ? 'access'
@@ -664,13 +642,11 @@ export function seedChildAgentOverlay(childPath: string, fromPath: string, copy:
 }
 
 /**
- * Write the agent overlay file, as saveMcplServers writes its file
- * (writeServersFile). Writing through the existing file keeps its mode (it
- * can hold tokens), a symlink at its path, and a single-file bind mount; a
- * new file renamed over it would lose all three, and the rename fails
- * outright on such a mount. A crash in the middle of this small write can
- * still leave the file truncated, so the next boot stops on it, as it always
- * could.
+ * Writing through the existing file keeps its mode (it can hold tokens), a
+ * symlink at its path, and a single-file bind mount; a new file renamed
+ * over it would lose all three, and the rename fails outright on such a
+ * mount. A crash in the middle of this small write can still leave the
+ * file truncated, so the next boot stops on it, as it always could.
  */
 export function saveAgentOverlay(
   overlayPath: string,
@@ -710,12 +686,10 @@ function writeServersFile(path: string, servers: Record<string, unknown>): void 
  * Capabilities an agent-deployed server is never granted by default: the
  * consequential surfaces — context hooks (observation of and injection into
  * the agent's own inference), server-initiated inference, and inference
- * lifecycle. Bare parents on purpose: the config mask's subtree matching
- * denies everything beneath them, present and future (afterInference, undo,
- * state land under these the day the vocabulary grows them). A world/chat
- * server needs none of this — channels + tools is the whole job. An operator
- * who wants a self-deployed server to hold one of these moves the server
- * into the recipe, where `enabledCapabilities` is theirs to write.
+ * lifecycle. Bare parents: the config mask's subtree matching denies
+ * everything beneath them, present and future. An operator who wants a
+ * self-deployed server to hold one of these moves the server into the
+ * recipe, where `enabledCapabilities` is theirs to write.
  */
 export const AGENT_DEPLOY_DENIED_CAPABILITIES: readonly string[] = [
   'contextHooks',
@@ -727,9 +701,8 @@ export const AGENT_DEPLOY_DENIED_CAPABILITIES: readonly string[] = [
   'toolLifecycle',
 ];
 
-/** The allow/deny list fields where an EMPTY array carries no intent (see
- *  resolveOverlayEntry — OpenAI strict function calling forces every schema
- *  property, so agent tool calls arrive with `[]` meaning "unspecified"). */
+/** OpenAI strict function calling forces every schema property, so an
+ *  agent's tool call arrives with `[]` where it meant "unspecified". */
 const OVERLAY_LIST_FIELDS = [
   'enabledFeatureSets',
   'disabledFeatureSets',
@@ -738,43 +711,15 @@ const OVERLAY_LIST_FIELDS = [
 ] as const;
 
 /**
- * Resolve an overlay entry into a server config object (id + fields), as
- * readOverlayEntry reads it. Returns null for a tombstone and for every entry
- * the boot skips: one with neither command nor url, and one readOverlayEntry
- * finds malformed. Relative args resolve against the working directory:
+ * A relative `./` or `../` arg resolves against the working directory:
  * agent-framework spawns a stdio server with no cwd of its own.
  *
- * The overlay is the AGENT's file, so resolution is also where host policy
- * for self-deployed servers lives (applied at boot AND at deploy — existing
- * files heal without a re-deploy):
- *
- *  - Empty allow/deny lists are treated as absent. OpenAI-style strict
- *    function calling forces every schema property, so GPT-family residents
- *    calling mcpl_deploy emit `[]` where they meant "unspecified" — and for
- *    enabledFeatureSets PRESENT-empty is deny-all under the §5.3 pin (Mica's
- *    silently eventless eidoverse, 2026-08-04). (agent-framework already
- *    reads `enabledTools: []` as "all tools".) Deny-all for tools is
- *    `disabledTools: ["*"]`: tool patterns are whole-name globs, `*` = any
- *    run. Feature-set patterns are not: `*` stands for exactly one
- *    dot-separated segment, and a pattern only matches names with as many
- *    segments, so `disabledFeatureSets: ["*"]` denies `channels` but not
- *    `memory.retrieval`. No single pattern denies every set; list one per
- *    depth (`["*", "*.*", "*.*.*"]` covers names of up to three segments).
- *
- *  - The operator-only fields (OPERATOR_ONLY_OVERLAY_FIELDS:
- *    `enabledCapabilities`, `toolLifecycle`, `inheritEnv`,
- *    `allowHostCommands`) are dropped: the agent's file can narrow, never
- *    widen, so what they grant comes only from the operator's own config,
- *    and the startup warnings name each one an entry sets.
- *
- *  - `disabledCapabilities` always carries at least
- *    AGENT_DEPLOY_DENIED_CAPABILITIES (unioned with anything the entry
- *    already denies): self-deployed servers get channels + tools and
- *    nothing consequential by default.
- *
- * Everything else passes on as written, as main passed it: an `access`
- * grant name is dialled as written (mcpl_deploy writes it trimmed), and the
- * startup warnings compare it so (lostByReplacement).
+ * agent-framework reads `enabledTools: []` as all tools, and a present but
+ * empty `enabledFeatureSets` as deny-all (MCPL §5.3). Tool patterns are
+ * whole-name globs, `*` any run. A feature-set pattern's `*` stands for
+ * exactly one dot-separated segment, and a pattern only matches names with
+ * as many segments, so `disabledFeatureSets: ["*"]` denies `channels` but not
+ * `memory.retrieval`.
  */
 export function resolveOverlayEntry(
   id: string,
@@ -801,10 +746,9 @@ export function resolveOverlayEntry(
   if (read.url && rec.reconnect === undefined) rec.reconnect = true;
   const denied = new Set<string>([
     ...AGENT_DEPLOY_DENIED_CAPABILITIES,
-    // Each item as main's String() read it, so a nested list such as
-    // [["channels"]] still denies "channels". String() throws on a parsed
-    // object whose own toString isn't a function, and such an item names
-    // nothing.
+    // Each item as String() reads it, so a nested list such as [["channels"]]
+    // still denies "channels". String() throws on a parsed object whose own
+    // toString isn't a function, and such an item names nothing.
     ...(Array.isArray(rec.disabledCapabilities)
       ? (rec.disabledCapabilities as unknown[]).flatMap((c) => { try { return [String(c)]; } catch { return []; } })
       : []),
@@ -882,19 +826,14 @@ export interface ServerProvisions {
  *  has its own field, since it counts only for a replacement that spawns. */
 type GrantField = Exclude<OperatorOnlyField, 'inheritEnv'>;
 
-/** Whether an operator definition sets a field as agent-framework 0.22.3
- *  reads it, so that a replacement without it runs differently: host
- *  commands only for true (framework.ts:21359); capabilities for any list,
- *  which masks what the server may advertise, an empty one letting nothing
- *  through, and whose patterns grant the paths denied by default
- *  (capability-mask.ts, capability-grant.ts:335); and tool lifecycle for an
- *  `observe` or `inputs` policy object (configGrants, capability-grant.ts:237).
- *  A recipe checks a toolLifecycle block's shape (recipe.ts) but not the
- *  other two fields'. So allowHostCommands can hold a value such as "true",
- *  which grants nothing and which 0.22.3's create() refuses, and
- *  enabledCapabilities a value that isn't a list,
- *  which the framework can't read (its negotiation calls `.some` on it and
- *  throws); neither is a setting a replacement lacks. */
+/** As agent-framework reads each operator-only field: host commands only for
+ *  true; capabilities for any list, which masks what the server may
+ *  advertise, an empty one letting nothing through, and whose patterns grant
+ *  the paths denied by default (capability-mask.ts, capability-grant.ts); and
+ *  tool lifecycle for an `observe` or `inputs` policy object (configGrants).
+ *  create() refuses an allowHostCommands such as "true", and the framework
+ *  can't read an enabledCapabilities that isn't a list (its negotiation calls
+ *  `.some` on it and throws). */
 function grantsThrough(field: GrantField, value: unknown): boolean {
   const isPolicy = (v: unknown): boolean => typeof v === 'object' && v !== null && !Array.isArray(v);
   switch (field) {
@@ -935,24 +874,14 @@ const LACKED_GRANT: Record<GrantField, string> = {
 /** A text that names a host variable, as substituteEnvVars reads one. */
 const namesHostVariable = (text: unknown): boolean => typeof text === 'string' && namesEnvReference(text);
 
-/** An overlay entry's env when it's a map, else none: the boot passes any
- *  other env on as main did, and the framework spreads it into names such
- *  as "0", none a name a definition maps. The overlay is the agent's
- *  hand-editable file, so the readers here take its shapes as they come and
- *  never throw on one: the startup warnings mustn't become a new way for an
- *  odd entry to stop a start. */
+/** agent-framework spreads an env that isn't a map into names such as "0",
+ *  none a name a definition maps. */
 const envOf = (entry: AgentOverlayEntry): Record<string, unknown> =>
   entry.env && typeof entry.env === 'object' && !Array.isArray(entry.env) ? entry.env : {};
 
-/** How agent-framework opens an agent overlay entry as the boot passes it, by
- *  its own rules: 'dial' for its url, 'spawn' for its command, or null for an
- *  entry it refuses when it connects (resolveServerBinding, then
- *  serverConfigProblems), which nothing opens. The boot leaves out the
- *  operator-only fields (resolveOverlayEntry), so this does too. What it
- *  can't see is the credential provider the boot attaches to an access grant
- *  when the recipe has an identity. The readers here choose their branch by
- *  it, so what they name is what the connection the framework opens would
- *  carry, and like them it never throws. */
+/** By agent-framework's own rules (resolveServerBinding and
+ *  serverConfigProblems): 'dial' for its url, 'spawn' for its command, or
+ *  null for an entry it refuses when it connects. */
 export const openedBy = (entry: { transport?: unknown; url?: unknown; command?: unknown }): 'dial' | 'spawn' | null => {
   try {
     const config: Record<string, unknown> = { id: '', ...entry };
@@ -996,30 +925,8 @@ export function hostVariableReferences(raw: AgentOverlayEntry): string[] {
 }
 
 /**
- * What an agent overlay entry that replaces an operator's definition lacks
- * of it, as a phrase for a receipt or a log line, or null when it lacks
- * nothing that would reach it.
- *
- * The replacement is whole (applyAgentOverlay). Its text is literal, since
- * `${VAR}` substitution is the recipe's, and it never inherits the host
- * environment, since resolveOverlayEntry drops `inheritEnv`. So the
- * operator's value for a name the entry doesn't declare never reaches the
- * server: agent-framework gives a stdio child its declared env, and for a
- * short allowlist (PATH, HOME, locale, proxies and the like) the host's own
- * values. A server that needs the operator's value starts without it, and
- * can look healthy until its first call: on 2026-10-08 a resident's shell
- * came back from `mcpl_restart` without the SESSION_SERVER_TOKEN its daemon
- * wanted, and the restart reported success. A value that names a host
- * variable supplies nothing (hostVariableReferences), so its name counts as
- * lacking. A name the host sets over any server's mapping
- * (hostSetsOverServer) can't be lacking: no definition's value for it
- * reaches a child.
- *
- * Env and inheritance count only for a replacement that spawns a process; a
- * token and an access grant count only for one that dials a URL, as the
- * framework chooses between them (openedBy). The operator's other grants
- * (ServerProvisions.grants) count for any replacement it opens, since no
- * overlay entry can carry them.
+ * agent-framework gives a stdio child its declared env and, for a short
+ * allowlist (PATH, HOME, locale, proxies and the like), the host's own values.
  */
 export function lostByReplacement(operator: ServerProvisions, raw: AgentOverlayEntry): string | null {
   const lost: string[] = [];
@@ -1147,11 +1054,6 @@ export function saveMcplServers(configPath: string, servers: Record<string, Serv
 }
 
 /**
- * Compose the environment for a stdio MCPL child.
- *
- * The host supplies AGENT_TIMEZONE after the server env: the agent-facing
- * wall clock is resolved per-recipe, not a per-server operator knob.
- *
  * AgentFramework supplies DISCORD_SUPPRESSED_REACTIONS_BASELINE later,
  * where it knows its awareness marker and retained recovery outbox emojis.
  * A host-side refusal-only default would override that complete default.

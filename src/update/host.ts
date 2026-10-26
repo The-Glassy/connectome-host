@@ -95,30 +95,6 @@ export function currentForStart(root: string): string | null {
   }
 }
 
-/**
- * The commit: record this host's release as the one the install's data runs
- * on. startFramework calls it once the framework has opened its stores and
- * tried its servers, and before any agent starts, so a release that fails
- * before it leaves `current` as it was. Returns `{ from }`, the release
- * `current` named before, or undefined when nothing moved.
- *
- * - **A start on trial,** when `current` names another release, commits only
- *   once every server it's configured with has connected, as a switch's
- *   trial promises: a server that hasn't is a failure before the commit,
- *   which the next start falls back from.
- * - **When `current` already names this release,** as on every start but the
- *   first of a switch or a Go back, nothing is written. The move that made it
- *   so may be a start ago, whose directory sync failed after the rename, so
- *   the root is synced again before any agent acts.
- * - **An install with no `current`** has nothing to say which release its data
- *   runs on. Setup makes the link before any start, and the launcher refuses
- *   to start without it, so this refuses too.
- *
- * Moving `current` is the commit. The journal's `commit` line after it only
- * records it, since `current` is what decides (unfinishedTrial), so a line
- * that can't be written is logged and the start goes on: stopping now would
- * gain nothing, as the next start would find the same release committed.
- */
 export function commitRelease(here: ReleaseHere, check: CommitCheck = {}): { from: string } | undefined {
   const { root, release } = here;
   const said = (error: unknown): string => error instanceof Error ? error.message : String(error);
@@ -130,6 +106,8 @@ export function commitRelease(here: ReleaseHere, check: CommitCheck = {}): { fro
     );
   }
   if (from === release) {
+    // The move that made `current` name this release may be a start ago, whose
+    // directory sync failed after the rename.
     try {
       syncDir(root);
     } catch (error) {

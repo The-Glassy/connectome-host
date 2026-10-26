@@ -127,11 +127,9 @@ export function App() {
   /** Whether this page builds and shows the agent trees (treesShownFor). */
   const treesShown = (): boolean => treesShownFor(wire.observerState(), wire.observer()?.scopes ?? null);
 
-  // Use a store rather than a signal so the streaming token append can
-  // mutate the last message's `text` in place. Replacing the message object
-  // (as a plain signal would force) makes <For> remount the DOM, which
-  // replays the msg-enter fade — visible as a wholesale flicker on every
-  // token. Keyed-by-id mutation keeps the same DOM element throughout.
+  // A store, so a streaming token can mutate the last message in place: <For>
+  // remounts a row given a new object, even one with the same id, which
+  // replays the msg-enter fade on every token.
   const [messages, setMessages] = createStore<Message[]>([]);
   const [welcome, setWelcome] = createSignal<WelcomeMessage | null>(null);
   /** History paging state: slot index of the earliest loaded message +
@@ -192,8 +190,8 @@ export function App() {
   // actually looking at the page).
   // ---------------------------------------------------------------------------
 
-  /** Active alerts keyed `${agent}:${kind}`. Live `ops:alert` traces upsert;
-   *  `<kind>-clear` traces and /healthz reconciliation remove. */
+  /** agent-framework sends no `hard-down-clear`, so a `hard-down` row leaves
+   *  only by a dismissal. */
   const [opsAlerts, setOpsAlerts] = createSignal<Map<string, OpsAlert>>(new Map());
   const alertList = createMemo(() =>
     [...opsAlerts().values()].sort((a, b) => b.at - a.at));
@@ -2912,13 +2910,8 @@ function parseRoute(input: string): { childName: string; content: string } | nul
 
 marked.setOptions({ async: false, breaks: false, gfm: true });
 
-// marked v14 has no built-in sanitizer (the `sanitize` option was removed),
-// and assistant output is the *primary* untrusted input on this admin
-// surface — a tool result, mined-knowledge ingestion, or peeked subagent
-// line that contains literal HTML lands here. Pipe through DOMPurify before
-// innerHTML so <script>, <img onerror=...>, javascript: hrefs, etc. are
-// stripped. The default DOMPurify config already drops <script>, on*
-// handlers, and dangerous URL schemes.
+// marked 14 has no built-in sanitizer, and the default DOMPurify config
+// drops <script>, on* handlers and dangerous URL schemes.
 function renderMarkdown(src: string): string {
   if (!src) return '';
   try {

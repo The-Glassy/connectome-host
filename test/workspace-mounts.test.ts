@@ -55,7 +55,7 @@ describe('buildWorkspaceMounts', () => {
     expect('walkCap' in mounts[1]!).toBe(false);
   });
 
-  test('_config mount (configMount: true) is read-write and NOT auto-materialized', () => {
+  test('_config mount (configMount: true) is read-write and NOT auto-materialized, which validateRecipe\'s refusal of a _config instructions path rests on', () => {
     // THE contract behind rejecting `_config/...` as an instructions path:
     // the host materializes this mount only after branch-changing commands,
     // never on ordinary agent writes. If this test starts failing because

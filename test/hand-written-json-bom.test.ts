@@ -163,7 +163,7 @@ describe('a running Web UI and a grants file saved with the mark', () => {
 });
 
 describe("a recipe or credentials file that isn't JSON", () => {
-  // A value left unquoted, which the parser's message would quote.
+  // A value left unquoted, which JSON.parse's message would quote.
   const SECRET = 's3cretTokenValue';
   const unquoted = (dir: string, name: string, text: string): string => {
     const path = join(dir, name);

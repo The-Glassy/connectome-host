@@ -82,11 +82,8 @@ describe('the context curve', () => {
   });
 
   test("a summary's first and last dates are its messages' earliest and latest by time", async () => {
-    // The store gives timestamps as Dates, which the default sort orders by
-    // their text, weekday first: these fall out of time order that way in
-    // every time zone, and by day of the month too. The latest is ISO text,
-    // which the curve takes as well, and a timestamp that's missing, null or
-    // not a time is left out.
+    // The default sort orders Dates by their text, weekday first, so these fall
+    // out of time order that way.
     const wednesday = new Date('2026-10-14T12:00:00Z');
     const friday = new Date('2026-10-16T12:00:00Z');
     const monday = new Date('2026-11-02T12:00:00Z');

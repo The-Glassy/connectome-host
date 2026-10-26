@@ -229,7 +229,7 @@ describe('server-attributed messages (zulip-mcp `attributed` stamp)', () => {
     expect((wrapped.content[0] as { text: string }).text).toBe(`${HEAD}thanks, done`);
   });
 
-  test('an unstamped MCPL message still gets the header (other servers, older zulip-mcp)', () => {
+  test('an unstamped MCPL message still gets the header (other servers, older zulip-mcp), as does one whose attributed flag is a string', () => {
     const s = makeStrategy();
     const m = msg('User', 'hello', { serverId: 'zulip', channelId: 'zulip:qa', author: { name: 'bob' } });
     expect(s.pub_buildHeader(m)).toContain('@bob');

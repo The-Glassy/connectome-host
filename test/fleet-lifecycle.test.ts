@@ -63,9 +63,7 @@ function launches(input: Launch): Array<{ pid: number; sentinel: string | null }
   return readFileSync(join(input.dataDir, 'launches.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
 }
 
-/** Whether a pid is still this suite's mock child (or a real headless child
- *  it launched), so a pid reused by an unrelated process is never signalled
- *  `ps` works on Linux and macOS alike. */
+/** `ps` works on Linux and macOS alike. */
 function isOurChild(pid: number): boolean {
   const ps = Bun.spawnSync(['ps', '-p', String(pid), '-o', 'command=']);
   const command = ps.stdout.toString();
@@ -361,8 +359,8 @@ describe('FleetModule lifecycle', () => {
     try {
       await second.fleet.start(context);
       expect(second.fleet.getChildren().get('leaf')).toMatchObject({ process: null, status: 'ready' });
-      // Its process ends while this host runs, unseen: an adopted child has
-      // no exit event here.
+      // An adopted child isn't this host's subprocess, so no exit event comes for
+      // it here.
       kill(leader, 'SIGKILL');
       await until(() => !isAlive(leader), 'the adopted child ended');
       await until(() => second.fleet.getChildren().get('leaf')!.socket === null, 'its connection closed');

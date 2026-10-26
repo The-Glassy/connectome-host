@@ -35,7 +35,7 @@ import type { ReleaseHere } from './host.js';
 import { EXACT_VERSION, hostProblem, installRelease, machineInstallOps, type InstallOps } from './install.js';
 import { goBackOffer } from './launcher.js';
 import {
-  quiesceForSwitch, resumeAfterSwitchQuiesce, type QuiesceFramework, type SwitchFleet,
+  NOT_THE_SWITCHS, SERVING, quiesceForSwitch, resumeAfterSwitchQuiesce, type QuiesceFramework, type SwitchFleet,
 } from './quiesce.js';
 import { candidateOf, rangeOf, readReleases, registryOf, type Release } from './releases.js';
 import { readTrialLog } from './trial-log.js';
@@ -107,7 +107,7 @@ export class HostUpdate {
   /** The framework the restart's last quiesce was of. */
   private quiescedFramework: QuiesceFramework | null = null;
   /** A resume with no restart under way is ending a switch's quiesce. */
-  private endingLeft = false;
+  private endingSwitchQuiesce = false;
   private timer: ReturnType<typeof setInterval> | null = null;
 
   configure(setup: UpdateSetup): void {
@@ -118,7 +118,8 @@ export class HostUpdate {
     this.stopper = stop;
   }
 
-  /** Whether the host reads the registry on its own. */
+  /** Whether the host reads the registry on its own: not when
+   *  CONNECTOME_UPDATE_CHECK is 0 or NO_UPDATE_NOTIFIER is set non-empty. */
   checksOn(): boolean {
     const env = this.need().env ?? process.env;
     return env.CONNECTOME_UPDATE_CHECK !== '0' && !env.NO_UPDATE_NOTIFIER;
@@ -164,7 +165,7 @@ export class HostUpdate {
     if (setup.here === null) return refused(NOT_AN_INSTALL);
     if (this.installing !== null) return refused(`An install of ${this.installing} is under way.`);
     if (this.restart !== null) return refused(`${restartName(this.restart, true)} is under way.`);
-    if (this.endingLeft) return refused(ENDING_LEFT);
+    if (this.endingSwitchQuiesce) return refused(ENDING_SWITCH_QUIESCE);
     const here = setup.here;
     const at = this.now().toISOString();
     this.installing = 'the newest release';
@@ -268,13 +269,13 @@ export class HostUpdate {
     const restart = this.restart;
     if (restart !== null && restart.phase !== 'busy') return refused(`${restartName(restart, true)} is ${PHASE[restart.phase]}.`);
     if (restart !== null) return this.callOff(null);
-    if (this.endingLeft) return refused(ENDING_LEFT);
-    this.endingLeft = true;
+    if (this.endingSwitchQuiesce) return refused(ENDING_SWITCH_QUIESCE);
+    this.endingSwitchQuiesce = true;
     let ended;
     try {
       ended = await this.endQuiesce();
     } finally {
-      this.endingLeft = false;
+      this.endingSwitchQuiesce = false;
     }
     const on = ended.ended.length > 0 ? `The switch's quiesce is ended on ${list(ended.ended)}` : null;
     const first = ended.stuck > 0
@@ -378,7 +379,7 @@ export class HostUpdate {
           `${COMMAND_WAYS.resume}.`
         : `${restartName(this.restart, true)} is ${PHASE[this.restart.phase]}.`;
     }
-    if (this.endingLeft) return ENDING_LEFT;
+    if (this.endingSwitchQuiesce) return ENDING_SWITCH_QUIESCE;
     let current: string | null;
     try {
       current = readCurrent(here.root);
@@ -482,13 +483,10 @@ export class HostUpdate {
 
 /** How resumeIfSwitch (quiesce.ts) answers for a host that was serving, and
  *  begins its answer for one quiesced by someone else, which keeps it. */
-const SERVING = 'it was serving';
-const NOT_THE_SWITCHS = 'its quiesce isn\'t the switch\'s';
-
 const SESSION_CHANGED = 'the session changed while turns were ending, so this host now serves one the restart didn\'t ' +
   'quiesce. Ask again.';
 const RESUME_AGAIN = 'For a host still quiesced, /update restart resume tries again, as does the host\'s next start.';
-const ENDING_LEFT = 'A switch\'s quiesce is being ended. Ask again once that has answered.';
+const ENDING_SWITCH_QUIESCE = 'A switch\'s quiesce is being ended. Ask again once that has answered.';
 /** Wait longer and stop now are for a restart whose wait has run out. */
 const NO_WAIT_RAN_OUT = 'No restart\'s wait for turns to end has run out, so there is nothing to wait longer for or ' +
   'stop now.';

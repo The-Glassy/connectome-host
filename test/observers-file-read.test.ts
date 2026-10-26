@@ -95,17 +95,13 @@ describe('reading the grants file', () => {
     expect(read).toEqual({ kind: 'unreadable', problem: 'can\'t be checked (boom)' });
   });
 
-  // Each of the two reads checks a value nested 100,000 deep until the stack
-  // overflows. That takes seconds, and on a busy machine it has run past the
-  // default 5 s limit, so the case has a limit of its own. The time is the
-  // overflow's, not the depth's: 50,000 deep takes about as long. The depth
-  // stays, since a shallower value might not overflow the check on another
-  // platform.
+  // A value this deep overflows the stack as it's checked; a shallower one might
+  // not on another platform.
   test('a value too deep to check gives no grants, not a throw', () => {
     const deep = '['.repeat(100_000) + ']'.repeat(100_000);
     writeFileSync(path, `{"observers": [{"key": "${key('A')}", "label": "x", "scopes": [${deep}]}]}`);
-    // Bun 1.4.3 and 1.3.14 both parse this and overflow checking it, with
-    // this text, so a check that threw anything else would fail the case.
+    // Bun's message for a stack overflow, so a check that threw anything else
+    // would fail the case.
     const read = readObserversFile(path) as { kind: string; problem?: string };
     expect(read.kind).toBe('unreadable');
     expect(read.problem).toBe('can\'t be checked (Maximum call stack size exceeded.)');
@@ -213,7 +209,7 @@ describe('the registry', () => {
     for (let i = 0; i < 4; i++) check();
     // Start's read, then one at each check: it's read again while it doesn't
     // parse, and said once.
-    expect(reads).toBe(5);
+    expect(reads).toBe(1 + 4);
     expect(admitted()).toEqual(['x']);
     expect(lines).toHaveLength(1);
     expect(lines.filter(keeping)).toHaveLength(1);
@@ -264,7 +260,7 @@ describe('the registry', () => {
     registry.start();
     for (let i = 0; i < 3; i++) check();
     // Read again at each check, and said once: it had no grants to keep.
-    expect(reads).toBe(4);
+    expect(reads).toBe(1 + 3);
     expect(admitted()).toEqual([]);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toEndWith('— admitting no grants until it parses');
@@ -291,7 +287,7 @@ describe('the registry', () => {
     readAs = tooManyOpen;
     write(file(Z));
     for (let i = 0; i < 4; i++) check();
-    expect(reads).toBe(5); // start's read, then one at each check
+    expect(reads).toBe(1 + 4); // start's read, then one at each check
     expect(admitted()).toEqual([]);
     expect(lines).toEqual([`[webui-observers] ${path} can't be read (EMFILE: too many open files, open) — admitting no grants from it`]);
     readAs = null;

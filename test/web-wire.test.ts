@@ -11,8 +11,8 @@ import { createWireClient, type WireClient } from '../web/src/wire.js';
 
 type Socket = { send(data: string): void; close(code?: number): void };
 
-// The observer-ack stores the page's session cookie, which a page keeps in
-// its document; this stands in for it.
+// Bun has no document, whose cookie a page keeps its session in; this stands
+// in for it.
 (globalThis as { document?: { cookie: string } }).document ??= { cookie: '' };
 
 const cleanups: Array<() => void> = [];
@@ -108,10 +108,8 @@ describe("the page's wire", () => {
   });
 
   test("a sign-in that finishes after its connection closed leaves the next connection's state alone", async () => {
-    // The page keeps its device key in IndexedDB, which bun doesn't have. This
-    // stand-in holds the key's opening until the test fails it, so the first
-    // connection's sign-in finishes, with no key, once the next connection has
-    // been welcomed.
+    // Bun has no IndexedDB, where the page keeps its device key; this stands in
+    // for it.
     const opening: { fail?: () => void } = {};
     const scope = globalThis as { indexedDB?: unknown };
     scope.indexedDB = {
@@ -133,7 +131,7 @@ describe("the page's wire", () => {
     await until("the full client's welcome", () => wire.observerState() === 'none');
 
     opening.fail!();
-    // What's left of that sign-in is promise steps, all run before a timer fires.
+    // Promise steps all run before a timer fires.
     await Bun.sleep(10);
     expect(warn).toHaveBeenCalledWith('[observer] device key unavailable:', expect.any(Error));
     expect(wire.observerState()).toBe('none');

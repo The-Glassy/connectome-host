@@ -53,7 +53,7 @@ test('a stop that begins while the new framework is made stops it and the Web UI
   expect(calls).toEqual(['stopOld', 'make', 'next.stop', 'stopServer']);
 });
 
-test('when stopping the made framework fails, the server still closes, and the failure reaches the caller', async () => {
+test('when stopping the made framework fails, the server still closes, the failure reaches the caller, and the switch logs it', async () => {
   const app: { stopping?: boolean } = {};
   const { calls, steps } = recorder({
     during: { make: () => { app.stopping = true; } },
@@ -75,7 +75,7 @@ test('a making that fails once the stop has begun closes the Web UI server, and 
   expect(lines).toEqual([expect.stringContaining("making the switched-to session's framework failed: injected make failure")]);
 });
 
-test('a making that fails with the host running closes nothing, and the failure reaches the caller', async () => {
+test('a making that fails with the host running closes nothing, and the failure reaches the caller, with nothing logged by the switch', async () => {
   const app: { stopping?: boolean } = {};
   const { calls, steps } = recorder({ makeFails: true });
   const lines: string[] = [];

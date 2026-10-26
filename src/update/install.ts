@@ -52,7 +52,7 @@ const LOCKFILES: Array<{ name: string; manager: 'npm' | 'bun' }> = [
 const OUTPUT_TAIL = 2000;
 
 /** How many of a release's files and directories are synced at once. */
-const SYNC_WIDTH = 16;
+export const SYNC_WIDTH = 16;
 
 /** What installing needs from the machine, given to it so tests can stand in. */
 export interface InstallOps {
@@ -189,11 +189,7 @@ export function hostProblem(dir: string, version: string): string | null {
   return null;
 }
 
-/** Sync each file and directory under `dir`, and `dir`, so a rename of `dir`
- *  can't outlive on disk what it holds, as setup's copy of its first release
- *  does (copyTree). A link is synced as its directory's entry. SYNC_WIDTH at
- *  a time: on the VPS, a release of 21,784 entries took 5 s so, and 29 s one
- *  at a time (J29000). */
+/** A link is synced as its directory's entry. */
 async function syncTree(dir: string): Promise<void> {
   const paths: string[] = [];
   const walk = async (at: string): Promise<void> => {

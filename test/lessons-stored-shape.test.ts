@@ -22,9 +22,8 @@ const call = (name: string, input: AnyObj = {}): ToolCall => ({ id: `t-${name}`,
 const stored = (id: string, fields: AnyObj): AnyObj =>
   ({ id, confidence: 0.6, evidence: [], created: 1, updated: 1, deprecated: false, ...fields });
 
-/** The module's store (chronicle's setStateJson) refuses a number JSON can't
- *  hold, with this error (receipt chronicle-infinity-probe.txt); the
- *  stand-in context refuses it too, so no test holds state no host can. */
+/** chronicle's setStateJson refuses a number JSON can't hold, with this
+ *  error. */
 function storable(s: unknown): unknown {
   JSON.stringify(s, (_key, value: unknown) => {
     if (typeof value === 'number' && !Number.isFinite(value)) throw new Error('Failed to convert js number to serde_json::Number');

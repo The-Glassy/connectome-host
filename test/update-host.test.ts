@@ -42,7 +42,7 @@ describe('releaseHere', () => {
     expect(releaseHere(env, join(wrapped, 'node_modules', 'connectome-host'))).toEqual({ root, release: '0.9.0' });
   });
 
-  test('refuses an install none of whose releases holds the host, with or without a releases directory', () => {
+  test('refuses an install none of whose releases holds the host, with or without a releases directory, and a sibling whose name starts with a release\'s is not inside it', () => {
     const env = { CONNECTOME_INSTALL_ROOT: root };
     const refusal = new ContractError(
       `CONNECTOME_INSTALL_ROOT names the install at ${root}, but none of its releases holds this host (${realpathSync(HOST_ROOT)}). ` +
