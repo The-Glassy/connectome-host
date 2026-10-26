@@ -34,7 +34,7 @@ import type { CredentialActionId, CredentialState } from './credential-state.js'
 import { readMcplServersFile, saveMcplServers, DEFAULT_CONFIG_PATH, DEFAULT_AGENT_OVERLAY_PATH } from './mcpl-config.js';
 import { buildBugReport, composedServerConfigs, gatherBugReportFacts, runtimeMode, type LiveSetup } from './bug-report.js';
 import { parseCommand } from './command-name.js';
-import { storedInjectionMarkOf } from '@animalabs/agent-framework';
+import { OperatorActionError, storedInjectionMarkOf } from '@animalabs/agent-framework';
 import type { Line } from './output-line.js';
 import { fmtTokens } from './tui.js';
 import { formatToolClassRows, readToolClasses } from './tool-lifecycle-config.js';
@@ -108,23 +108,80 @@ function getAgentCM(framework: AgentFramework, agentName?: string): ContextManag
 
 /**
  * agent-framework writes a turn's reply onto whatever branch is current when
- * it lands, and a branch switch moves the branch of every context manager
- * sharing the store, so the head moves only between turns: stop the
- * generation, then move the head.
+ * it lands, and a branch switch moves the branch of every agent sharing the
+ * store, so a branch move waits for every agent's turn to end and /newtopic
+ * for the main agent's: stop the generation, then move the head.
  */
-function inFlightGuard(app: AppContext, cmd: string): CommandResult | null {
+function inFlightGuard(app: AppContext, cmd: string, everyAgent = false): CommandResult | null {
   const framework = app.framework;
-  const agent = (app.agentName ? framework.getAgent(app.agentName) : undefined)
-    ?? framework.getAllAgents()[0];
-  const status = (agent as { state?: { status?: string } } | undefined)?.state?.status;
-  if (status === undefined || status === 'idle') return null;
+  const main = (app.agentName ? framework.getAgent(app.agentName) : undefined) ?? framework.getAllAgents()[0];
+  const agents = everyAgent ? framework.getAllAgents() : [main];
+  const statusOf = (agent: unknown) => (agent as { state?: { status?: string } } | undefined)?.state?.status;
+  const nameOf = (agent: unknown) => (agent as { name?: string } | undefined)?.name ?? 'agent';
+  const busy = agents.filter((agent) => {
+    const status = statusOf(agent);
+    return status !== undefined && status !== 'idle';
+  });
+  if (busy.length === 0) return null;
+  const wayOn = !busy.includes(main)
+    ? `Wait for ${busy.length === 1 ? 'the turn' : 'those turns'} to end, then retry.`
+    : busy.length === 1
+      ? 'Wait for the turn to end, or stop it, then retry.'
+      : `Wait for those turns to end, then retry; ${nameOf(main)}'s can be stopped.`;
   return {
     lines: [
-      { text: `/${cmd} refused: a turn is in flight (${(agent as { name?: string }).name ?? 'agent'}: ${status}).`, style: 'system' },
+      { text: `/${cmd} refused: a turn is in flight (${busy.map((agent) => `${nameOf(agent)}: ${statusOf(agent)}`).join(', ')}).`, style: 'system' },
       { text: '  Moving the head mid-generation would attach the streaming reply to the wrong', style: 'system' },
-      { text: '  branch/request. Stop the generation first, then retry.', style: 'system' },
+      { text: `  branch/request. ${wayOn}`, style: 'system' },
     ],
   };
+}
+
+function moveStore(
+  framework: AgentFramework,
+  target: string,
+  words: { done: string; failed: string },
+  landed: () => void = () => {},
+  created = false,
+): Promise<CommandResult> {
+  const from = framework.getStore().currentBranch().name;
+  return Promise.resolve()
+    .then(() => framework.switchBranch(target))
+    .then(
+      (): CommandResult => {
+        landed();
+        return { lines: [{ text: words.done, style: 'system' }], branchChanged: true };
+      },
+      (err: unknown): CommandResult => {
+        const message = err instanceof Error ? err.message : String(err);
+        const refused = err instanceof OperatorActionError;
+        if (!refused && from !== target && framework.getStore().currentBranch().name === target) {
+          landed();
+          return {
+            lines: [
+              { text: `${words.done} Refreshing the _config mount from it failed: ${message}`, style: 'system' },
+              { text: `  The gate's files may still be the previous branch's. /checkout ${target} runs the refresh again.`, style: 'system' },
+            ],
+            branchChanged: true,
+          };
+        }
+        const lines: Line[] = [{ text: `${words.failed}: ${message}`, style: 'system' }];
+        if (created) {
+          try {
+            framework.getStore().deleteBranch(target);
+          } catch (removal) {
+            lines.push({ text: `  The branch "${target}" made for it stays: removing it failed (${removal instanceof Error ? removal.message : String(removal)}).`, style: 'system' });
+          }
+        }
+        lines.push({
+          text: err instanceof OperatorActionError && err.code === 'agent-busy'
+            ? '  This command moved nothing. Try again once what it names has finished.'
+            : '  This command moved nothing.',
+          style: 'system',
+        });
+        return { lines };
+      },
+    );
 }
 
 export function handleCommand(command: string, app: AppContext): CommandResult {
@@ -202,7 +259,7 @@ export function handleCommand(command: string, app: AppContext): CommandResult {
       return handleExport(app);
 
     case 'undo':
-      return inFlightGuard(app, cmd) ?? handleUndo(app);
+      return inFlightGuard(app, cmd, true) ?? handleUndo(app);
 
     case 'nudge':
       return handleNudge(app, args[0]);
@@ -211,7 +268,7 @@ export function handleCommand(command: string, app: AppContext): CommandResult {
       return handlePuppet(app, args);
 
     case 'redo':
-      return inFlightGuard(app, cmd) ?? handleRedo(app);
+      return inFlightGuard(app, cmd, true) ?? handleRedo(app);
 
     // Name-taking commands take the rest of the line, so a name may contain
     // spaces (/checkpoint my test point).
@@ -219,19 +276,19 @@ export function handleCommand(command: string, app: AppContext): CommandResult {
       return handleCheckpoint(app, args.join(' ') || undefined);
 
     case 'restore':
-      return inFlightGuard(app, cmd) ?? handleRestore(app, args.join(' ') || undefined);
+      return inFlightGuard(app, cmd, true) ?? handleRestore(app, args.join(' ') || undefined);
 
     case 'branches':
       return handleBranches(app);
 
     case 'checkout':
-      return inFlightGuard(app, cmd) ?? handleCheckout(framework, args.join(' ') || undefined);
+      return inFlightGuard(app, cmd, true) ?? handleCheckout(framework, args.join(' ') || undefined);
 
     case 'history':
       return handleHistory(framework, args[0]);
 
     case 'branchto':
-      return inFlightGuard(app, cmd) ?? handleBranchTo(app, args[0]);
+      return inFlightGuard(app, cmd, true) ?? handleBranchTo(app, args[0]);
 
     case 'find':
       return handleFind(framework, args.join(' '));
@@ -969,22 +1026,16 @@ function handleUndo(app: AppContext): CommandResult {
     return { lines: [{ text: `Undo failed (branchAt): ${err}`, style: 'system' }] };
   }
 
-  bs.redoStack.push({ branchName: currentBranch.name });
-  bs.undoStack.push({
-    branchName: createdBranchName,
-    messageId: undoPoint,
-  });
-
-  // context-manager's switchBranch is async: it reloads the strategy's state
-  // for the new branch, so the answer waits for it.
-  const asyncWork = Promise.resolve(cm.switchBranch(createdBranchName))
-    .then(() => ({
-      lines: [{ text: `Undone. Switched to branch "${createdBranchName}".`, style: 'system' as const }],
-      branchChanged: true,
-    }))
-    .catch(err => ({
-      lines: [{ text: `Undo failed (switchBranch): ${err}`, style: 'system' as const }],
-    }));
+  const asyncWork = moveStore(
+    framework,
+    createdBranchName,
+    { done: `Undone. Switched to branch "${createdBranchName}".`, failed: 'Undo failed (switchBranch)' },
+    () => {
+      bs.redoStack.push({ branchName: currentBranch.name });
+      bs.undoStack.push({ branchName: createdBranchName, messageId: undoPoint });
+    },
+    true,
+  );
 
   return {
     lines: [{ text: `Undoing → branch "${createdBranchName}"...`, style: 'system' }],
@@ -1001,17 +1052,21 @@ function handleRedo(app: AppContext): CommandResult {
     return { lines: [{ text: 'Nothing to redo.', style: 'system' }] };
   }
 
-  const point = bs.redoStack.pop()!;
+  const point = bs.redoStack[bs.redoStack.length - 1]!;
   const target = point.branchName;
 
-  const asyncWork = Promise.resolve(cm.switchBranch(target))
-    .then(() => ({
-      lines: [{ text: `Redone. Switched to branch "${target}".`, style: 'system' as const }],
-      branchChanged: true,
-    }))
-    .catch(err => ({
-      lines: [{ text: `Redo failed: ${err}`, style: 'system' as const }],
-    }));
+  const drop = () => {
+    const at = bs.redoStack.lastIndexOf(point);
+    if (at >= 0) bs.redoStack.splice(at, 1);
+  };
+  const asyncWork = moveStore(framework, target, { done: `Redone. Switched to branch "${target}".`, failed: 'Redo failed' }, drop)
+    .then((result) => {
+      if (result.branchChanged || framework.getStore().listBranches().some((b) => b.name === target)) return result;
+      drop();
+      const next = bs.redoStack[bs.redoStack.length - 1];
+      const after = next ? `the next /redo tries "${next.branchName}"` : 'nothing is left to redo';
+      return { ...result, lines: [...result.lines, { text: `  The branch this redo returns to, "${target}", no longer exists, so that step is dropped; ${after}.`, style: 'system' as const }] };
+    });
 
   return {
     lines: [{ text: `Redoing → branch "${target}"...`, style: 'system' }],
@@ -1067,6 +1122,7 @@ function handleRestore(app: AppContext, name?: string): CommandResult {
 
   let target = point.branchName;
   let exact = false;
+  let landed = () => {};
   if (point.messageId) {
     const { messages } = cm.queryMessages({});
     const atCheckpoint = messages.length > 0
@@ -1075,9 +1131,12 @@ function handleRestore(app: AppContext, name?: string): CommandResult {
       return { lines: [{ text: `Already at checkpoint "${name}".`, style: 'system' }] };
     }
     try {
-      target = cm.branchAt(point.messageId, `restore-${name}-${Date.now()}`);
+      const created = cm.branchAt(point.messageId, `restore-${name}-${Date.now()}`);
+      target = created;
       exact = true;
-      app.branchState.checkpoints.set(name, { branchName: target, messageId: point.messageId });
+      landed = () => {
+        if (app.branchState.checkpoints.get(name) === point) app.branchState.checkpoints.set(name, { branchName: created, messageId: point.messageId });
+      };
     } catch {
       // context-manager's branchAt finds the message on the current branch and
       // throws when it isn't there, as after an /undo: the restore then goes to
@@ -1086,19 +1145,15 @@ function handleRestore(app: AppContext, name?: string): CommandResult {
     }
   }
 
-  const asyncWork = Promise.resolve(cm.switchBranch(target))
-    .then(() => ({
-      lines: [
-        { text: `Restored to checkpoint "${name}" (branch: ${target}).`, style: 'system' as const },
-        ...(point.messageId && !exact
-          ? [{ text: '  (note: exact checkpoint position unreachable from the current branch — restored to the branch head instead)', style: 'system' as const }]
-          : []),
-      ],
-      branchChanged: true,
-    }))
-    .catch(err => ({
-      lines: [{ text: `Restore failed: ${err}`, style: 'system' as const }],
-    }));
+  const asyncWork = moveStore(
+    app.framework,
+    target,
+    { done: `Restored to checkpoint "${name}" (branch: ${target}).`, failed: 'Restore failed' },
+    landed,
+    exact,
+  ).then((result) => (result.branchChanged && point.messageId && !exact
+    ? { ...result, lines: [...result.lines, { text: '  (note: exact checkpoint position unreachable from the current branch — restored to the branch head instead)', style: 'system' as const }] }
+    : result));
 
   return {
     lines: [{ text: `Restoring → branch "${target}"...`, style: 'system' }],
@@ -1148,14 +1203,7 @@ function handleCheckout(framework: AgentFramework, name?: string): CommandResult
     return { lines: [{ text: `Branch "${name}" not found. Use /branches to list.`, style: 'system' }] };
   }
 
-  const asyncWork = Promise.resolve(cm.switchBranch(target.name))
-    .then(() => ({
-      lines: [{ text: `Switched to branch ${target.name}.`, style: 'system' as const }],
-      branchChanged: true,
-    }))
-    .catch(err => ({
-      lines: [{ text: `Checkout failed: ${err}`, style: 'system' as const }],
-    }));
+  const asyncWork = moveStore(framework, target.name, { done: `Switched to branch ${target.name}.`, failed: 'Checkout failed' });
 
   return {
     lines: [{ text: `Switching → branch ${target.name}...`, style: 'system' }],
@@ -1198,14 +1246,16 @@ function handleBranchTo(app: AppContext, messageId: string | undefined): Command
   } catch (err) {
     return { lines: [{ text: `branchto failed (branchAt): ${err}`, style: 'system' }] };
   }
-  const asyncWork = Promise.resolve(cm.switchBranch(createdBranchName))
-    .then(() => ({
-      lines: [{ text: `Branched at [${messageId}] -> "${createdBranchName}" and switched. Everything after [${messageId}] is dropped on this branch; old branch preserved.`, style: 'system' as const }],
-      branchChanged: true,
-    }))
-    .catch((err: unknown) => ({
-      lines: [{ text: `branchto failed (switchBranch): ${err}`, style: 'system' as const }],
-    }));
+  const asyncWork = moveStore(
+    app.framework,
+    createdBranchName,
+    {
+      done: `Branched at [${messageId}] -> "${createdBranchName}" and switched. Everything after [${messageId}] is dropped on this branch; old branch preserved.`,
+      failed: 'branchto failed (switchBranch)',
+    },
+    undefined,
+    true,
+  );
   return { lines: [{ text: `Branching at [${messageId}] -> "${createdBranchName}"...`, style: 'system' }], asyncWork };
 }
 

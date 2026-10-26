@@ -40,6 +40,8 @@ function makeStubWorld() {
       getAgent: () => undefined,
       getAllAgents: () => [{ getContextManager: () => cm }],
       getAllModules: () => [],
+      getStore: () => ({ currentBranch: () => cm.currentBranch() }),
+      switchBranch: (name: string) => cm.switchBranch(name),
     },
     branchState: createBranchState(),
     userMessageCount: 0,
