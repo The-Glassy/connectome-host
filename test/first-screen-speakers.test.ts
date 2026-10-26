@@ -56,6 +56,14 @@ describe('the host\'s own rows read as the host\'s, by kind', () => {
     expect(shown({ ...damaged, hostNote: 'session-start' }).web).toBe('user');
   });
 
+  test('a server\'s row with agent-framework\'s own host mark is still the server\'s', () => {
+    expect(shown({ ...channel, system: true, kind: 'clock' })).toEqual({ tui: 'alice in #general: hello', web: 'alice in #general' });
+    expect(shown({ ...push, system: true, kind: 'host-notice' }).web).toBe('heartbeat (push)');
+    const damaged = { ...channel, inboundSource: { ...channel.inboundSource, acceptedAt: undefined } };
+    expect(shown({ ...damaged, system: true, kind: 'clock' }).web).toBe('user');
+    expect(shown({ ...damaged, system: true }).web).toBe('user');
+  });
+
   test('agent-framework\'s clock row and a host notice', () => {
     expect(shown({ system: true, kind: 'clock', clock: { at: 1, onBoundary: true, zone: 'UTC' } }, 'Clock: Monday'))
       .toEqual({ tui: 'host · clock: Clock: Monday', web: 'host · clock' });

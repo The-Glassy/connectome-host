@@ -23,15 +23,19 @@
  *     wait or cooldown and runs it again later, or gives up
  *     (`inference:exhausted`). A quiesce can abandon it instead, and the
  *     framework's stop cancels a retry it waits to send, each ending it with
- *     `inference:aborted`, or the framework drops it with no end (below).
+ *     `inference:aborted`. Since agent-framework 0.27.0 a held turn whose
+ *     retry is dropped, by an abandon, a stop, `abortInference`, the
+ *     inference policy or a conversation agent's disposal, ends with
+ *     `inference:aborted` too, and a later occurrence of a coalesced wake's
+ *     subject leaves its retry held.
  *   - `inference:exhausted`: the turn failed for good, after its
  *     `inference:failed`, or its stream was aborted for a reason other than a
  *     stop, with no `inference:failed` before it.
  *
  * A second end can follow the first: a turn a tool ended sends `completed`
  * and then `turn_ended`, and a failed attempt sends `failed` and then
- * `exhausted`, or `aborted` when a quiesce abandons it or a stop cancels its
- * retry. A surface that shows a turn's state (a status line, a wait, a
+ * `exhausted`, or `aborted` when a quiesce abandons it, a stop cancels its
+ * retry or its held retry is dropped. A surface that shows a turn's state (a status line, a wait, a
  * notice, the relay) reads an end that follows an end as nothing new. A
  * stream panel, which shows each of a stream's events as it comes, shows
  * both.
@@ -42,12 +46,14 @@
  * its way to its start): so it follows the first with no start between, an
  * end after an end.
  *
- * Three cases send no end: a dropped turn when another turn of the agent's
- * name has already begun (abortDroppedTurn's token check,
- * anima-research/agent-framework#338); an ephemeral run that its idle
- * watchdog disposes; and a failed attempt whose held retry the framework
- * drops when its agent is disposed or the coalesced wake it answers is
- * withdrawn.
+ * Two cases send no end, and each needs a later turn under the agent's name
+ * to follow it, which the host never makes: a dropped turn when another
+ * turn of the agent's name has already begun (abortDroppedTurn's token
+ * check, anima-research/agent-framework#338), which takes a stop and start
+ * of the same framework or a replacement agent object, where the host
+ * starts each framework once and replaces no agent; and an ephemeral run
+ * that its idle watchdog disposes, where each subagent's run has a name of
+ * its own.
  */
 
 export const STREAM_END_TRACES: ReadonlySet<string> = new Set([
