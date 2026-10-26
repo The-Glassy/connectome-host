@@ -610,7 +610,7 @@ export async function runTui(app: AppContext): Promise<void> {
   const subagentPhase = new Map<string, SubagentPhase>();
   const subagentFailureShown = new Set<string>();
   let turnFailures = createTurnFailures();
-  const failedTurnHint = failureHint(app.recipe, process.env);
+  const failedTurnHint = failureHint(app.recipe, process.env, app.credentials);
   const failureLines = createFailureLines();
   const PHASE_COLOR: Record<SubagentPhase, string> = {
     sending: YELLOW,

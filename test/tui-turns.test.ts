@@ -206,9 +206,9 @@ describe("the TUI's repeated failures, through runTui", () => {
     expect(times(at('three failures').frame, 'zz connection refused')).toBe(1);
     expect(at('three failures').frame).toContain('Error (×3): zz connection refused');
     expect(times(at('other words').frame, 'zz connection refused')).toBe(1);
-    expect(times(at('other words').frame, 'Error: zz overloaded')).toBe(1);
-    expect(times(at('gave up').frame, 'Turn ended after 4 attempts.')).toBe(1);
-    expect(times(at('gave up').frame, 'zz overloaded')).toBe(1);
+    expect(times(at('other words').frame, 'Error: zz credential rejected')).toBe(1);
+    expect(times(at('gave up').frame, 'Turn ended after 4 attempts. Check the subscription credential')).toBe(1);
+    expect(times(at('gave up').frame, 'zz credential rejected')).toBe(1);
     expect(times(at('subagent twice').frame, 'zz subagent failure')).toBe(1);
     expect(at('subagent twice').frame).toContain('[spawn-web-1700000000000] Error (×2): zz subagent failure');
     expect(times(at('after the switch').frame, 'Error: zz before the switch')).toBe(1);

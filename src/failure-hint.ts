@@ -1,20 +1,23 @@
+import { codexGateAuth } from './codex-subscription-adapter.js';
 import { resolveProvider, type Recipe } from './recipe.js';
 
 type Env = Record<string, string | undefined>;
+
+interface BuiltCredential {
+  readonly provider: string;
+}
 
 interface Route {
   endpoint?: { setting: string; value: string | undefined };
   credential: string;
 }
 
-function routeOf(recipe: Recipe, env: Env): Route | undefined {
+function routeOf(recipe: Recipe, env: Env, credentials: BuiltCredential | null | undefined): Route | undefined {
   switch (resolveProvider(recipe)) {
     case 'anthropic':
       return {
         endpoint: { setting: 'ANTHROPIC_BASE_URL', value: env.ANTHROPIC_BASE_URL },
-        credential: env.ANTHROPIC_OAUTH_CREDENTIALS_FILE || env.ANTHROPIC_AUTH_TOKEN
-          ? 'the subscription credential (/auth status says which one is in use)'
-          : 'ANTHROPIC_API_KEY',
+        credential: credentials ? 'the subscription credential (/auth status says which one is in use)' : 'ANTHROPIC_API_KEY',
       };
     case 'openai-responses':
       return { endpoint: { setting: 'OPENAI_BASE_URL', value: env.OPENAI_BASE_URL }, credential: 'OPENAI_API_KEY' };
@@ -28,7 +31,7 @@ function routeOf(recipe: Recipe, env: Env): Route | undefined {
     case 'openai-codex':
       return {
         endpoint: { setting: 'CODEX_BASE_URL', value: env.CODEX_BASE_URL },
-        credential: env.CODEX_GATE_TOKEN?.trim() ? 'CODEX_GATE_TOKEN' : 'the ChatGPT login (/auth status says its state)',
+        credential: codexGateAuth(env) ? 'CODEX_GATE_TOKEN' : 'the ChatGPT login (/auth status says its state)',
       };
     case 'openai-compatible':
       return { endpoint: { setting: "the recipe's agent.baseUrl", value: recipe.agent.baseUrl }, credential: 'OPENAI_COMPATIBLE_API_KEY' };
@@ -45,8 +48,12 @@ function endpointState(value: string | undefined): string {
   return host === '' ? 'set, but not to a URL with a host' : `set to ${host}`;
 }
 
-export function failureHint(recipe: Recipe, env: Env): (errorType: string | undefined) => string | undefined {
-  const route = routeOf(recipe, env);
+export function failureHint(
+  recipe: Recipe,
+  env: Env,
+  credentials: BuiltCredential | null | undefined,
+): (errorType: string | undefined) => string | undefined {
+  const route = routeOf(recipe, env, credentials);
   return (errorType) => {
     if (!route) return undefined;
     if (errorType === 'network' || errorType === 'timeout') {

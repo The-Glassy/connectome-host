@@ -162,20 +162,20 @@ describe('the TUI\'s failure line', () => {
 
 describe('what to check names where this host sends its calls', () => {
   test('a network or timeout failure names the provider\'s base URL setting, not set', () => {
-    const hint = failureHint(recipe(), {});
+    const hint = failureHint(recipe(), {}, null);
     expect(hint('network')).toBe('Check the network, any proxy, and ANTHROPIC_BASE_URL (not set, so the default).');
     expect(hint('timeout')).toBe('Check the network, any proxy, and ANTHROPIC_BASE_URL (not set, so the default).');
   });
 
   test('a setting that is set is named by its host only', () => {
     const env = { ANTHROPIC_BASE_URL: 'https://key:secret@gate.example.com:8443/anthropic?token=t' };
-    expect(failureHint(recipe(), env)('network')).toBe('Check the network, any proxy, and ANTHROPIC_BASE_URL (set to gate.example.com:8443).');
-    expect(failureHint(recipe(), { ANTHROPIC_BASE_URL: 'gate' })('network')).toBe('Check the network, any proxy, and ANTHROPIC_BASE_URL (set, but not to a URL with a host).');
-    expect(failureHint(recipe(), { ANTHROPIC_BASE_URL: 'localhost:8080' })('network')).toBe('Check the network, any proxy, and ANTHROPIC_BASE_URL (set, but not to a URL with a host).');
+    expect(failureHint(recipe(), env, null)('network')).toBe('Check the network, any proxy, and ANTHROPIC_BASE_URL (set to gate.example.com:8443).');
+    expect(failureHint(recipe(), { ANTHROPIC_BASE_URL: 'gate' }, null)('network')).toBe('Check the network, any proxy, and ANTHROPIC_BASE_URL (set, but not to a URL with a host).');
+    expect(failureHint(recipe(), { ANTHROPIC_BASE_URL: 'localhost:8080' }, null)('network')).toBe('Check the network, any proxy, and ANTHROPIC_BASE_URL (set, but not to a URL with a host).');
   });
 
   test('each provider\'s own setting', () => {
-    const net = (agent: Record<string, unknown>, env: Record<string, string> = {}) => failureHint(recipe(agent), env)('network');
+    const net = (agent: Record<string, unknown>, env: Record<string, string> = {}) => failureHint(recipe(agent), env, null)('network');
     expect(net({ provider: 'openai-responses' })).toBe('Check the network, any proxy, and OPENAI_BASE_URL (not set, so the default).');
     expect(net({ provider: 'bedrock' }, { BEDROCK_BASE_URL: 'https://gate.example.com/bedrock/x' })).toBe('Check the network, any proxy, and BEDROCK_BASE_URL (set to gate.example.com).');
     expect(net({ provider: 'openai-codex' })).toBe('Check the network, any proxy, and CODEX_BASE_URL (not set, so the default).');
@@ -185,22 +185,23 @@ describe('what to check names where this host sends its calls', () => {
   });
 
   test('an auth failure names the credential the host used', () => {
-    const auth = (agent: Record<string, unknown>, env: Record<string, string> = {}) => failureHint(recipe(agent), env)('auth');
+    const auth = (agent: Record<string, unknown>, env: Record<string, string> = {}, built: { provider: string } | null = null) =>
+      failureHint(recipe(agent), env, built)('auth');
     expect(auth({})).toBe('Check ANTHROPIC_API_KEY.');
-    expect(auth({}, { ANTHROPIC_AUTH_TOKEN: 't' })).toBe('Check the subscription credential (/auth status says which one is in use).');
-    expect(auth({}, { ANTHROPIC_OAUTH_CREDENTIALS_FILE: '/c.json' })).toBe('Check the subscription credential (/auth status says which one is in use).');
+    expect(auth({}, {}, { provider: 'anthropic' })).toBe('Check the subscription credential (/auth status says which one is in use).');
     expect(auth({ provider: 'openai-responses' })).toBe('Check OPENAI_API_KEY.');
     expect(auth({ provider: 'openrouter' })).toBe('Check OPENROUTER_API_KEY.');
     expect(auth({ provider: 'openai-compatible', baseUrl: 'http://localhost:11434/v1' })).toBe('Check OPENAI_COMPATIBLE_API_KEY.');
     expect(auth({ provider: 'bedrock' })).toBe('Check AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.');
     expect(auth({ provider: 'bedrock' }, { AWS_SESSION_TOKEN: 's' })).toBe('Check AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN.');
-    expect(auth({ provider: 'openai-codex' })).toBe('Check the ChatGPT login (/auth status says its state).');
-    expect(auth({ provider: 'openai-codex' }, { CODEX_GATE_TOKEN: 'g' })).toBe('Check CODEX_GATE_TOKEN.');
-    expect(auth({ provider: 'openai-codex' }, { CODEX_GATE_TOKEN: '  ' })).toBe('Check the ChatGPT login (/auth status says its state).');
+    const gate = { CODEX_GATE_TOKEN: 'g', CODEX_BASE_URL: 'https://gate.example.com/codex' };
+    expect(auth({ provider: 'openai-codex' }, {}, { provider: 'openai-codex' })).toBe('Check the ChatGPT login (/auth status says its state).');
+    expect(auth({ provider: 'openai-codex' }, gate, { provider: 'openai-codex via https://gate.example.com/codex' })).toBe('Check CODEX_GATE_TOKEN.');
+    expect(auth({ provider: 'openai-codex' }, { ...gate, CODEX_GATE_TOKEN: '  ' }, { provider: 'openai-codex' })).toBe('Check the ChatGPT login (/auth status says its state).');
   });
 
   test('any other kind gets nothing to check', () => {
-    const hint = failureHint(recipe(), {});
+    const hint = failureHint(recipe(), {}, null);
     for (const kind of ['rate_limit', 'server', 'invalid_request', 'context_length', 'safety', 'unsupported', 'unknown', undefined]) {
       expect(hint(kind)).toBeUndefined();
     }

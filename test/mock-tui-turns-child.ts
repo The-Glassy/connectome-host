@@ -85,6 +85,7 @@ let endSwitch!: (outcome: 'switched' | 'failed') => void;
 const app = {
   membrane: {},
   recipe: { name: 'tui-turns-test', agent: { name: 'agent' } },
+  credentials: { provider: 'anthropic', snapshot: () => ({ kind: 'ok' }) },
   branchState: { undoStack: [], redoStack: [], checkpoints: new Map() },
   sessionManager: {
     getActiveSession: () => active,
@@ -322,9 +323,9 @@ async function play(): Promise<void> {
     }
     await step('three failures');
     first.send('inference:started');
-    first.send('inference:failed', { error: 'zz overloaded' });
+    first.send('inference:failed', { error: 'zz credential rejected' });
     await step('other words');
-    first.send('inference:exhausted', { error: 'zz overloaded', errorType: 'server' });
+    first.send('inference:exhausted', { error: 'zz credential rejected', errorType: 'auth' });
     await step('gave up');
     for (let i = 0; i < 2; i++) {
       first.send('inference:started', { agentName: sub });
