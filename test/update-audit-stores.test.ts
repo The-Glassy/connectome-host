@@ -1964,14 +1964,12 @@ describe("which fleet children an audit follows, and how", () => {
     }
   }, 60_000);
 
-  test("a child's audit whose host ended mid-open ends its process group as it ends, so a helper its extension started there writes nothing", async () => {
+  test("a child's audit whose host ended mid-open ends its process group as it ends, a helper its extension started there included", async () => {
     const parent = await makeDataDir('parent', [{ namespace: 'agents/agent', crossed: false }]);
     const child = await makeDataDir('kid', [{ namespace: 'agents/agent', crossed: false }]);
     const file = childrenFilePath(parent.dir);
     const opening = join(root, 'opening');
     const helperPid = join(root, 'helper.pid');
-    const late = join(child.dir, 'helper-wrote');
-    const go = join(root, 'go');
     // A strategy whose open of the child's store works, without a turn of
     // the event loop, until its host has ended, once it has marked that the
     // open began.
@@ -1980,9 +1978,7 @@ describe("which fleet children an audit follows, and how", () => {
       PARENT_AT_IMPORT,
       "import { spawn } from 'node:child_process';",
       "import { existsSync, writeFileSync } from 'node:fs';",
-      // A helper in the audit's own group, which writes in the child's data
-      // directory once the test lets it.
-      `const helper = spawn('sh', ['-c', 'while [ ! -e ${go} ]; do sleep 0.05; done; echo late > ${late}'], { stdio: 'ignore' });`,
+      "const helper = spawn('sleep', ['60'], { stdio: 'ignore' });",
       `writeFileSync(${JSON.stringify(helperPid)}, String(helper.pid));`,
       'helper.unref();',
       "export function register(api) { api.registerStrategy('slow', () => ({",
@@ -2018,10 +2014,6 @@ describe("which fleet children an audit follows, and how", () => {
       // The group's SIGKILL, sent as the child's audit ended, lands on the
       // helper in its own time.
       expect(await waitForEnd(helper, 10_000), "the helper outlived the child's audit").toBe(true);
-      // Let it write, were it there.
-      writeFileSync(go, '');
-      await Bun.sleep(500);
-      expect(existsSync(late), 'the helper wrote in the data directory').toBe(false);
     } finally {
       try { process.kill(-pid, 'SIGKILL'); } catch { /* gone */ }
       try { process.kill(helper, 'SIGKILL'); } catch { /* gone */ }
@@ -2038,24 +2030,25 @@ describe("which fleet children an audit follows, and how", () => {
     const start = (mark: string) => spawn('bun', [INDEX_PATH, '--audit-stores', '--fleet-child', '--recipe', recipe, dir], {
       env: { ...env, AUDIT_TEST_MARK: mark }, stdio: ['pipe', 'ignore', 'pipe'], detached: true,
     });
-    // Told to begin at once, a child loads its extension: how long that takes
-    // here sets how long the next one is given.
     const toldMark = join(root, 'told');
-    const began = Date.now();
     const told = start(toldMark);
     told.stdin!.write('\n');
     const toldEnded = new Promise((done) => told.on('exit', done));
     for (let waited = 0; !existsSync(toldMark) && waited < 30_000; waited += 20) await Bun.sleep(20);
     expect(existsSync(toldMark), 'a child told to begin never loaded its extension').toBe(true);
-    const took = Date.now() - began;
     await toldEnded;
     const loaded = join(root, 'loaded');
     const child = start(loaded);
+    child.stdin!.on('error', () => { /* a child that has ended */ });
     let stderr = '';
     child.stderr!.on('data', (chunk) => { stderr += chunk; });
     const ended = new Promise<string>((done) => child.on('exit', (code, signal) => done(signal ?? `status ${code}`)));
-    // Never told to begin: given three times as long, it has loaded none.
-    await Bun.sleep(Math.max(1_500, 3 * took));
+    // More than its stdin can buffer, so the write completes only once the child
+    // reads it, which only its gate does.
+    const wrote = await new Promise<Error | null | undefined>((done) => child.stdin!.write(Buffer.alloc(4 << 20, 120), done));
+    expect(wrote ?? null).toBeNull();
+    expect(child.exitCode).toBeNull();
+    expect(child.signalCode).toBeNull();
     expect(existsSync(loaded)).toBe(false);
     child.stdin!.end();
     const how = await Promise.race([ended, Bun.sleep(20_000).then(() => 'still running')]);

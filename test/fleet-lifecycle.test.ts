@@ -443,22 +443,19 @@ describe('FleetModule lifecycle', () => {
         started.push(child);
         return child;
       };
-      // Told, it begins: its pid file comes, which also says how long a start
-      // takes on this machine now.
       const toldDir = join(dir, 'told');
       const told = start(toldDir);
-      const from = Date.now();
       told.stdin!.write('\n');
       const deadline = Date.now() + 60_000;
       while (!existsSync(join(toldDir, 'headless.pid')) && Date.now() < deadline) await Bun.sleep(20);
       expect(existsSync(join(toldDir, 'headless.pid'))).toBe(true);
-      const startTime = Date.now() - from;
-      // Never told, it waits, with nothing of it in its data directory, for
-      // three of those starts, and ends when its stdin does.
       const untoldDir = join(dir, 'untold');
       const untold = start(untoldDir);
       const exit = new Promise<number | null>((done) => untold.on('exit', (code) => done(code)));
-      await Bun.sleep(Math.max(2_000, 3 * startTime));
+      // More than its stdin can buffer, so the write completes only once the child
+      // reads it, which only its gate does.
+      const wrote = await new Promise<Error | null | undefined>((done) => untold.stdin!.write(Buffer.alloc(4 << 20, 120), done));
+      expect(wrote ?? null).toBeNull();
       expect(untold.exitCode).toBeNull();
       expect(readdirSync(untoldDir)).toEqual([]);
       untold.stdin!.end();

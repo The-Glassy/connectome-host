@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { join } from 'node:path';
+import { finished } from 'node:stream';
 import { waitToBeListed } from '../src/fleet-begin.js';
 
 const options = JSON.parse(readFileSync(process.argv[2]!, 'utf8')) as {
@@ -48,6 +49,14 @@ const options = JSON.parse(readFileSync(process.argv[2]!, 'utf8')) as {
   closeStdinAtGate?: boolean;
   /** Its stdin fails as it waits. */
   stdinErrorAtGate?: boolean;
+  /** Append a line to this path, outside the data directory, for each chunk
+   *  that comes on its stdin as it waits, once that chunk's turn has run. */
+  chunks?: string;
+  /** Once it has begun, resume stdin, so a stdin the gate left open is read
+   *  to its end, and write this path, outside the data directory, a turn
+   *  after its stdin can give it nothing more, having ended, closed or
+   *  failed. */
+  stdinDone?: string;
 };
 if (options.closeStdinAtGate) {
   closeSync(0);
@@ -58,9 +67,18 @@ if (options.closeStdinAtGate) {
 if (options.atGate !== undefined) writeFileSync(options.atGate, '');
 // As a host does, before anything it writes (src/fleet-begin.ts).
 const listed = waitToBeListed();
+if (options.chunks !== undefined) {
+  const chunks = options.chunks;
+  process.stdin.on('data', (chunk: Buffer) => setImmediate(() => appendFileSync(chunks, `${chunk.length}\n`)));
+}
 if (options.stdinErrorAtGate) process.stdin.emit('error', new Error('a pipe that failed'));
 await listed;
 if (options.begun !== undefined) writeFileSync(options.begun, '');
+if (options.stdinDone !== undefined) {
+  const stdinDone = options.stdinDone;
+  process.stdin.resume();
+  finished(process.stdin, () => setImmediate(() => writeFileSync(stdinDone, '')));
+}
 const dataDir = process.env.DATA_DIR!;
 const socketPath = join(dataDir, 'ipc.sock');
 const pidPath = join(dataDir, 'headless.pid');
