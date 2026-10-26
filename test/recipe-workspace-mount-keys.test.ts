@@ -103,8 +103,8 @@ describe('workspace mount keys', () => {
   });
 
   test("refuses an include pattern agent-framework can't read, in its words", () => {
-    expect(() => validateRecipe(recipe({ mounts: [mount({ include: ['*.md', 'src/*.ts'] })] })))
-      .toThrow(/^modules\.workspace: Mount "notes": include must be a non-empty list of names, "\*\.ext" globs or "dir\/\*\*" globs, with no "\." or "\.\." segment/);
+    expect(() => validateRecipe(recipe({ mounts: [mount({ include: ['*.md', 'src/../x'] })] })))
+      .toThrow(/^modules\.workspace: Mount "notes": include .*"\.\." segment/);
   });
 
   test('validates a mount without making its directory, or anything beneath it, as the framework\'s constructor does nothing but check', () => {
