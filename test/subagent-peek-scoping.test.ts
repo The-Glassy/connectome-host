@@ -15,10 +15,7 @@
  * context and trigger retry-storm spawn behavior.
  *
  * The fix uses `parentMap` (already maintained for cancelChildren) to walk
- * descendants. A caller sees only its own subtree — peers and ancestors are
- * filtered out — except that the primary also sees a run under way whose
- * launcher's run has ended, since that run's result comes to the primary
- * (context-manager #155 part 5; Agnes-1009, room-203 #198350).
+ * descendants.
  */
 import { describe, test, expect } from 'bun:test';
 import {
@@ -66,8 +63,6 @@ function makeTree(): SubagentModule {
       pendingToolCalls: [],
       activeCallIds: new Set(),
     };
-    // As the module records a run's attempt: indexed to its run as it
-    // starts (runOfAttempt), then live under the run's name.
     privateView.runOfAttempt.set(frameworkAgentName, displayName);
     privateView.liveSubagents.set(displayName, live);
     privateView.frameworkNameIndex.set(frameworkAgentName, displayName);

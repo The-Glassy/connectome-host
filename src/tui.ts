@@ -121,13 +121,6 @@ function headerMessage(message: string): string {
   return message.length > 70 ? `${message.slice(0, 67).replace(/[\uD800-\uDBFF]$/, '')}…` : message;
 }
 
-/**
- * A stored injection's line in the history replay (stored-injection.ts), or
- * undefined for any other row. It's shown as what it is, such as a lessons
- * block: one line under its label, cut as replayed thinking is, never as
- * the user's words or the agent's. A block stored in shards is one line, its
- * first shard's, so a later shard's is null: nothing to show.
- */
 export function historyInjectionLine(
   msg: { content: ReadonlyArray<{ type: string; text?: unknown }>; metadata?: unknown; shardIndex?: number },
 ): string | null | undefined {

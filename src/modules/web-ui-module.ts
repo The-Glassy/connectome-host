@@ -1477,9 +1477,7 @@ export class WebUiModule implements Module {
    * Transparent by default: no inference of its own, no Chronicle writes, no
    * external MCPL calls. Pass `?injections=1` to gather the dynamic injections
    * (lessons/retrieval/MCPL context) too, which is NOT transparent: it can run
-   * inference and fire MCPL `beforeInference` hooks. An injection a start
-   * would store as a message isn't capped, sharded or budgeted in it as the
-   * stored message would be (docs/debug-context-api.md).
+   * inference and fire MCPL `beforeInference` hooks.
    */
   private async handleDebugContext(url: URL): Promise<Response> {
     const app = this.panelApp();
@@ -3729,9 +3727,6 @@ export function toWireEntry(
     }
   }
 
-  // A stored injection (stored-injection.ts), such as a lessons block, is a
-  // labelled system row: as any participant but user, system and tool it
-  // would show as the agent's own message.
   const injection = storedInjectionMarkOf(msg.metadata);
   if (injection) {
     const label = storedInjectionLabel(injection);

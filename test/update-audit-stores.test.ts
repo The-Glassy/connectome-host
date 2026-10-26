@@ -92,9 +92,7 @@ async function makeStore(path: string, namespace: string, crossed: boolean): Pro
  *  over 40..49 with one over 60..69, and no record owns 50..59 (Effie-2289's
  *  case, room-203 #164796). A start chunks that run before its topology
  *  check, which gives L2-x holes, unless the messages are ones a start's view
- *  leaves out: ones a tune-out diverted (`run: 'tuned-out'`), or another
- *  agent's stored context injections (`run: 'injected'`, context-manager #155
- *  part 5). The seed opens with `auditOnly` only so that adding the messages
+ *  leaves out. The seed opens with `auditOnly` only so that adding the messages
  *  makes no chunk records. */
 async function makeSpanStore(path: string, run?: 'tuned-out' | 'injected' | 'own-injected'): Promise<void> {
   const seed = new AutobiographicalStrategy({ adaptiveResolution: true, hierarchical: true, autoTickOnNewMessage: false, auditOnly: true });
@@ -507,11 +505,6 @@ describe('the store audit', () => {
   }, 90_000);
 
   test("the subconscious's view leaves out other agents' stored injections", () => {
-    // createSubconsciousAgent's filter (framework.ts), which the audit's copy
-    // follows: the residents' slot merged, tuned-out rows included, every
-    // other agent's stored injection left out, the subconscious's own kept.
-    // This pins the copy's rule; the next test, its wiring, and the one
-    // after, its answers against agent-framework's own filter.
     const view = subconsciousView('Subconscious');
     const row = (metadata?: Record<string, unknown>) => ({ id: 'm', participant: 'x', content: [], timestamp: 0, ...(metadata ? { metadata } : {}) }) as never;
     const injection = (agent: string) => ({ system: true, kind: 'context-injection', contextInjection: { agent, namespace: 'retrieval', contentHash: 'h', part: 0, parts: 1 } });

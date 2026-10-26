@@ -1,10 +1,3 @@
-/**
- * context-manager #155 part 5: agent-framework stores a module's `afterUser`
- * injection in the agent's store, marked `metadata.contextInjection:
- * { agent, namespace }`, with participant `system_context:<namespace>`. A
- * reader that answers "what did someone say" leaves such a row out; a reader
- * that shows the transcript labels it as injected.
- */
 import { describe, expect, test } from 'bun:test';
 import { compiledWithoutStoredInjections, storedInjectionLabel } from '../src/stored-injection.js';
 import { namingSummary } from '../src/synesthete.js';
@@ -22,8 +15,6 @@ const lessonsRow = (agent = 'alice') => ({
 
 describe('the mark', () => {
   test('a partial mark is no mark to the host\'s readers, as it\'s none to the compile', () => {
-    // agent-framework's storedInjectionMarkOf, which every reader here goes
-    // through, wants all three strings; its own tests pin the rule.
     const partial = { ...lessonsRow(), metadata: { contextInjection: { agent: 'alice', namespace: 'retrieval' } } };
     expect(toWireEntry(partial, 4).participant).toBe('assistant');
     expect(historyInjectionLine(partial)).toBeUndefined();
@@ -78,8 +69,6 @@ describe('readers that show the transcript label stored injections', () => {
   });
 
   test('the TUI\'s cut keeps a character whole', () => {
-    // The label is 32 characters with its space, so the emoji sits across
-    // the cut at 117.
     const line = historyInjectionLine({ ...lessonsRow(), content: [{ type: 'text', text: `${'x'.repeat(84)}😀 more` }] })!;
     expect(line).toBe(`[retrieval, injected for alice] ${'x'.repeat(84)}…`);
   });
@@ -94,7 +83,6 @@ describe('readers that show the transcript label stored injections', () => {
     expect(entry.participant).toBe('system');
     expect(entry.text).toBe('[retrieval, injected for alice]\n## Retrieved Knowledge, for the message beginning "hello"\n- [90%] a lesson');
     expect(entry.blocks[0]).toEqual({ kind: 'text', text: '[retrieval, injected for alice]' });
-    // Without the mark, the same participant is the agent's, as before.
     const unmarked = toWireEntry({ ...lessonsRow(), metadata: undefined }, 4);
     expect(unmarked.participant).toBe('assistant');
     expect(unmarked.text).not.toContain('injected');
@@ -189,7 +177,6 @@ describe('readers of a compile leave stored injections out by its provenance', (
 
   test('a message the compile can\'t account for stays', () => {
     expect(compiledWithoutStoredInjections({ messages: ['a', 'b'] })).toEqual(['a', 'b']);
-    // Provenance naming stored rows, with no record of them as read.
     expect(compiledWithoutStoredInjections({ messages: ['a'], provenance: { messages: [raw('i1')] } as never })).toEqual(['a']);
     expect(compiledWithoutStoredInjections(compiled([raw('gone'), raw()], {}))).toEqual(['message 0', 'message 1']);
   });

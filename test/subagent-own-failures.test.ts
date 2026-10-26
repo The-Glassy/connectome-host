@@ -1405,8 +1405,6 @@ describe('a name means one subagent until its result has come back', () => {
       const lead = internal(h.subagent).liveSubagents.get('lead')!.frameworkAgentName;
       expect((await h.subagent.handleToolCall({ ...spawn('child'), callerAgentName: lead })).success).toBe(true);
       await until(() => written.length > 0);
-      // The line names the launcher as agents know it, its display name;
-      // the write goes to its own window, by its framework name.
       expect(lead).not.toBe('lead');
       expect(written).toEqual([{ text: `[Subagent 'child' returned, for 'lead']\n\ndone`, forAgent: lead }]);
       expect(woken).toEqual([lead]);
@@ -1418,8 +1416,6 @@ describe('a name means one subagent until its result has come back', () => {
 
   for (const call of [spawn, fork]) {
     test(`an async result for a ${call.name} that has ended reaches the primary, not a later run under its name, which isn't woken`, async () => {
-      // A launcher is its run's own agent name, unique to the attempt
-      // (nameStamp), so a later run under the display name is another agent.
       const isLead = (agentName: string) => agentName.startsWith(call === spawn ? 'spawn-lead-' : 'lead-d');
       let leadRuns = 0;
       let firstLead = '';
@@ -1458,7 +1454,7 @@ describe('a name means one subagent until its result has come back', () => {
       };
       try {
         await h.subagent.handleToolCall(call('lead'));
-        await until(() => h.running('child') && !sub.asyncHandles.has('lead')); // the first run's result has come back
+        await until(() => h.running('child') && !sub.asyncHandles.has('lead'));
         expect((await h.subagent.handleToolCall(call('lead'))).success).toBe(true);
         await until(() => leadRuns === 2 && h.running('lead'));
         const secondLead = sub.liveSubagents.get('lead')!.frameworkAgentName;
@@ -1530,16 +1526,12 @@ describe('a name means one subagent until its result has come back', () => {
     try {
       expect((await h.subagent.handleToolCall({ id: 't-hud', name: 'hud', input: { enabled: true }, callerAgentName: 'parent' })).success).toBe(true);
       await h.subagent.handleToolCall(spawn('lead'));
-      await until(() => h.running('child') && !sub.asyncHandles.has('lead')); // lead has ended, its child runs on
+      await until(() => h.running('child') && !sub.asyncHandles.has('lead'));
       expect(await status()).toContain("child [spawn] running since");
-      // peek sees the running runs the status lists (scopeOf).
       expect((await h.subagent.peek(undefined, 'parent')).map((snapshot) => snapshot.name)).toContain('child');
       expect((await h.subagent.peek('child', 'parent')).map((snapshot) => snapshot.name)).toEqual(['child']);
       releaseChild();
       await until(() => !sub.asyncHandles.has('child'));
-      // Once it has ended it isn't listed. Whether "(none running)" follows
-      // depends on whether a start of the primary's, woken by the results,
-      // has stored a status listing it by then.
       expect((await status()) ?? '').not.toContain('child [spawn] running');
     } finally { await h.cleanup(); }
   }, 20_000);

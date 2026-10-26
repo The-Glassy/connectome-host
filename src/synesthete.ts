@@ -29,12 +29,6 @@ ${exampleList}
 Respond with ONLY the name, nothing else. No quotes, no explanation.`;
 }
 
-/**
- * What the name is made from: the session's first six rows with text, each
- * as `participant: text`, cut at 200 characters. A stored injection
- * (stored-injection.ts), such as the first turn's lessons block, isn't the
- * conversation, so it's left out.
- */
 export function namingSummary(
   messages: ReadonlyArray<{ participant: string; content: ReadonlyArray<{ type: string; text?: unknown }>; metadata?: unknown }>,
 ): string {

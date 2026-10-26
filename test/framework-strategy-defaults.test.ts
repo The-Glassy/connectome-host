@@ -291,8 +291,6 @@ describe('carrierPolicy passthrough', () => {
   });
 });
 
-// What a module injects is stored as a message (context-manager #155 part 5),
-// so retrieval fits its block under the cap the strategy will cut at.
 describe('the per-message cap retrieval fits under', () => {
   test('is the one the strategy applies, 10,000 unless the recipe sets it, and none for passthrough', () => {
     const autobiographical = recipe();

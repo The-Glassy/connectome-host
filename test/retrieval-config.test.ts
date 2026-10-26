@@ -74,8 +74,6 @@ describe('retrieval recipe config', () => {
   });
 });
 
-// context-manager #155 part 5: retrieval's block is stored as a message in
-// whichever agent's window it gathers for, and one cap serves them all.
 describe('the cap retrieval fits its block under', () => {
   const capOf = (agent: Record<string, unknown>, modules: Record<string, unknown> = {}) =>
     retrievalMessageCap({ name: 'x', agent: { systemPrompt: 'sys', ...agent }, modules } as never);

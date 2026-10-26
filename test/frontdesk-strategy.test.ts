@@ -248,9 +248,6 @@ describe('server-attributed messages (zulip-mcp `attributed` stamp)', () => {
     expect(state.has(question.id)).toBe(true);
   });
 
-  // context-manager #155 part 5: agent-framework stores a lessons block as a
-  // row of the agent's window, marked as a stored injection. It's no one's
-  // question, whatever it holds.
   test('salience passes over a stored injection, even one holding a "?"', () => {
     const s = makeStrategy();
     const lessons = msg('system_context:retrieval', '## Retrieved Knowledge\n- [90%] Which env? Staging. (tags: env)', {

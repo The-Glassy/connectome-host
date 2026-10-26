@@ -279,10 +279,7 @@ export class FrontdeskStrategy extends AutobiographicalStrategy {
   /**
    * Recompute which user messages are "unanswered questions or mentions":
    * a user message that contains `?` or an @mention and has no assistant
-   * message within the following WINDOW messages. A stored context
-   * injection, such as a lessons block, is no one's message, so it's never
-   * taken for a question, and it doesn't count toward the WINDOW messages
-   * an answer is looked for in.
+   * message within the following WINDOW messages.
    */
   protected updateSalience(store: MessageStoreView): void {
     const messages = store.getAll().filter((m) => storedInjectionMarkOf(m.metadata) === undefined);

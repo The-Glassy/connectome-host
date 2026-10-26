@@ -99,10 +99,7 @@ const residentView = (name: string) => (message: StoredMessage): boolean =>
 /** agent-framework's view of the subconscious's messages
  *  (createSubconsciousAgent): its own namespace and the residents' slot
  *  merged, tuned-out rows included, less every other agent's stored context
- *  injection, the residents' among them. A copy: one test asks it and the
- *  filter agent-framework opens a named subconscious with about the same
- *  rows, one pins its rule, and another that the audit opens a named
- *  subconscious with its own name's view; exported for the first two. */
+ *  injection. agent-framework doesn't export it, so this is a copy. */
 export const subconsciousView = (name: string) => (message: StoredMessage): boolean =>
   !isAnotherAgentsInjection(message.metadata, name);
 
@@ -343,12 +340,9 @@ export interface AuditRepair {
 /** What the audit opens in a store: the agent's namespace, its strategy, and
  *  the subconscious's namespace, when the recipe enables it. */
 interface Resident {
-  /** The agent's name, which its view keeps its own stored injections by. */
   name: string;
   namespace: string;
   strategy: () => ContextStrategy;
-  /** `name` is the subconscious's agent name, by which its view keeps its own
-   *  stored injections and leaves out every other agent's. */
   subconscious?: { name: string; namespace: string; reAnchorFraction?: number };
 }
 

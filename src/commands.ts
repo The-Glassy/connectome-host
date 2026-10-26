@@ -1039,12 +1039,7 @@ function handleUndo(app: AppContext): CommandResult {
     return { lines: [{ text: 'Nothing to undo.', style: 'system' }] };
   }
 
-  // Find the last agent message (working backwards). A stored injection
-  // (stored-injection.ts), such as the turn's lessons block, isn't one, and
-  // the undo point steps back past those just before the message, so the
-  // branch ends where it would with no stored injections: a block right
-  // before the undone reply goes with it, and one before a tool round stays,
-  // as the round does.
+  // Find the last agent message (working backwards)
   let undoPoint: string | undefined;
   const injected = (i: number): boolean => storedInjectionMarkOf(messages[i]!.metadata) !== undefined;
   for (let i = messages.length - 1; i >= 0; i--) {

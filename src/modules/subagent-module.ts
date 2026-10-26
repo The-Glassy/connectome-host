@@ -70,9 +70,6 @@ export interface SubagentModuleConfig {
   maxExecutionMs?: number;
   /** Max restart attempts on transient errors (default: 2) */
   maxRetries?: number;
-  /** The IANA zone the fleet status's clock times read in: the recipe's
-   *  `agent.timezone`, which the agent's clock rows read in too. Absent, as
-   *  resolveTimeZone resolves it (AGENT_TIMEZONE, then the system's). */
   timeZone?: string;
 }
 
@@ -439,20 +436,14 @@ const SUBAGENT_STRATEGY = {
 } as const;
 const SUBAGENT_STREAM_TOKENS = 500_000;
 
-/** The launcher a subagent's bookkeeping and wake name when neither the
- *  call nor the module's config names one, as before. */
 const UNNAMED_LAUNCHER = 'agent';
 
-/** The fleet status's injection namespace, and the participant
- *  agent-framework stores it under (`system_context:<namespace>`). */
+// agent-framework stores an injection under participant
+// `system_context:<namespace>`.
 const FLEET_NAMESPACE = 'subagent-fleet';
 const FLEET_PARTICIPANT = `system_context:${FLEET_NAMESPACE}`;
-/** A fleet status's heading line, which gatherContext writes first. */
 const FLEET_HEADING = /^\[Fleet Status(, as of [^\]]*)?\]$/;
 
-/** The per-message cap of every subagent's and fork's window
- *  (SUBAGENT_STRATEGY), which retrieval fits its block under too
- *  (retrievalMessageCap). */
 export const SUBAGENT_MESSAGE_CAP = SUBAGENT_STRATEGY.maxMessageTokens;
 
 /**
@@ -1340,7 +1331,6 @@ export class SubagentModule implements Module {
 
   // Retry on transient errors
   private maxRetries: number;
-  /** The zone the fleet status's clock times read in (SubagentModuleConfig). */
   private readonly timeZone: string;
 
   /** Observable registry of active/recent subagents for TUI display. */
@@ -1349,10 +1339,6 @@ export class SubagentModule implements Module {
   /** Parent agent name for each subagent (for fleet tree reconstruction). */
   readonly parentMap = new Map<string, string>();
 
-  /** Each subagent's launcher as agents know it (shownName), recorded as it
-   *  launched the run, while it ran: the fleet status's `parent:` label,
-   *  the name the result's line gives it. A link restored from the store
-   *  has none, and its run has ended. */
   private readonly launcherShownOf = new Map<string, string>();
 
   // Stashed results from subagent--return tool calls, keyed by framework agent name
@@ -1804,33 +1790,16 @@ export class SubagentModule implements Module {
     if (!persisted.hudEnabled) return [];
 
     // Postmortem 2026-05-28 P3 #8: scope the Fleet Status HUD to the
-    // calling agent's descendants, and for the primary the runs whose
-    // launcher's run has ended (scopeOf). Pre-fix the HUD injected the whole
+    // calling agent's descendants. Pre-fix the HUD injected the whole
     // fleet roster every turn, which (a) encouraged peer-coordination
     // anti-patterns and (b) amplified false zombie/failed flags across
     // the orchestrator's context.
     const allowed = this.scopeOf(agentName);
 
     // agent-framework stores this injection where the compile placed it, and
-    // stores it again when its text differs from what the agent's last
-    // request held (context-manager #155 part 5). So the status lists what's
-    // running or waiting, each started one with its start as a clock time,
-    // under "as of" its latest start or end: the same state gives the same
-    // text, where an elapsed count changed it at nearly every start. A
-    // finished run has reported already, as its tool result or `[Subagent
-    // '…' returned]` in its launcher's conversation, or in the primary's
-    // when its launcher had ended (addForLauncher), so it
-    // leaves the list, which keeps each stored copy to the runs under way:
-    // as many running as the concurrency limit, and the async runs waiting
-    // for a slot. Once none is, a status saying none is running is added at
-    // each start of an agent whose newest stored status lists a run, until
-    // agent-framework has stored one, so the newest copy in its context
-    // isn't one that lists runs since ended. That's usually the next start;
-    // while agent-framework holds the agent's window it places the status
-    // rather than storing it, and stores it at the first start after, since
-    // what it skips as held is what the last request rendered from the store
-    // (noteRenderedInjections), which a placed status isn't. A running
-    // subagent's progress is `peek`'s to show.
+    // again only when the agent's last request didn't render the same text
+    // from the store; while it holds the agent's window it places the status
+    // rather than storing it (anima-research/context-manager#155 part 5).
     const lines: string[] = [];
     let latestChange: number | undefined;
     for (const [, sa] of this.activeSubagents) {
@@ -1839,13 +1808,6 @@ export class SubagentModule implements Module {
       if (latestChange === undefined || changedAt > latestChange) latestChange = changedAt;
       if (sa.status !== 'running') continue;
       const parent = this.parentMap.get(sa.name) ?? 'agent';
-      // The launcher as agents know it, as the result's line names it,
-      // recorded as it launched the run (claimName), whether its run goes on
-      // or has ended. Every run listed here has that record: it's in scope
-      // through its link, which claimName made with the record, and a link
-      // without one is a restored run's, which is never running
-      // (restoreFromStore). The link itself is the fallback that keeps the
-      // label total.
       const parentShort = this.launcherShownOf.get(sa.name) ?? parent;
       const task = sa.task.length > 50 ? sa.task.slice(0, 47) + '...' : sa.task;
       lines.push(`  ${sa.name} [${sa.type}] running since ${this.clockTime(sa.startedAt)} parent:${parentShort} "${task}"`);
@@ -1857,22 +1819,10 @@ export class SubagentModule implements Module {
     // and the caller has no descendants to begin with).
     for (const [name] of this.asyncHandles) {
       if (!allowed.has(name)) continue;
-      // A run under way is listed above, whichever key its entry has (a
-      // fork's is its name, a spawn's `spawn-<name>`); entries of finished
-      // runs under the name, kept as history, don't hide one waiting. A name
-      // means one admitted run at a time (nameInUse), so a running entry
-      // under it is this handle's run.
       if (!this.runningEntry(name)) lines.push(`  ${name} [async] pending`);
     }
 
     if (lines.length === 0) {
-      // Nothing running or waiting: an agent whose newest stored status
-      // lists a run gets one saying none is, so the newest copy in its
-      // context isn't one that lists work since ended, and otherwise there's
-      // nothing to tell. That's read from the status agent-framework stored
-      // in the agent's own window, not kept here, so a preview, which
-      // stores nothing, and a restart, which forgets this process's state,
-      // leave it as it is.
       if (!this.newestStatusListsRun(agentName)) return [];
       lines.push('  (none running)');
     }
@@ -1885,15 +1835,9 @@ export class SubagentModule implements Module {
     }];
   }
 
-  /** Whether the newest fleet status agent-framework stored in the agent's
-   *  own window lists a run: a line other than its heading (the whole line,
-   *  `[Fleet Status]` or `[Fleet Status, as of …]`, so a run whose name
-   *  begins so still counts) and "(none running)". A status stored in shards is several rows, each
-   *  carrying the status's mark, in shard order, the heading in the first;
-   *  so the newest row is its last shard, whose lines are runs' whenever the
-   *  status lists one, and that row alone answers. A window that can't be
-   *  read throws, which agent-framework's registry logs, and the status adds
-   *  nothing at that start. */
+  // context-manager stores a long status in shards, in order, each carrying
+  // the mark, so the newest row is its last shard, whose lines are runs'
+  // whenever the status lists one.
   private newestStatusListsRun(agentName: string): boolean {
     const rows = this.ctx!.queryMessages({ participant: FLEET_PARTICIPANT }, { forAgent: agentName }).messages;
     for (let i = rows.length - 1; i >= 0; i--) {
@@ -1908,8 +1852,6 @@ export class SubagentModule implements Module {
     return false;
   }
 
-  /** A time of day on the agent's clock, `14:05:09`, in the recipe's zone,
-   *  the one its clock rows read in. */
   private clockTime(at: number): string {
     return formatZonedDateTime(at, this.timeZone).slice(11, 19);
   }
@@ -2263,7 +2205,6 @@ export class SubagentModule implements Module {
     }
   }
 
-  /** Drop a run's parent link and its launcher's recorded name. */
   private unlinkParent(name: string): void {
     this.parentMap.delete(name);
     this.launcherShownOf.delete(name);
@@ -2443,16 +2384,6 @@ export class SubagentModule implements Module {
     return result;
   }
 
-  /** Add to `into` the runs launched by the agent named `attempt` or by any
-   *  attempt of the run named `run`, and below each one still going on, the
-   *  runs it launched. A child is its launcher's run's, whichever of the
-   *  run's attempts launched it (runOfAttempt, as childrenOf reads it), while
-   *  the run goes on, between attempts too (Agnes-1009, room-203 #199188); a
-   *  resident's is its own name's. A finished run's children aren't its
-   *  any more: their launcher's run has ended (orphanedRuns). A parent link
-   *  names an agent, an attempt or a resident, never a run's display name,
-   *  so a run is matched only through its attempts. Each run going on is
-   *  walked once. */
   private collectDescendants(attempt: string | undefined, run: string | undefined, into: Set<string>): void {
     const goingOn = new Set(this.runOfAttempt.values());
     const pending: Array<{ attempt: string | undefined; run: string | undefined }> = [{ attempt, run }];
@@ -2468,18 +2399,6 @@ export class SubagentModule implements Module {
     }
   }
 
-  /** The runs an agent sees in its fleet status and through `peek`: its
-   *  descendants (getDescendantDisplayNames), and for the primary, each run
-   *  whose launcher's run has ended (orphanedRuns), with the runs under one
-   *  still going on, between its attempts too. Such a run delivers its result to the primary's
-   *  window (addForLauncher), and with its launcher's run gone it's in no
-   *  other agent's tree (Agnes-1009, room-203 #198350). The status lists
-   *  the ones running and the async ones waiting for a slot (a sync run
-   *  waiting for one has no entry yet), and `peek` shows the ones running.
-   *  Its finished ones only
-   *  date the status: a later "as of", with nothing changed since, says no
-   *  less, where leaving one out would date a "(none running)" before that
-   *  run's end. */
   private scopeOf(agentFrameworkName: string): Set<string> {
     const scope = this.getDescendantDisplayNames(agentFrameworkName);
     if (agentFrameworkName !== this.config.parentAgentName) return scope;
@@ -2487,21 +2406,11 @@ export class SubagentModule implements Module {
     for (const child of this.orphanedRuns()) {
       if (scope.has(child)) continue;
       scope.add(child);
-      // Only a run going on has runs under it here: a finished one's
-      // children are orphans of their own (orphanedRuns lists them), since
-      // its attempts are neither listed nor indexed any more. So a read walks
-      // the links once per orphan going on, however many have finished.
       if (goingOn.has(child)) this.collectDescendants(undefined, child, scope);
     }
     return scope;
   }
 
-  /** The runs, finished or not, whose launcher's run has ended:
-   *  agent-framework no longer lists the launching attempt, and the run it
-   *  was an attempt of is no longer going on here (runOfAttempt keeps every
-   *  attempt of a run until it ends). A run still going on keeps the
-   *  children its earlier attempts launched, between attempts too. One pass
-   *  over the parent links. */
   private orphanedRuns(): string[] {
     if (!this.ctx) return [];
     const listed = new Set(this.ctx.getAgents().map((agent) => agent.name));
@@ -2605,14 +2514,6 @@ export class SubagentModule implements Module {
    * Peek at a running subagent's live state: full context, streaming output,
    * pending tool calls. Returns null if the subagent is not running.
    * If name is omitted, returns snapshots for all running subagents.
-   *
-   * Postmortem 2026-05-28 P3 #8: when a `callerFrameworkAgentName` is
-   * supplied (the normal tool-call path threads it through `handlePeek`),
-   * the result is scoped to the caller's descendants — peers/cousins are
-   * filtered out — and for the primary to the runs whose launcher's run has
-   * ended too (scopeOf), of which it shows those running, as the primary's
-   * fleet status lists them. Internal callers without a known identity (omit the arg)
-   * keep the global view for backward compatibility.
    */
   async peek(name?: string, callerFrameworkAgentName?: string): Promise<SubagentPeekSnapshot[]> {
     const allowed = callerFrameworkAgentName
@@ -2647,9 +2548,6 @@ export class SubagentModule implements Module {
       // over the budget it compiles at is returned, where a real compile
       // refuses it.
       const compiled = await live.contextManager.compile(undefined, undefined, { dryRun: true });
-      // A stored injection, such as the subagent's lessons block, is no one's
-      // message, so neither the count nor the snippet takes one, as a dry
-      // compile held none before injections were stored.
       const said = compiledWithoutStoredInjections(compiled);
       messageCount = said.length;
       // Extract a short snippet from the last message for observability
@@ -3151,10 +3049,6 @@ export class SubagentModule implements Module {
     return { success: true, data: this.launchReceipt(launch, `Subagent '${input.name}' accepted as a fork.`, ticket) };
   }
 
-  /** The name agents know an agent by: a fork's or a subagent's display
-   *  name, which its attempt's own name carries with a depth and a stamp;
-   *  a resident's or a conversation agent's own. Read while the agent runs,
-   *  since runOfAttempt keeps an attempt only until its run ends. */
   private shownName(agentName: string): string {
     return this.runOfAttempt.get(agentName) ?? agentName;
   }
@@ -3214,31 +3108,6 @@ export class SubagentModule implements Module {
     });
   }
 
-  /** An async run's result, in the window of the agent that launched it,
-   *  whose wake reads it there: a resident's is the residents' slot, a
-   *  fork's, a subagent's or a conversation agent's its own. Its line names
-   *  a launcher that isn't the primary (config.parentAgentName), so it reads
-   *  right in whatever window it ends up in: agent-framework passes to the
-   *  primary a write its launcher's window is released without reading. A
-   *  result is work done, so one whose launcher agent-framework no longer
-   *  lists when the result is written is its run's (Agnes-1009, room-203
-   *  #199188): while the run goes on, its current attempt's, told an earlier
-   *  attempt launched it, or the primary's while agent-framework lists no
-   *  attempt of the run, between attempts and while the next one is being
-   *  set up (registerLive comes before agent-framework lists it); once the run
-   *  has ended, the primary's window, the residents' slot, as every async
-   *  result did before, its line adding that the launcher has ended, so no
-   *  resident takes it for its own (#197191, #197307). One agent-framework
-   *  passes on later names its launcher alone. A launcher is the launching
-   *  attempt's own name, unique to it (nameStamp), so a later run under the
-   *  same display name is another agent; runOfAttempt gives the run of each
-   *  attempt until the run ends. The line names it as agents know it
-   *  (`launcherShown`, shownName): a fork's or a subagent's display name,
-   *  read while it ran (#198350). With no launcher named, or the empty name, it lands there as
-   *  before. A write that fails otherwise throws, as before. Returns the
-   *  agent to wake, or null: none for a result the primary takes because
-   *  its launcher's attempt has ended, read at its next start, as on main
-   *  (#197466). */
   private addForLauncher(launcher: string | undefined, launcherShown: string | undefined, name: string, outcome: 'returned' | 'failed', body: string): string | null {
     const ctx = this.ctx!;
     const say = (forWhom: string, forAgent?: string): void => {
@@ -3258,11 +3127,9 @@ export class SubagentModule implements Module {
       say(launcher === this.config.parentAgentName ? '' : `, for '${shown}'`, launcher);
       return launcher;
     }
-    // The attempt that launched it has ended. While its run goes on, the
-    // result is the run's (Agnes-1009, room-203 #199188): its current attempt
-    // takes it, told an earlier attempt launched it, or, while
-    // agent-framework lists none (between attempts, or while the next is
-    // being set up), the primary does, told the launching attempt has ended.
+    // agent-framework lists no attempt of a run between its attempts, or while
+    // the next is being set up (registerLive comes before it lists the agent),
+    // and refuses a write for an agent it doesn't list.
     const run = this.runOfAttempt.get(launcher);
     if (run !== undefined) {
       const current = this.liveSubagents.get(run)?.frameworkAgentName;
@@ -3309,8 +3176,6 @@ export class SubagentModule implements Module {
     name: string,
     type: 'spawn' | 'fork',
     promise: Promise<SubagentResult>,
-    /** The agent that launched it, as handleSpawn names it: undefined when
-     *  neither the call nor the module's config names one. */
     launcher: string | undefined,
     autoDetachMs?: number,
     /** Rendered into both returns, so a sync caller gets the same launch
@@ -3319,7 +3184,6 @@ export class SubagentModule implements Module {
   ): Promise<ToolResult> {
     const launchText = launch ? describeSubagentLaunch(launch) : undefined;
     const parentAgentName = launcher ?? UNNAMED_LAUNCHER;
-    // Read while the launcher runs: its sync call is waiting on this run.
     const launcherShown = launcher === undefined ? undefined : this.shownName(launcher);
     let detachResolve: ((value: 'detached') => void) | null = null;
     const detachPromise = new Promise<'detached'>(resolve => { detachResolve = resolve; });
@@ -3791,11 +3655,6 @@ export class SubagentModule implements Module {
             // returned, where a real compile refused it and failed the fork;
             // the fork's own launch check, a real compile of its own context,
             // still refuses a first context the fork can't use.
-            // The parent's stored injections, its lessons block and its fleet
-            // status, are the parent's context, not the conversation, so the
-            // seed leaves them out, as agent-framework's own fork seed does.
-            // Copied as messages they would lose their mark and read as the
-            // fork's own conversation.
             const compiled = compiledWithoutStoredInjections(await Promise.race([
               parentCM.compile(undefined, undefined, { dryRun: true }),
               cancel.promise,
@@ -4000,8 +3859,6 @@ export class SubagentModule implements Module {
    * Extract the last assistant text from a context manager's messages.
    * Fallback when the streaming speech capture is empty (e.g., agent's
    * last action was a tool call, or speech was reset on stream_resumed).
-   * A stored injection (stored-injection.ts), such as a lessons block, is
-   * no one's answer, so it's passed over too.
    */
   private extractLastAssistantText(contextManager: ContextManager): string {
     try {

@@ -143,10 +143,6 @@ describe('InstructionsModule', () => {
     expect((await mod.gatherContext('a'))[0]!.position).toBe('beforeUser');
   });
 
-  // context-manager #155 part 5: agent-framework stores a module's injection
-  // where the compile placed it, unless it's marked `placedEachCompile`.
-  // Instructions off `system` are there to be near the end, so they're placed
-  // at each compile, as before; at `system` they're as they were.
   test('off system, the instructions are placed at each compile, not stored', async () => {
     writeFileSync(join(dir, 'AGENTS.md'), 'x');
     for (const position of ['beforeUser', 'afterUser'] as const) {

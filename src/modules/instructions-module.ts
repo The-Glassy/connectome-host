@@ -280,14 +280,6 @@ export class InstructionsModule implements Module {
       position: this.position,
       content: [{ type: 'text', text: `${this.header}\n\n${content}` }],
     };
-    // Off `system`, the instructions are there to be near the end, so they're
-    // marked to be placed at each compile, as before. agent-framework would
-    // otherwise store an `afterUser` one where the compile placed it, and
-    // again only when the agent's last request no longer held that text
-    // (context-manager #155 part 5; it places a `beforeUser` one at each
-    // compile in any case): a stored copy drifts back into history as the
-    // conversation grows past it. The price is today's: each start moves
-    // them, and replies after their old place lose their thinking.
     if (this.position !== 'system') injection.placedEachCompile = true;
     return [injection];
   }

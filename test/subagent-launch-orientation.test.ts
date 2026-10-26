@@ -469,10 +469,6 @@ describe('fork orientation', () => {
     }
   });
 
-  // context-manager #155 part 5: agent-framework stores the parent's
-  // injections, such as its lessons block, in its window. They're the
-  // parent's context, not the conversation, and copied as messages they'd
-  // lose their mark and read as the fork's own.
   test("a fork's seed leaves the parent's stored injections out", async () => {
     const h = await makeHarness({});
     try {

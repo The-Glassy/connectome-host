@@ -38,7 +38,6 @@ function harness(responses: Array<string | Error>, lessons: Lesson[]) {
       getModule: (name: string) => name === 'lessons' ? { getLessons: () => lessons } : null,
       queryMessages: () => ({
         messages: [{
-          // A stored row always has its id, which retrieval keys a turn on.
           id: 'm1',
           participant: 'user',
           content: [{ type: 'text', text: 'Please recall the relevant memory context.' }],
@@ -922,21 +921,9 @@ describe('RetrievalModule observability', () => {
   });
 });
 
-// context-manager #155 part 5: agent-framework stores an `afterUser`
-// injection where the compile placed it, and stores it again when its text
-// differs from what the agent's last request held. So a turn's lessons are
-// kept per agent and keyed on the turn's opening message: a later start of
-// the same turn gets the same block with no model calls, whatever of its
-// own the framework stored since (its notices, clock rows, stored blocks),
-// until another message to the agent lands, and while the agent's entry is
-// among the 64 most recently used.
 describe('RetrievalModule keyed on the turn\'s opening message', () => {
   const AGENT = 'alice';
 
-  /** A retrieval module over a store the test writes. Every agent reads the
-   *  shared window, as the residents do, unless `own` gives it one of its
-   *  own, as a fork or a subagent has. A response may be a promise the test
-   *  settles, to hold a model call open. */
   function turnHarness(
     responses: Array<string | Error | Promise<string>>,
     opts: { lessons?: Lesson[]; maxMessageTokens?: number; maxInjectedLessons?: number } = {},
@@ -963,14 +950,12 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     const add = addTo(rows);
     const say = (participant: string, text: string, metadata?: Record<string, unknown>) =>
       add(participant, [{ type: 'text', text }], metadata);
-    /** An agent's own window, and its `say`. */
     const own = (agent: string) => {
       const window: Array<Record<string, unknown>> = [];
       windows.set(agent, window);
       const addHere = addTo(window);
       return (participant: string, text: string) => addHere(participant, [{ type: 'text', text }]);
     };
-    /** One tool round of the agent's: its call, then the result. */
     const toolRound = (n: number) => {
       add(AGENT, [{ type: 'tool_use', id: `t${n}`, name: 'look', input: {} }]);
       add('user', [{ type: 'tool_result', toolUseId: `t${n}`, content: 'memory detail found' }]);
@@ -997,7 +982,7 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     const h = turnHarness(['["memory"]']);
     h.say('user', 'What do you remember about the memory detail?');
     const first = await h.mod.gatherContext(AGENT);
-    for (let n = 1; n <= 8; n++) h.toolRound(n); // the opening message leaves the last 10 rows
+    for (let n = 1; n <= 8; n++) h.toolRound(n);
     const restart = await h.mod.gatherContext(AGENT);
 
     expect(first).toHaveLength(1);
@@ -1014,7 +999,6 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
 
     h.say('user', `${'memory '.repeat(20)}end`);
     const text = h.block(await h.mod.gatherContext(AGENT))!;
-    // 60 characters of it, then the ellipsis.
     expect(/beginning "(.*)"\n/.exec(text)![1]).toBe(`${'memory '.repeat(8)}memo…`);
   });
 
@@ -1036,8 +1020,6 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     expect(h.calls).toHaveLength(1);
   });
 
-  // Each kind of row the framework or the host stores within a turn, or
-  // before a turn's start, that isn't anyone's message to the agent.
   const passedOver: Array<[string, (h: ReturnType<typeof turnHarness>) => void]> = [
     ['a clock row', h => h.say('user', 'Clock: 10:50 Europe/Berlin (UTC+02:00)', { system: true, kind: 'clock', clock: { at: 1, onBoundary: true, zone: 'Europe/Berlin' } })],
     ['a framework notice', h => h.say('user', '[turn-interrupted] Your previous turn was stopped', { system: true, kind: 'turn-interrupted' })],
@@ -1063,7 +1045,6 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     });
   }
 
-  // Each kind of row that is someone's message to the agent.
   const opening: Array<[string, (h: ReturnType<typeof turnHarness>) => void, string]> = [
     ['a new message', h => h.say('user', 'And the memory detail again?'), 'And the memory detail again?'],
     ['a batched wake\'s [Gate: …] line', h => h.say('user', '[Gate: 2 events matched]\n\n- memory in #general', { source: 'gate:debounce' }), '[Gate: 2 events matched] - memory in #general'],
@@ -1132,7 +1113,6 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     h.say('user', 'Tell me the memory detail.');
     const alice = await h.mod.gatherContext(AGENT);
     h.say(AGENT, 'The memory detail is this.');
-    // bob's opening message is alice's reply, so bob retrieves for it.
     const bob = await h.mod.gatherContext('bob');
     const aliceAgain = await h.mod.gatherContext(AGENT);
     expect(h.calls).toHaveLength(2);
@@ -1159,9 +1139,9 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     h.say('user', 'Tell me the memory detail.');
     for (let i = 0; i <= 64; i++) await h.mod.gatherContext(`agent-${i}`);
     expect(h.calls).toHaveLength(65);
-    await h.mod.gatherContext('agent-64'); // still kept
+    await h.mod.gatherContext('agent-64');
     expect(h.calls).toHaveLength(65);
-    await h.mod.gatherContext('agent-0'); // the oldest went
+    await h.mod.gatherContext('agent-0');
     expect(h.calls).toHaveLength(66);
   });
 
@@ -1171,8 +1151,8 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     await h.mod.gatherContext(AGENT);
     for (let i = 0; i < 63; i++) await h.mod.gatherContext(`agent-${i}`);
     h.say('user', 'And the memory detail again?');
-    await h.mod.gatherContext(AGENT); // a new turn: alice's block is the newest now
-    await h.mod.gatherContext('agent-63'); // a 65th agent: agent-0's block goes, not alice's
+    await h.mod.gatherContext(AGENT);
+    await h.mod.gatherContext('agent-63');
     expect(h.calls).toHaveLength(66);
     await h.mod.gatherContext(AGENT);
     expect(h.calls).toHaveLength(66);
@@ -1183,9 +1163,9 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     h.say('user', 'Tell me the memory detail.');
     await h.mod.gatherContext(AGENT);
     for (let i = 0; i < 63; i++) await h.mod.gatherContext(`agent-${i}`);
-    await h.mod.gatherContext(AGENT); // a restart, from the kept block
+    await h.mod.gatherContext(AGENT);
     expect(h.calls).toHaveLength(64);
-    await h.mod.gatherContext('agent-63'); // a 65th agent: agent-0's block goes, not alice's
+    await h.mod.gatherContext('agent-63');
     await h.mod.gatherContext(AGENT);
     expect(h.calls).toHaveLength(65);
   });
@@ -1201,7 +1181,7 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     const sent = JSON.stringify(h.calls[0]!.messages);
     expect(sent).toContain('Scout task');
     expect(sent).not.toContain('Prime, find');
-    h.say('user', 'Prime, and the memory detail?'); // the primary's window moves on
+    h.say('user', 'Prime, and the memory detail?');
     expect(await h.mod.gatherContext('scout')).toEqual(first);
     expect(h.calls).toHaveLength(1);
   });
@@ -1219,12 +1199,12 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     const held = new Promise<string>((resolve) => { release = resolve; });
     const h = turnHarness([held, '["memory"]']);
     h.say('user', 'First: the memory detail?');
-    const late = h.mod.gatherContext(AGENT); // waits at its concept call
+    const late = h.mod.gatherContext(AGENT);
     h.say('user', 'Second: the memory detail again?');
-    const second = await h.mod.gatherContext(AGENT); // the newer turn keeps its block
+    const second = await h.mod.gatherContext(AGENT);
     release('["memory"]');
     await late;
-    expect(await h.mod.gatherContext(AGENT)).toEqual(second); // the newer turn's restart
+    expect(await h.mod.gatherContext(AGENT)).toEqual(second);
     expect(h.calls).toHaveLength(2);
   });
 
@@ -1276,10 +1256,6 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
       .toStartWith(`## Retrieved Knowledge, for the message beginning "${'m'.repeat(59)}…"\n`);
   });
 
-  // agent-framework stores the block as a message, which the strategy cuts at
-  // its per-message cap mid-text; a placed block went whole. So the block
-  // keeps whole lessons that fit, most relevant first, and says how many it
-  // left out (Agnes-1009, room-203 #196254).
   test('at a small cap, the block keeps the most relevant lessons that fit and says how many it left out', async () => {
     const lessons = [lesson('l1', 'memory one'), lesson('l2', `memory ${'large '.repeat(200)}`), lesson('l3', 'memory three')];
     const h = turnHarness(['["memory"]'], { lessons, maxMessageTokens: 60 });
@@ -1298,8 +1274,6 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
   test('a lesson that fits with the note its count ends up saying is kept, though the note for more wouldn\'t fit', async () => {
     const heading = '## Retrieved Knowledge, for the message beginning "Tell me the memory detail."';
     const note = '(1 more relevant lesson left out, to keep this message under its size limit)';
-    // Pad the kept lesson so the block with the one-lesson note ends on a
-    // token's last character: the note for two, a character longer, doesn't fit.
     const base = [heading, '- [90%] memory one (tags: memory)', note].join('\n').length;
     const content = `memory one${'!'.repeat((4 - (base % 4)) % 4)}`;
     const lessons = [lesson('l1', content), lesson('l2', `memory ${'large '.repeat(200)}`)];
@@ -1312,9 +1286,6 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
   test('a later lesson\'s room for the note counts only the lessons not kept, so it\'s kept where the note for more wouldn\'t fit', async () => {
     const heading = '## Retrieved Knowledge, for the message beginning "Tell me the memory detail."';
     const note = '(1 more relevant lesson left out, to keep this message under its size limit)';
-    // l1 kept, l2 too large, then l3, padded so the block with the one-lesson
-    // note ends on a token's last character: counting l1 as not kept would
-    // reserve the note for two, a character longer, and leave l3 out.
     const base = [heading, '- [90%] memory one (tags: memory)', '- [90%] memory three (tags: memory)', note].join('\n').length;
     const three = `memory three${'!'.repeat((4 - (base % 4)) % 4)}`;
     const lessons = [lesson('l1', 'memory one'), lesson('l2', `memory ${'large '.repeat(200)}`), lesson('l3', three)];
@@ -1331,8 +1302,6 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     test(`a ${tool.type} stored in shards is passed over whole, its text-only shards included`, async () => {
       const h = turnHarness(['["memory"]']);
       h.say('user', 'Tell me the memory detail.');
-      // A long message with a tool block: context-manager puts the block on
-      // the first shard, and the later shards hold text alone.
       h.add('bob', [{ type: 'text', text: 'looking it up, part one' }, tool], undefined, { bodyGroupId: 'g1', shardIndex: 0 });
       h.add('bob', [{ type: 'text', text: 'part two of the same reply' }], undefined, { bodyGroupId: 'g1', shardIndex: 1 });
       expect(h.block(await h.mod.gatherContext(AGENT)))
@@ -1342,8 +1311,6 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
 
   test('a message of the same text as a tool message stored in shards is a message of its own', async () => {
     const h = turnHarness(['["memory"]']);
-    // The group id names the text, so the later message shares it: it's the
-    // shard order that tells the two apart, as context-manager reads it.
     h.add('bob', [{ type: 'text', text: 'the memory detail' }, { type: 'tool_use', id: 't9', name: 'look', input: {} }], undefined, { bodyGroupId: 'g1', shardIndex: 0 });
     h.add('bob', [{ type: 'text', text: ', pasted' }], undefined, { bodyGroupId: 'g1', shardIndex: 1 });
     h.add('carol', [{ type: 'text', text: 'the memory detail' }], undefined, { bodyGroupId: 'g1', shardIndex: 0 });
@@ -1387,8 +1354,6 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
   });
 
   test('a block whose lessons all fit is kept whole, with no room held for a note it doesn\'t need', async () => {
-    // Each lesson is shorter than the note, so the first with a note for the
-    // second wouldn't fit where the whole block does.
     const lessons = [lesson('l1', 'memory one'), lesson('l2', 'memory two')];
     const whole = '## Retrieved Knowledge, for the message beginning "Tell me the memory detail."\n- [90%] memory one (tags: memory)\n- [90%] memory two (tags: memory)';
     const h = turnHarness(['["memory"]'], { lessons, maxMessageTokens: Math.ceil(whole.length / 4) });
@@ -1409,12 +1374,12 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     const held = new Promise<string>((resolve) => { release = resolve; });
     const h = turnHarness([held, '["memory"]']);
     h.say('user', 'Tell me the memory detail.');
-    const behind = h.mod.gatherContext(AGENT); // waits at its concept call
-    const later = await h.mod.gatherContext(AGENT); // the same turn, started again
+    const behind = h.mod.gatherContext(AGENT);
+    const later = await h.mod.gatherContext(AGENT);
     expect(h.block(later)).toContain('memory detail');
-    release('["zebra"]'); // the left-behind start finds nothing
+    release('["zebra"]');
     expect(await behind).toEqual([]);
-    expect(await h.mod.gatherContext(AGENT)).toEqual(later); // the later start's block stays the turn's
+    expect(await h.mod.gatherContext(AGENT)).toEqual(later);
     expect(h.calls).toHaveLength(2);
   });
 
@@ -1427,16 +1392,13 @@ describe('RetrievalModule keyed on the turn\'s opening message', () => {
     h.say('user', 'Tell me the memory detail.');
     const first = h.mod.gatherContext(AGENT);
     const second = h.mod.gatherContext(AGENT);
-    releaseOlder('["zebra"]'); // the older start finds nothing, first
+    releaseOlder('["zebra"]');
     expect(await first).toEqual([]);
     releaseLater('["memory"]');
     const kept = await second;
     expect(h.block(kept)).toContain('memory detail');
-    // The later start's block is the turn's: the next start reuses it.
     expect(await h.mod.gatherContext(AGENT)).toEqual(kept);
     expect(h.calls).toHaveLength(2);
-    // The record holds only starts under way, so it doesn't grow with every
-    // subagent and fork name: a memory bound, which nothing else observes.
     expect((h.mod as unknown as { latestStarts: Map<string, number> }).latestStarts.size).toBe(0);
   });
 

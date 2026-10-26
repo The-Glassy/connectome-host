@@ -1,13 +1,3 @@
-/**
- * The host's side of context-manager #155 part 5, through a real framework:
- * agent-framework stores retrieval's `afterUser` block in the agent's window,
- * and stores it again when its text differs from what the agent's last
- * request held. Retrieval keys a turn's block on the turn's opening message,
- * so a start with no new message gets the same block, with no model calls,
- * and while the agent's last request held it, nothing new is stored; a new
- * message gets its own block, stored after it. The rows the framework stores
- * carry the mark the host's readers read.
- */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -26,9 +16,6 @@ afterEach(async () => {
   while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
 });
 
-/** Turns an external message into a user message and asks for inference; one
- *  with no content only asks, as a wake with nothing new does. Holds the
- *  lessons retrieval reads. */
 class Inbox implements Module {
   readonly name = 'lessons';
   async start(_ctx: ModuleContext) {}
@@ -86,8 +73,8 @@ describe('retrieval\'s block, stored by the framework', () => {
     expect(x.lessonRows()).toHaveLength(1);
 
     const repliesBefore = x.replies();
-    await x.say(''); // a start with no new message
-    expect(x.replies()).toBe(repliesBefore + 1); // it ran, and gathered
+    await x.say('');
+    expect(x.replies()).toBe(repliesBefore + 1);
     expect(x.retrieval.getRetrievalTraces()[0]!.outcome).toBe('cache-hit');
     expect(x.retrievalCalls).toHaveLength(1);
     expect(x.lessonRows()).toHaveLength(1);
@@ -99,7 +86,6 @@ describe('retrieval\'s block, stored by the framework', () => {
     const first = x.lessonRows()[0]!;
     expect(storedInjectionMarkOf(first.metadata)).toMatchObject({ agent: 'prime', namespace: 'retrieval' });
     expect(x.textOf(first)).toStartWith('## Retrieved Knowledge, for the message beginning "What is the memory detail?"\n');
-    // It's stored where the compile placed it: after the turn's message.
     const rows = x.window();
     expect(x.textOf(rows[rows.findIndex((m) => m.id === first.id) - 1]!)).toBe('What is the memory detail?');
 
