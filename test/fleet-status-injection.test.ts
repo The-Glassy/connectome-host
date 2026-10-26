@@ -166,6 +166,17 @@ describe('the fleet status', () => {
     ].join('\n'));
   });
 
+  test('a run started the same day in the recipe\'s zone keeps the bare time, though it was an earlier day in UTC', async () => {
+    const f = fleet('America/Los_Angeles');
+    f.add('afternoon', { startedAt: Date.UTC(2026, 9, 22, 23, 30, 0) });
+    f.add('evening', { startedAt: Date.UTC(2026, 9, 23, 0, 30, 0) });
+    expect(await f.status()).toBe([
+      '[Fleet Status, as of 2026-10-22 17:30:00 America/Los_Angeles]',
+      '  afternoon [spawn] running since 16:30:00 parent:resident "task for afternoon"',
+      '  evening [spawn] running since 17:30:00 parent:resident "task for evening"',
+    ].join('\n'));
+  });
+
   test('with only async handles pending, it has no time to be "as of"', async () => {
     const f = fleet();
     f.handles.set('later', {});
@@ -563,8 +574,8 @@ describe('an async run\'s result', () => {
     expect(d.written).toEqual([
       { text: "[Subagent 'kid' returned, for 'lead': launched by an earlier attempt]\n\ndone", forAgent: 'lead-d1-retry1-2' },
       { text: "[Subagent 'kit' failed, for 'lead': launched by an earlier attempt]\n\nError: broke", forAgent: 'lead-d1-retry1-2' },
-      { text: "[Subagent 'kip' returned, for 'lead', between its attempts: launched by an earlier attempt]\n\ndone too" },
-      { text: "[Subagent 'kin' failed, for 'lead', between its attempts: launched by an earlier attempt]\n\nError: broke" },
+      { text: "[Subagent 'kip' returned, for 'lead': launched by an attempt that has ended]\n\ndone too" },
+      { text: "[Subagent 'kin' failed, for 'lead': launched by an attempt that has ended]\n\nError: broke" },
     ]);
     expect(d.woken).toEqual(['lead-d1-retry1-2', 'lead-d1-retry1-2']);
   });

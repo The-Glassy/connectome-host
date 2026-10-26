@@ -67,9 +67,9 @@
     `, which has ended`. One whose launching attempt has ended while its
     run goes on, as after a retry, is the run's: its current attempt
     takes it, told `launched by an earlier attempt`, and while
-    agent-framework lists no attempt of the run, between attempts or as
-    the next is set up, it lands in the residents' slot, `for '…', between
-    its attempts: launched by an earlier attempt`. One whose
+    agent-framework lists no attempt of the run, from an attempt's end
+    until the next is listed or the run ends, it lands in the residents'
+    slot, `for '…': launched by an attempt that has ended`. One whose
     launcher's window is let go without reading it, a fork's or a
     subagent's run, or a conversation agent closed, agent-framework passes
     to the residents' slot, where its line names whom it was for. None of

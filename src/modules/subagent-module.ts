@@ -3146,7 +3146,7 @@ export class SubagentModule implements Module {
         say(`, for '${shown}': launched by an earlier attempt`, current);
         return current;
       }
-      say(`, for '${shown}', between its attempts: launched by an earlier attempt`);
+      say(`, for '${shown}': launched by an attempt that has ended`);
       return null;
     }
     say(`, for '${shown}', which has ended`);
