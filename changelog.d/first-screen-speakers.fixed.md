@@ -9,11 +9,10 @@
   as its server's. Anything else, such as an imported history, reads as
   `user`. Before, every one of them read "You:" in the TUI and "you" in
   the Web UI. The host's notes stored before this release carry no
-  `hostNote`, so they read as `user`, or as "you" if agent-framework
-  stamped them as typed input; typed messages stored before
-  agent-framework 0.22.3 marked where input came from read as `user`. The
-  Web UI's message entries carry who each `user` entry is as `speaker`.
-  The model's requests are unchanged.
+  `hostNote`, so they read as `user`, and so do typed messages stored
+  before agent-framework 0.22.3 marked where input came from. The Web
+  UI's message entries carry who each `user` entry is as `speaker`. The
+  model's requests are unchanged.
 - A turn the framework retries shows a repeated failure once: the TUI
   updates the line's count in place (`Error (×3): …`), and batch mode
   prints nothing more until the failure's words change. When the turn

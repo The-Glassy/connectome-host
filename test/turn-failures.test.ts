@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { createPipedTurns } from '../src/piped-turns.js';
-import { createFailureLines, createTurnFailures, failureCountLine, turnEndedLine, type ShownLine } from '../src/state/turn-failures.js';
+import { createFailureLines, failureCountLine, turnEndedLine, type ShownLine } from '../src/state/turn-failures.js';
 import { failureHint } from '../src/failure-hint.js';
 import type { Recipe } from '../src/recipe.js';
 
@@ -55,6 +55,30 @@ describe('a batch run\'s failed turn', () => {
     expect(err).toEqual(['Error: Connection error.']);
   });
 
+  test('a turn stopped after a failure says nothing of attempts', () => {
+    const { err, emit, attempt } = batch();
+    attempt('Connection error.');
+    emit('inference:aborted', { reason: 'user' });
+    expect(err).toEqual(['Error: Connection error.']);
+  });
+
+  test('after a turn gives up, the next turn\'s first failure gets a line of its own', () => {
+    const { err, emit, attempt } = batch();
+    attempt('Connection error.');
+    emit('inference:exhausted', { error: 'Connection error.', errorType: 'network' });
+    attempt('Connection error.');
+    emit('inference:exhausted', { error: 'Connection error.', errorType: 'network' });
+    expect(err).toEqual(['Error: Connection error.', 'Turn ended after 1 attempt.', 'Error: Connection error.', 'Turn ended after 1 attempt.']);
+  });
+
+  test('a session switch releases a line still waiting on the old framework\'s turn', async () => {
+    const { err, turns } = batch();
+    const waiting = turns.waitForTurn(60_000);
+    turns.switched();
+    await waiting;
+    expect(err).toEqual([]);
+  });
+
   test('two agents failing at once each keep their own count', () => {
     const { err, emit, attempt } = batch();
     attempt('Connection error.');
@@ -101,25 +125,9 @@ describe('a batch run\'s failed turn', () => {
 });
 
 describe('the TUI\'s failure line', () => {
-  test('a turn\'s repeated failure is one line, its count updated', () => {
-    const failures = createTurnFailures();
-    const steps = ['Connection error.', 'Connection error.', 'Connection error.']
-      .map((error) => failures.onTrace({ type: 'inference:failed', agentName: 'clerk', error }));
-    expect(steps).toEqual([
-      { show: 'line', text: 'Connection error.' },
-      { show: 'count', text: 'Connection error.', count: 2 },
-      { show: 'count', text: 'Connection error.', count: 3 },
-    ]);
+  test('a failure line reads its count once there is more than one', () => {
     expect(failureCountLine('Connection error.', 1)).toBe('Error: Connection error.');
     expect(failureCountLine('Connection error.', 3)).toBe('Error (×3): Connection error.');
-    expect(failures.onTrace({ type: 'inference:exhausted', agentName: 'clerk', errorType: 'network' }))
-      .toEqual({ show: 'ended', attempts: 3, alone: false, errorType: 'network' });
-  });
-
-  test('a turn stopped after a failure says nothing of attempts', () => {
-    const failures = createTurnFailures();
-    failures.onTrace({ type: 'inference:failed', agentName: 'clerk', error: 'x' });
-    expect(failures.onTrace({ type: 'inference:aborted', agentName: 'clerk' })).toBeNull();
   });
 
   test('the give-up line counts one attempt as one', () => {
@@ -196,9 +204,9 @@ describe('what to check names where this host sends its calls', () => {
     expect(auth({ provider: 'bedrock' })).toBe('Check AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.');
     expect(auth({ provider: 'bedrock' }, { AWS_SESSION_TOKEN: 's' })).toBe('Check AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN.');
     const gate = { CODEX_GATE_TOKEN: 'g', CODEX_BASE_URL: 'https://gate.example.com/codex' };
-    expect(auth({ provider: 'openai-codex' }, {}, { provider: 'openai-codex' })).toBe('Check the ChatGPT login (/auth status shows its state).');
-    expect(auth({ provider: 'openai-codex' }, gate, { provider: 'openai-codex via https://gate.example.com/codex' })).toBe('Check CODEX_GATE_TOKEN.');
-    expect(auth({ provider: 'openai-codex' }, { ...gate, CODEX_GATE_TOKEN: '  ' }, { provider: 'openai-codex' })).toBe('Check the ChatGPT login (/auth status shows its state).');
+    expect(auth({ provider: 'openai-codex' })).toBe('Check the ChatGPT login (/auth status shows its state).');
+    expect(auth({ provider: 'openai-codex' }, gate)).toBe('Check CODEX_GATE_TOKEN.');
+    expect(auth({ provider: 'openai-codex' }, { ...gate, CODEX_GATE_TOKEN: '  ' })).toBe('Check the ChatGPT login (/auth status shows its state).');
   });
 
   test('any other kind gets nothing to check', () => {

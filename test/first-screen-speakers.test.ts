@@ -52,6 +52,8 @@ describe('the host\'s own rows read as the host\'s, by kind', () => {
     expect(shown({ ...surface, hostNote: 'session-start' }).web).toBe('host · session start');
     expect(shown({ ...channel, hostNote: 'session-start' }).web).toBe('alice in #general');
     expect(shown({ ...push, hostNote: 'restart' }).web).toBe('heartbeat (push)');
+    const damaged = { ...channel, inboundSource: { ...channel.inboundSource, acceptedAt: undefined } };
+    expect(shown({ ...damaged, hostNote: 'session-start' }).web).toBe('user');
   });
 
   test('agent-framework\'s clock row and a host notice', () => {
@@ -63,15 +65,17 @@ describe('the host\'s own rows read as the host\'s, by kind', () => {
 
   test('the time module\'s session-start note', async () => {
     const written: unknown[] = [];
+    const roles: string[] = [];
     const ctx = {
       getState: () => undefined,
       setState: () => {},
-      addMessage: (_p: string, _c: unknown, metadata?: unknown) => { written.push(metadata); return 'm1'; },
+      addMessage: (p: string, _c: unknown, metadata?: unknown) => { written.push(metadata); roles.push(p); return 'm1'; },
     } as unknown as ModuleContext;
     await new TimeModule('UTC').start(ctx);
     expect(written).toHaveLength(1);
     expect(shown(written[0]).web).toBe('host · session start');
     expect((written[0] as { system?: unknown }).system).toBeUndefined();
+    expect(roles).toEqual(['user']);
   });
 
   test('the lifecycle module\'s note after a restart it asked for', async () => {
@@ -83,12 +87,14 @@ describe('the host\'s own rows read as the host\'s, by kind', () => {
       await first.handleToolCall({ id: 'c1', name: 'restart', input: { reason: 'update' }, callerAgentName: 'main' } as never);
       before.recordExit('SIGTERM', 0, new Date('2026-10-20T12:00:10Z'));
       const written: unknown[] = [];
-      const ctx = { addMessage: (_p: string, _c: unknown, metadata?: unknown) => { written.push(metadata); return 'm1'; } } as unknown as ModuleContext;
+      const roles: string[] = [];
+      const ctx = { addMessage: (p: string, _c: unknown, metadata?: unknown) => { written.push(metadata); roles.push(p); return 'm1'; } } as unknown as ModuleContext;
       const after = new LifecycleModule({ dataDir, timeZone: 'UTC', state: new SelfRestartState('boot-b'), now: () => new Date('2026-10-20T12:01:00Z'), hostVersion: '9.9.9' });
       await after.start(ctx);
       expect(written).toHaveLength(1);
       expect(shown(written[0]).web).toBe('host · restart');
-    expect((written[0] as { system?: unknown }).system).toBeUndefined();
+      expect((written[0] as { system?: unknown }).system).toBeUndefined();
+      expect(roles).toEqual(['user']);
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
@@ -96,20 +102,23 @@ describe('the host\'s own rows read as the host\'s, by kind', () => {
 
   test('the subagent module\'s report that a subagent returned or failed', () => {
     const written: unknown[] = [];
+    const roles: string[] = [];
     const mod = new SubagentModule({ provider: 'mock' });
     const inner = mod as unknown as {
       ctx: ModuleContext;
       addForLauncher(launcher: string | undefined, shownAs: string | undefined, name: string, outcome: 'returned' | 'failed', body: string): string | null;
     };
-    inner.ctx = { addMessage: (_p: string, _c: unknown, metadata?: unknown) => { written.push(metadata); return 'm1'; } } as unknown as ModuleContext;
+    inner.ctx = { addMessage: (p: string, _c: unknown, metadata?: unknown) => { written.push(metadata); roles.push(p); return 'm1'; } } as unknown as ModuleContext;
     inner.addForLauncher(undefined, undefined, 'scout', 'returned', 'done');
     inner.addForLauncher(undefined, undefined, 'scout', 'failed', 'Error: x');
     expect(written.map((m) => shown(m).web)).toEqual(['host · subagent returned', 'host · subagent failed']);
     expect(written.map((m) => (m as { system?: unknown }).system)).toEqual([undefined, undefined]);
+    expect(roles).toEqual(['user', 'user']);
   });
 
   test('the TTS relay\'s note that a reply was interrupted', async () => {
     const written: unknown[] = [];
+    const roles: string[] = [];
     const mod = new TtsRelayModule({ url: 'ws://127.0.0.1:1/bot', token: 't' });
     const inner = mod as unknown as {
       ctx: ModuleContext;
@@ -117,12 +126,13 @@ describe('the host\'s own rows read as the host\'s, by kind', () => {
     };
     inner.ctx = {
       callTool: async () => ({ success: true, data: [] }),
-      addMessage: (_p: string, _c: unknown, metadata?: unknown) => { written.push(metadata); return 'm1'; },
+      addMessage: (p: string, _c: unknown, metadata?: unknown) => { written.push(metadata); roles.push(p); return 'm1'; },
     } as unknown as ModuleContext;
     await inner.handleInterruption({ channelId: '42', spokenText: 'The ferry', reason: 'user_speech', timestamp: 2 });
     expect(written).toHaveLength(1);
     expect(shown(written[0]).web).toBe('host · voice interruption');
     expect((written[0] as { system?: unknown }).system).toBeUndefined();
+    expect(roles).toEqual(['user']);
   });
 });
 
@@ -133,6 +143,7 @@ describe('someone else\'s words read as theirs', () => {
     expect(shown(unlabelled).web).toBe('u42 in discord:42');
     expect(shown({ ...channel, author: undefined }).web).toBe('someone in #general');
     expect(shown({ ...channel, author: { id: '', name: 'alice' } }).web).toBe('alice in #general');
+    expect(shown({ ...channel, author: { id: '', name: '' }, authorName: 'bob' }).web).toBe('someone in #general');
   });
 
   test('a push that names no channel reads as the author it names, or else as its server\'s', () => {

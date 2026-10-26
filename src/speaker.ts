@@ -24,8 +24,12 @@ export function speakerOf(participant: string, metadata: unknown): Speaker {
     if (author === undefined && source.lane === 'push/event') return { kind: 'other', label: `${source.serverId} (push) in ${channel}` };
     return { kind: 'other', label: `${author ?? 'someone'} in ${channel}` };
   }
+  // agent-framework 0.27.0 stamps inboundSource after a server's own fields, so a channel or push
+  // stamp is the framework's even where readInboundSource rejects a field the server sent.
+  const stamped = (m.inboundSource as { kind?: unknown } | undefined)?.kind;
+  const fromServer = stamped === 'channel' || stamped === 'unscoped';
   const kind = m.system === true ? m.kind : m[HOST_NOTE_KEY];
-  if (m.system === true || typeof kind === 'string') {
+  if (!fromServer && (m.system === true || typeof kind === 'string')) {
     const named = typeof kind === 'string' ? kind.replace(/^host-/, '').replace(/-/g, ' ') : '';
     return { kind: 'host', label: named === '' ? 'host' : `host · ${named}` };
   }
@@ -41,5 +45,6 @@ function authorOf(m: Record<string, unknown>, lane: string): string | undefined 
   // agent-framework 0.27.0 gives a coalesced push that names no author `{ id: '', name: 'Someone' }`
   // (framework.ts, the coalesced channel event), and a push's own origin fields land flat in metadata.
   const placeholder = lane === 'push/event' && id === undefined && name === 'Someone';
-  return (placeholder ? undefined : name ?? id) ?? text(m.authorName) ?? text(m.authorId);
+  const flat = lane === 'push/event' ? text(m.authorName) ?? text(m.authorId) : undefined;
+  return (placeholder ? undefined : name ?? id) ?? flat;
 }

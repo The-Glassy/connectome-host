@@ -329,9 +329,14 @@ async function play(): Promise<void> {
     await step('gave up');
     for (let i = 0; i < 2; i++) {
       first.send('inference:started', { agentName: sub });
+      first.send('inference:started');
       first.send('inference:failed', { agentName: sub, error: 'zz subagent failure' });
+      first.send('inference:failed', { error: 'zz root again' });
     }
     await step('subagent twice');
+    first.send('inference:started');
+    first.send('inference:exhausted', { error: 'zz stream aborted' });
+    await step('aborted retry');
     first.send('inference:started');
     first.send('inference:failed', { error: 'zz before the switch' });
     await command('/session switch other');

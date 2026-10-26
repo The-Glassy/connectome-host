@@ -38,7 +38,8 @@ export interface PipedTurns {
   /** Resolves when the primary agent's turn settles, or after `capMs`. */
   waitForTurn(capMs?: number): Promise<void>;
   /** The host follows another framework, whose turns owe nothing to the
-   *  failures counted so far. */
+   *  failures counted so far, and a line waiting on the old one's turn is
+   *  released. */
   switched(): void;
 }
 
@@ -103,9 +104,11 @@ export function createPipedTurns(
     // terminal showing both reads as before; where stdout's line had already
     // ended, as after a tool's line, stdout gets an empty line. The primary's
     // stop, `aborted`, goes to stdout, since it isn't one. An end after an
-    // end prints nothing of its own. The primary's `exhausted`, after its
-    // failures or alone, is then followed by a line saying how many attempts
-    // the turn made and what to check.
+    // end prints nothing of its own. The primary's `exhausted` after its
+    // failures is then followed by a line saying how many attempts the turn
+    // made and what to check; after a lone `exhausted`, which already said
+    // the turn ended, that line gives only the attempts in all when there
+    // were more than one, and what to check when the end names a kind.
     if (state === 'open') {
       if (event.type === 'inference:failed') {
         out.write('\n');
@@ -154,6 +157,9 @@ export function createPipedTurns(
   function switched(): void {
     streams.clear();
     failures = createTurnFailures();
+    const done = settle;
+    settle = null;
+    done?.();
   }
 
   return { onTrace, waitForTurn, switched };

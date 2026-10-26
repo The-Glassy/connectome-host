@@ -211,6 +211,11 @@ describe("the TUI's repeated failures, through runTui", () => {
     expect(times(at('gave up').frame, 'zz credential rejected')).toBe(1);
     expect(times(at('subagent twice').frame, 'zz subagent failure')).toBe(1);
     expect(at('subagent twice').frame).toContain('[spawn-web-1700000000000] Error (×2): zz subagent failure');
+    expect(times(at('subagent twice').frame, 'zz root again')).toBe(1);
+    expect(at('subagent twice').frame).toContain('Error (×2): zz root again');
+    expect(times(at('aborted retry').frame, 'zz stream aborted')).toBe(1);
+    expect(times(at('aborted retry').frame, '3 attempts in all.')).toBe(1);
+    expect(times(at('aborted retry').frame, 'Turn ended after')).toBe(1);
     expect(times(at('after the switch').frame, 'Error: zz before the switch')).toBe(1);
     expect(at('after the switch').frame).not.toContain('(×2): zz before the switch');
   }, 40000);
