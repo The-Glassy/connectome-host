@@ -88,7 +88,7 @@ describe('the fleet status', () => {
     const first = await f.status();
     setSystemTime(new Date(T0 + 95_000));
     expect(await f.status()).toBe(first);
-    expect(first).toBe('[Fleet Status, as of 14:05:09 UTC]\n  scout [spawn] running since 14:05:09 parent:resident "task for scout"');
+    expect(first).toBe('[Fleet Status, as of 2026-10-23 14:05:09 UTC]\n  scout [spawn] running since 14:05:09 parent:resident "task for scout"');
   });
 
   test('a run that ends leaves the list, and its end moves the "as of"', async () => {
@@ -101,7 +101,7 @@ describe('the fleet status', () => {
     scout.toolCallsCount = 7;
     const after = await f.status();
     expect(after).not.toBe(before);
-    expect(after).toBe('[Fleet Status, as of 14:07:14 UTC]\n  miner [spawn] running since 14:06:09 parent:resident "task for miner"');
+    expect(after).toBe('[Fleet Status, as of 2026-10-23 14:07:14 UTC]\n  miner [spawn] running since 14:06:09 parent:resident "task for miner"');
   });
 
   test('failed and stopped runs leave the list as a completed one does', async () => {
@@ -109,7 +109,7 @@ describe('the fleet status', () => {
     f.add('scout', { status: 'failed', completedAt: T0 + 3_000 });
     f.add('miner', { status: 'cancelled', completedAt: T0 + 4_000 });
     f.add('clerk');
-    expect(await f.status()).toBe('[Fleet Status, as of 14:05:13 UTC]\n  clerk [spawn] running since 14:05:09 parent:resident "task for clerk"');
+    expect(await f.status()).toBe('[Fleet Status, as of 2026-10-23 14:05:13 UTC]\n  clerk [spawn] running since 14:05:09 parent:resident "task for clerk"');
   });
 
   test('when the last run ends, the status says none is running once, so no copy listing it is the newest', async () => {
@@ -118,7 +118,7 @@ describe('the fleet status', () => {
     expect(await f.status()).toContain('scout [spawn] running since');
     scout.status = 'completed';
     scout.completedAt = T0 + 30_000;
-    expect(await f.status()).toBe('[Fleet Status, as of 14:05:39 UTC]\n  (none running)');
+    expect(await f.status()).toBe('[Fleet Status, as of 2026-10-23 14:05:39 UTC]\n  (none running)');
     expect(await f.status()).toBeUndefined();
     expect(f.stored).toHaveLength(2);
   });
@@ -145,7 +145,25 @@ describe('the fleet status', () => {
   test('its clock times read in the recipe\'s zone, which the heading names', async () => {
     const f = fleet('Europe/Berlin');
     f.add('scout');
-    expect(await f.status()).toStartWith('[Fleet Status, as of 16:05:09 Europe/Berlin]\n  scout [spawn] running since 16:05:09 ');
+    expect(await f.status()).toStartWith('[Fleet Status, as of 2026-10-23 16:05:09 Europe/Berlin]\n  scout [spawn] running since 16:05:09 ');
+  });
+
+  test('the "as of" carries its date, so a status read days later says which day it was', async () => {
+    const f = fleet();
+    f.add('scout');
+    setSystemTime(new Date(T0 + 3 * 86_400_000));
+    expect(await f.status()).toBe('[Fleet Status, as of 2026-10-23 14:05:09 UTC]\n  scout [spawn] running since 14:05:09 parent:resident "task for scout"');
+  });
+
+  test('a run started on an earlier day than the "as of", in the recipe\'s zone, shows its date', async () => {
+    const f = fleet('Europe/Berlin');
+    f.add('night', { startedAt: Date.UTC(2026, 9, 22, 21, 59, 50) });
+    f.add('dawn', { startedAt: Date.UTC(2026, 9, 22, 22, 0, 5) });
+    expect(await f.status()).toBe([
+      '[Fleet Status, as of 2026-10-23 00:00:05 Europe/Berlin]',
+      '  night [spawn] running since 2026-10-22 23:59:50 parent:resident "task for night"',
+      '  dawn [spawn] running since 00:00:05 parent:resident "task for dawn"',
+    ].join('\n'));
   });
 
   test('with only async handles pending, it has no time to be "as of"', async () => {
@@ -167,7 +185,7 @@ describe('the fleet status', () => {
     });
     f.handles.set('later', {});
     f.mod.parentMap.set('later', 'resident');
-    expect(await f.status()).toBe('[Fleet Status, as of 14:05:11 UTC]\n  later [spawn] running since 14:05:11 parent:resident "task for later"');
+    expect(await f.status()).toBe('[Fleet Status, as of 2026-10-23 14:05:11 UTC]\n  later [spawn] running since 14:05:11 parent:resident "task for later"');
   });
 
   test('a running fork isn\'t listed again as waiting beside its own async handle, and a finished one doesn\'t hide a run waiting under its name', async () => {
@@ -176,10 +194,10 @@ describe('the fleet status', () => {
     f.mod.activeSubagents.delete('entry-later');
     f.mod.activeSubagents.set('later', fork);
     f.handles.set('later', {});
-    expect(await f.status()).toBe('[Fleet Status, as of 14:05:09 UTC]\n  later [fork] running since 14:05:09 parent:resident "task for later"');
+    expect(await f.status()).toBe('[Fleet Status, as of 2026-10-23 14:05:09 UTC]\n  later [fork] running since 14:05:09 parent:resident "task for later"');
     fork.status = 'completed';
     fork.completedAt = T0 + 1_000;
-    expect(await f.status()).toBe('[Fleet Status, as of 14:05:10 UTC]\n  later [async] pending');
+    expect(await f.status()).toBe('[Fleet Status, as of 2026-10-23 14:05:10 UTC]\n  later [async] pending');
   });
 
   test('a run whose name begins as the heading does still counts as a run', async () => {
@@ -188,7 +206,7 @@ describe('the fleet status', () => {
     expect(await f.status()).toContain('[Fleet Status audit] [spawn] running since');
     odd.status = 'completed';
     odd.completedAt = T0 + 30_000;
-    expect(await f.status()).toBe('[Fleet Status, as of 14:05:39 UTC]\n  (none running)');
+    expect(await f.status()).toBe('[Fleet Status, as of 2026-10-23 14:05:39 UTC]\n  (none running)');
   });
 
   test('a run whose launcher has ended stays in the primary\'s status until it ends', async () => {
@@ -199,7 +217,7 @@ describe('the fleet status', () => {
     const kid = f.add('kid');
     f.claim('kid', 'lead-d1-1');
     expect(await f.status()).toBe([
-      '[Fleet Status, as of 14:05:09 UTC]',
+      '[Fleet Status, as of 2026-10-23 14:05:09 UTC]',
       '  lead [spawn] running since 14:05:09 parent:resident "task for lead"',
       '  kid [spawn] running since 14:05:09 parent:lead "task for kid"',
     ].join('\n'));
@@ -207,11 +225,11 @@ describe('the fleet status', () => {
     lead.completedAt = T0 + 10_000;
     f.ended('lead');
     f.registered.delete('lead-d1-1');
-    expect(await f.status()).toBe('[Fleet Status, as of 14:05:19 UTC]\n  kid [spawn] running since 14:05:09 parent:lead "task for kid"');
+    expect(await f.status()).toBe('[Fleet Status, as of 2026-10-23 14:05:19 UTC]\n  kid [spawn] running since 14:05:09 parent:lead "task for kid"');
     expect(await f.status('other')).toBeUndefined();
     kid.status = 'completed';
     kid.completedAt = T0 + 30_000;
-    expect(await f.status()).toBe('[Fleet Status, as of 14:05:39 UTC]\n  (none running)');
+    expect(await f.status()).toBe('[Fleet Status, as of 2026-10-23 14:05:39 UTC]\n  (none running)');
   });
 
   test('a run\'s parent label names its launcher by its display name, as the result\'s line does', async () => {
@@ -374,7 +392,7 @@ describe('the fleet status', () => {
     });
     f.handles.set('later', {});
     f.mod.parentMap.set('later', 'resident');
-    expect(await f.status()).toBe('[Fleet Status, as of 14:05:10 UTC]\n  later [async] pending');
+    expect(await f.status()).toBe('[Fleet Status, as of 2026-10-23 14:05:10 UTC]\n  later [async] pending');
   });
 
   test('an agent whose status listed a run that ended before it started is told once that none is running', async () => {
@@ -394,8 +412,8 @@ describe('the fleet status', () => {
     await f.status();
     scout.status = 'completed';
     scout.completedAt = T0 + 30_000;
-    expect(await f.preview('resident')).toBe('[Fleet Status, as of 14:05:39 UTC]\n  (none running)');
-    expect(await f.status()).toBe('[Fleet Status, as of 14:05:39 UTC]\n  (none running)');
+    expect(await f.preview('resident')).toBe('[Fleet Status, as of 2026-10-23 14:05:39 UTC]\n  (none running)');
+    expect(await f.status()).toBe('[Fleet Status, as of 2026-10-23 14:05:39 UTC]\n  (none running)');
   });
 
   test('after a restart, a stored status listing a run that waited says none is running, once', async () => {
@@ -415,11 +433,11 @@ describe('the fleet status', () => {
     const miner = f.add('miner');
     expect(await f.status('resident', 2)).toContain('miner [spawn] running since');
     expect(f.stored.map((row) => row.content[0]!.text)).toEqual([
-      '[Fleet Status, as of 14:05:09 UTC]\n  scout [spawn] running since 14:05:09 parent:resident "task for scout"',
+      '[Fleet Status, as of 2026-10-23 14:05:09 UTC]\n  scout [spawn] running since 14:05:09 parent:resident "task for scout"',
       '  miner [spawn] running since 14:05:09 parent:resident "task for miner"',
     ]);
     for (const run of [scout, miner]) { run.status = 'completed'; run.completedAt = T0 + 30_000; }
-    expect(await f.status()).toBe('[Fleet Status, as of 14:05:39 UTC]\n  (none running)');
+    expect(await f.status()).toBe('[Fleet Status, as of 2026-10-23 14:05:39 UTC]\n  (none running)');
   });
 
   test('a fork is told by the status in its own window, not the residents\'', async () => {
@@ -430,7 +448,7 @@ describe('the fleet status', () => {
     expect(f.stored.map((row) => row.window)).toEqual(['fork-a']);
     scout.status = 'completed';
     scout.completedAt = T0 + 30_000;
-    expect(await f.status('fork-a')).toBe('[Fleet Status, as of 14:05:39 UTC]\n  (none running)');
+    expect(await f.status('fork-a')).toBe('[Fleet Status, as of 2026-10-23 14:05:39 UTC]\n  (none running)');
   });
 
   test('a row that isn\'t the agent\'s own fleet status, by its mark, doesn\'t count', async () => {
@@ -459,7 +477,7 @@ describe('the fleet status', () => {
     scout.status = 'completed';
     scout.completedAt = T0 + 30_000;
     expect(await f.status('other')).toBeUndefined();
-    expect(await f.status('resident')).toBe('[Fleet Status, as of 14:05:39 UTC]\n  (none running)');
+    expect(await f.status('resident')).toBe('[Fleet Status, as of 2026-10-23 14:05:39 UTC]\n  (none running)');
   });
 
   test('an agent\'s older status is found past another agent\'s newer one in the slot they share', async () => {
@@ -471,7 +489,7 @@ describe('the fleet status', () => {
     expect(await f.status('other')).toContain('theirs [spawn] running since');
     scout.status = 'completed';
     scout.completedAt = T0 + 30_000;
-    expect(await f.status('resident')).toBe('[Fleet Status, as of 14:05:39 UTC]\n  (none running)');
+    expect(await f.status('resident')).toBe('[Fleet Status, as of 2026-10-23 14:05:39 UTC]\n  (none running)');
   });
 });
 
@@ -545,8 +563,8 @@ describe('an async run\'s result', () => {
     expect(d.written).toEqual([
       { text: "[Subagent 'kid' returned, for 'lead': launched by an earlier attempt]\n\ndone", forAgent: 'lead-d1-retry1-2' },
       { text: "[Subagent 'kit' failed, for 'lead': launched by an earlier attempt]\n\nError: broke", forAgent: 'lead-d1-retry1-2' },
-      { text: "[Subagent 'kip' returned, for an earlier attempt of 'lead', which has ended]\n\ndone too" },
-      { text: "[Subagent 'kin' failed, for an earlier attempt of 'lead', which has ended]\n\nError: broke" },
+      { text: "[Subagent 'kip' returned, for 'lead', between its attempts: launched by an earlier attempt]\n\ndone too" },
+      { text: "[Subagent 'kin' failed, for 'lead', between its attempts: launched by an earlier attempt]\n\nError: broke" },
     ]);
     expect(d.woken).toEqual(['lead-d1-retry1-2', 'lead-d1-retry1-2']);
   });

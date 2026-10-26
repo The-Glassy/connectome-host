@@ -4,9 +4,10 @@
   - Retrieval reads each agent's own window, a fork's or a subagent's
     included, where it read the primary's for every agent. A
     subconscious's window is its own store, its summaries and tool rounds,
-    which holds no message of anyone else's, so its lessons are found from
-    those and kept, as any agent's are, while its entry is among the 64
-    most recently used, where they followed the residents' conversation.
+    which holds no message of anyone else's, so its lessons are found once
+    per process from those and kept for the session, while its entry is
+    among the 64 most recently used, where they followed the residents'
+    conversation.
     It keeps each agent's lessons for the turn's opening message, the
     newest row someone other than the agent wrote to it. A later start of
     the same turn, such as a budget restart after a tool round, gets the same
@@ -41,7 +42,9 @@
     With none that fits, nothing is injected.
   - The fleet status lists the subagents running or waiting for a slot,
     each started subagent with its start as a clock time in the recipe's
-    `agent.timezone`, under "as of" the latest start or end, where it
+    `agent.timezone`, and its date when that falls on an earlier day than
+    the status's "as of", which gives the date and time of the latest start
+    or end, where it
     listed every subagent the session had started, with elapsed seconds
     and call counts. A finished one, which has reported in its launcher's
     conversation, or the primary's once its launcher's run had ended,
@@ -65,8 +68,8 @@
     run goes on, as after a retry, is the run's: its current attempt
     takes it, told `launched by an earlier attempt`, and while
     agent-framework lists no attempt of the run, between attempts or as
-    the next is set up, it lands in the residents' slot, `for an earlier
-    attempt of '…', which has ended`. One whose
+    the next is set up, it lands in the residents' slot, `for '…', between
+    its attempts: launched by an earlier attempt`. One whose
     launcher's window is let go without reading it, a fork's or a
     subagent's run, or a conversation agent closed, agent-framework passes
     to the residents' slot, where its line names whom it was for. None of

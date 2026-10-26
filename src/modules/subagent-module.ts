@@ -1801,16 +1801,21 @@ export class SubagentModule implements Module {
     // from the store; while it holds the agent's window it places the status
     // rather than storing it (anima-research/context-manager#155 part 5).
     const lines: string[] = [];
+    const scoped = [...this.activeSubagents.values()].filter((sa) => allowed.has(sa.name));
     let latestChange: number | undefined;
-    for (const [, sa] of this.activeSubagents) {
-      if (!allowed.has(sa.name)) continue;
+    for (const sa of scoped) {
       const changedAt = sa.completedAt ?? sa.startedAt;
       if (latestChange === undefined || changedAt > latestChange) latestChange = changedAt;
+    }
+    const asOfDay = latestChange !== undefined ? this.clockDay(latestChange) : undefined;
+    for (const sa of scoped) {
       if (sa.status !== 'running') continue;
       const parent = this.parentMap.get(sa.name) ?? 'agent';
       const parentShort = this.launcherShownOf.get(sa.name) ?? parent;
       const task = sa.task.length > 50 ? sa.task.slice(0, 47) + '...' : sa.task;
-      lines.push(`  ${sa.name} [${sa.type}] running since ${this.clockTime(sa.startedAt)} parent:${parentShort} "${task}"`);
+      const startDay = this.clockDay(sa.startedAt);
+      const since = startDay === asOfDay ? this.clockTime(sa.startedAt) : `${startDay} ${this.clockTime(sa.startedAt)}`;
+      lines.push(`  ${sa.name} [${sa.type}] running since ${since} parent:${parentShort} "${task}"`);
     }
 
     // Also show async handles still running, but only those owned by the
@@ -1827,7 +1832,7 @@ export class SubagentModule implements Module {
       lines.push('  (none running)');
     }
 
-    const asOf = latestChange !== undefined ? `, as of ${this.clockTime(latestChange)} ${this.timeZone}` : '';
+    const asOf = latestChange !== undefined ? `, as of ${asOfDay} ${this.clockTime(latestChange)} ${this.timeZone}` : '';
     return [{
       namespace: FLEET_NAMESPACE,
       position: 'afterUser',
@@ -1854,6 +1859,10 @@ export class SubagentModule implements Module {
 
   private clockTime(at: number): string {
     return formatZonedDateTime(at, this.timeZone).slice(11, 19);
+  }
+
+  private clockDay(at: number): string {
+    return formatZonedDateTime(at, this.timeZone).slice(0, 10);
   }
 
   // =========================================================================
@@ -3137,7 +3146,7 @@ export class SubagentModule implements Module {
         say(`, for '${shown}': launched by an earlier attempt`, current);
         return current;
       }
-      say(`, for an earlier attempt of '${shown}', which has ended`);
+      say(`, for '${shown}', between its attempts: launched by an earlier attempt`);
       return null;
     }
     say(`, for '${shown}', which has ended`);
