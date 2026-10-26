@@ -24,7 +24,8 @@
  *   (goBackOffer), keeping the newer data or restoring the copy.
  *
  * A host started without an install's entry point can't update itself. Its
- * notice points at DEPLOYMENTS.md's "Updating an install" instead.
+ * notice says how to set an npm install up to update itself, and that a
+ * clone updates by hand.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { bunBelowFloor } from '../bun-floor.js';

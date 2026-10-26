@@ -241,10 +241,8 @@ interface ClientState {
 /** Default port — picked to be memorable and unlikely to collide. */
 const DEFAULT_PORT = 7340;
 
-/** What to do about a missing bundle: a checkout builds it, and the npm
- *  package carries it built, without the web/ sources to build it from. */
 const BUNDLE_REMEDY =
-  'In a checkout, run `npm run build:web` (the postinstall runs it); an installed package carries it built, so reinstall the package.';
+  'In a clone, run `bun run build:web` in its root; an install from npm carries the bundle built, so there, install the package again.';
 
 /** HTTP route → panel op, for ?scope=<child> proxying. /curve (the HTML
  *  page) is deliberately absent: it is served locally and its own fetch of
@@ -599,11 +597,10 @@ export class WebUiModule implements Module {
     sharedServer = state;
     // A missing bundle otherwise shows at run time only as a 503 to whoever
     // opens the page. Say it once, where the operator starting the host
-    // looks. This also covers a checkout's skipped postinstall (e.g.
-    // `--ignore-scripts`), which can't report anything itself.
+    // looks.
     if (!existsSync(join(state.staticRoot, 'index.html'))) {
       console.warn(
-        `[webui] bundle not found at ${state.staticRoot}: the Web UI will answer 503 until it is built. ` +
+        `[webui] bundle not found at ${state.staticRoot}: the Web UI will answer 503 until it's there. ` +
         BUNDLE_REMEDY,
       );
     }

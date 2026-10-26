@@ -55,12 +55,9 @@ jobs:
       # below is the web app's: it never rewrites package-lock.json, and
       # fails when the lock doesn't match package.json or lacks a package
       # this platform needs, where `npm install` (npm >= 11) would re-resolve
-      # it silently. --ignore-scripts skips the root postinstall, a
-      # non-strict `npm --prefix web install` followed by the web build. Run
-      # first, that install would heal a broken web/package-lock.json on disk
-      # before the strict step below could check it. The strict step does the
-      # web build instead. No dependency in package-lock.json has an install
-      # script of its own.
+      # it silently. The web build is the strict step below. No dependency in
+      # package-lock.json has an install script of its own, and
+      # --ignore-scripts keeps a later one from running here.
       - name: Install dependencies (strict lockfile)
         run: npm ci --ignore-scripts --no-audit --no-fund
 
@@ -104,9 +101,8 @@ jobs:
         with:
           node-version: '22.12.0'
 
-      # Install scripts aren't needed to check types: the root's postinstall
-      # builds the web app, which the build-and-test job does in a step of
-      # its own. The root's install comes first: the web app's program takes
+      # Install scripts aren't needed to check types. The root's install
+      # comes first: the web app's program takes
       # Node's types, and what the host files it checks import, from the
       # root's node_modules.
       - name: Install dependencies (strict lockfile)

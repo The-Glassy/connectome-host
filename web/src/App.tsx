@@ -1517,7 +1517,7 @@ export function App() {
           <span class="w-2 h-2 rounded-full bg-amber-500" />
           <span>
             Protocol mismatch — server speaks v{protoMismatch()}, this bundle expects v{WEB_PROTOCOL_VERSION}.
-            Rebuild the SPA (<code class="font-mono">bun run build:web</code>) and/or restart the host, then reload.
+            In a clone, rebuild the SPA (<code class="font-mono">bun run build:web</code>), and/or restart the host, then reload.
           </span>
         </div>
       </Show>
