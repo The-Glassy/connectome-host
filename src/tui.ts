@@ -360,7 +360,7 @@ export function shortAgentName(full: string): string {
   if (full.startsWith('spawn-')) return full.slice('spawn-'.length).replace(/-\d+$/, '');
   const fork = full.replace(/-d\d+(-retry\d+)?-\d+$/, '');
   if (fork !== full) return fork;
-  return full.replace(/^fork-/, '').replace(/-\d+$/, '').replace(/-retry\d+$/, '');
+  return full.replace(/-retry\d+$/, '');
 }
 
 interface AppContext {
@@ -1114,8 +1114,7 @@ export async function runTui(app: AppContext): Promise<void> {
     // Index subagents by short name for tree building
     const byName = new Map<string, FleetNode>();
     for (const sa of state.subagents) {
-      const fullName = [...(subMod?.activeSubagents.keys() ?? [])]
-        .find(k => k === sa.name || shortAgentName(k) === sa.name) ?? sa.name;
+      const fullName = [...(subMod?.activeSubagents ?? [])].find(([, entry]) => entry === sa)?.[0] ?? sa.name;
       const node: FleetNode = {
         name: sa.name,
         fullName,

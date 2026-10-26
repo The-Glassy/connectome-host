@@ -4,8 +4,8 @@
  * step names to every listener, as agent-framework's emitTrace calls each
  * one, and its abortInference aborts only once told an agent's model call is
  * in flight, then sends `inference:aborted` alone, as agent-framework
- * 0.22.3's does. In the `subagents`, `subagent-exhausted` and numbered-fork
- * scenarios its subagent module stands in for the host's.
+ * 0.22.3's does. In the `subagents`, `subagent-exhausted`, numbered-fork and
+ * fork-figures scenarios its subagent module stands in for the host's.
  * Prints one `TUI_STEP` line of JSON per step: the frame's text and the
  * aborts asked for so far.
  */
@@ -53,7 +53,7 @@ function fakeFramework(name: string) {
     send(type: string, extra: Trace = {}) {
       for (const listener of [...listeners]) listener({ type, agentName: 'agent', ...extra });
     },
-    getAllModules: () => (['subagents', 'subagent-exhausted', 'numbered-fork-failed', 'numbered-fork-exhausted'].includes(scenario) ? [subagents] : []),
+    getAllModules: () => (['subagents', 'subagent-exhausted', 'numbered-fork-failed', 'numbered-fork-exhausted', 'fork-figures', 'fork-figures-reversed'].includes(scenario) ? [subagents] : []),
     getAllAgents: () => (scenario === 'subagents' ? [{ name: 'agent' }, { name: 'spawn-1' }] : [{ name: 'agent' }]),
     getModule: () => undefined,
     getAgent: (agentName: string) => agentName === 'agent'
@@ -280,6 +280,23 @@ async function play(): Promise<void> {
     await tab();
     await tab();
     await step('after');
+  } else if (scenario === 'fork-figures' || scenario === 'fork-figures-reversed') {
+    for (const name of ['web-retry1', 'web']) {
+      subagents.activeSubagents.set(name, {
+        name, status: 'running', startedAt: Date.now(),
+        task: 'Check each row reads its own figure', toolCallsCount: 0,
+      });
+    }
+    const usage: Array<[string, number]> = [['web-retry1-d1-1700000000000', 50000], ['web-d1-1700000000001', 20000]];
+    if (scenario === 'fork-figures-reversed') usage.reverse();
+    for (const [agentName, input] of usage) {
+      first.send('inference:started', { agentName });
+      first.send('inference:usage', { agentName, tokenUsage: { input, output: 10 } });
+    }
+    await until(async () => (await frame()).includes('Session: first'), 'initial render');
+    await pressed(() => mockInput.pressTab(), 'Tab');
+    await until(async () => /web  \[sending /.test(await frame()), 'the rows');
+    await step('fleet');
   } else if (scenario === 'subagent-exhausted') {
     const agentName = 'spawn-web-1700000000000';
     subagents.activeSubagents.set(agentName, {

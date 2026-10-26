@@ -1,1 +1,1 @@
-- The TUI fleet view keeps a requested subagent name's own suffixes, such as the `-1` of a fork named `web-1` or the `-d2` of a spawn named `build-d2`, when it shortens framework names, so a failure or exhaustion marks that subagent's own row (#461).
+- The TUI fleet view keeps a requested subagent name's own suffixes, such as the `-1` of a fork named `web-1` or the `-d2` of a spawn named `build-d2`, when it shortens framework names, so a failure or exhaustion marks that subagent's own row, and a fork's row shows its own context figure (#461).

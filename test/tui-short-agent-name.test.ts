@@ -38,6 +38,12 @@ describe('shortAgentName', () => {
     expect(shortAgentName('web-retry2')).toBe('web');
   });
 
+  test('a name in none of these shapes comes back whole', () => {
+    expect(shortAgentName('helper-2')).toBe('helper-2');
+    expect(shortAgentName('web-1')).toBe('web-1');
+    expect(shortAgentName('fork-web')).toBe('fork-web');
+  });
+
   test('names that are substrings of each other stay distinct', () => {
     expect(shortAgentName('websearch-d1-1753221234567')).toBe('websearch');
     expect(shortAgentName('spawn-websearch-1753221234567')).toBe('websearch');

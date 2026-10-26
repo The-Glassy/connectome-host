@@ -225,6 +225,17 @@ describe("the TUI's subagent exhaustion, through runTui", () => {
   }, 40000);
 });
 
+describe("the TUI's fleet rows, through runTui", () => {
+  for (const scenario of ['fork-figures', 'fork-figures-reversed']) {
+    test(`${scenario}: each fork's row shows its own context figure, beside a fork whose name is its own plus a suffix`, async () => {
+      const fleet = (await play(scenario)).get('fleet');
+      if (!fleet) throw new Error('missing fleet frame');
+      expect(fleet.frame).toMatch(/web-retry1  \[sending \d+s\] 50\.0kctx/);
+      expect(fleet.frame).toMatch(/web  \[sending \d+s\] 20\.0kctx/);
+    }, 40000);
+  }
+});
+
 describe("the TUI's numbered fork phases, through runTui", () => {
   for (const scenario of ['numbered-fork-failed', 'numbered-fork-exhausted']) {
     test(scenario + ': only the numbered row changes from sending to failed', async () => {
