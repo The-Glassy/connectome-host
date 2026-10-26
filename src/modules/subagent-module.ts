@@ -32,7 +32,8 @@ import type {
   ContextManager,
 } from '@animalabs/agent-framework';
 import type { Agent, AgentFramework } from '@animalabs/agent-framework';
-import { KnowledgeStrategy } from '@animalabs/agent-framework';
+import { KnowledgeStrategy, formatZonedDateTime, resolveTimeZone, storedInjectionMarkOf } from '@animalabs/agent-framework';
+import { compiledWithoutStoredInjections } from '../stored-injection.js';
 import { isToolResultContent, isToolUseContent } from '@animalabs/membrane';
 import type { ContentBlock } from '@animalabs/membrane';
 import { emptyUsage, foldUsageSample, type UsageCounts, type UsageSample } from '../state/stream-usage.js';
@@ -69,6 +70,7 @@ export interface SubagentModuleConfig {
   maxExecutionMs?: number;
   /** Max restart attempts on transient errors (default: 2) */
   maxRetries?: number;
+  timeZone?: string;
 }
 
 export interface SubagentResult {
@@ -200,7 +202,7 @@ const GIVE_MISSING: Record<string, Record<string, string>> = {
     task: 'give the intention the fork pursues',
   },
   hud: {
-    enabled: 'give true to show the fleet status summary before each inference, or false to hide it',
+    enabled: 'give true to show the fleet status summary, or false to stop showing it',
   },
 };
 
@@ -433,6 +435,16 @@ const SUBAGENT_STRATEGY = {
   maxMessageTokens: 10_000,
 } as const;
 const SUBAGENT_STREAM_TOKENS = 500_000;
+
+const UNNAMED_LAUNCHER = 'agent';
+
+// agent-framework stores an injection under participant
+// `system_context:<namespace>`.
+const FLEET_NAMESPACE = 'subagent-fleet';
+const FLEET_PARTICIPANT = `system_context:${FLEET_NAMESPACE}`;
+const FLEET_HEADING = /^\[Fleet Status(, as of [^\]]*)?\]$/;
+
+export const SUBAGENT_MESSAGE_CAP = SUBAGENT_STRATEGY.maxMessageTokens;
 
 /**
  * What a launch must deliver to its stream, in the shape it composed it.
@@ -1319,12 +1331,15 @@ export class SubagentModule implements Module {
 
   // Retry on transient errors
   private maxRetries: number;
+  private readonly timeZone: string;
 
   /** Observable registry of active/recent subagents for TUI display. */
   readonly activeSubagents = new Map<string, ActiveSubagent>();
 
   /** Parent agent name for each subagent (for fleet tree reconstruction). */
   readonly parentMap = new Map<string, string>();
+
+  private readonly launcherShownOf = new Map<string, string>();
 
   // Stashed results from subagent--return tool calls, keyed by framework agent name
   private returnedResults = new Map<string, string | undefined>();
@@ -1351,6 +1366,7 @@ export class SubagentModule implements Module {
     this.maxPromptTokens = config.maxPromptTokens ?? 190_000;
     this.maxExecutionMs = config.maxExecutionMs ?? 600_000;
     this.maxRetries = config.maxRetries ?? 2;
+    this.timeZone = resolveTimeZone(config.timeZone);
   }
 
   /** Set the framework reference. Must be called after framework creation. */
@@ -1558,7 +1574,9 @@ export class SubagentModule implements Module {
         parent: this.parentMap.get(sa.name),
       };
     }
-    this.ctx.setState({ agents });
+    // setState replaces the module's state, so the rest of it, such as
+    // the hud tool's hudEnabled, is carried over.
+    this.ctx.setState({ ...(this.ctx.getState<Record<string, unknown>>() ?? {}), agents });
   }
 
   /**
@@ -1574,6 +1592,7 @@ export class SubagentModule implements Module {
 
     this.activeSubagents.clear();
     this.parentMap.clear();
+    this.launcherShownOf.clear();
 
     for (const [key, pa] of Object.entries(persisted.agents)) {
       const sa: ActiveSubagent = {
@@ -1647,7 +1666,7 @@ export class SubagentModule implements Module {
       },
       {
         name: 'hud',
-        description: 'Toggle the subagent fleet HUD overlay. When enabled, a compact fleet status summary is injected before each inference.',
+        description: 'Toggle the subagent fleet HUD. When enabled, a compact status of the subagents running or waiting is added to your context, and again at your next start after one starts or ends. Disabling it stops new ones; a status already in your context stays there, as history.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -1775,18 +1794,28 @@ export class SubagentModule implements Module {
     // fleet roster every turn, which (a) encouraged peer-coordination
     // anti-patterns and (b) amplified false zombie/failed flags across
     // the orchestrator's context.
-    const allowed = this.getDescendantDisplayNames(agentName);
+    const allowed = this.scopeOf(agentName);
 
+    // agent-framework stores this injection where the compile placed it, and
+    // again only when the agent's last request didn't render the same text
+    // from the store; while it holds the agent's window it places the status
+    // rather than storing it (anima-research/context-manager#155 part 5).
     const lines: string[] = [];
-    for (const [, sa] of this.activeSubagents) {
-      if (!allowed.has(sa.name)) continue;
-      const elapsed = sa.completedAt
-        ? Math.floor((sa.completedAt - sa.startedAt) / 1000)
-        : Math.floor((Date.now() - sa.startedAt) / 1000);
+    const scoped = [...this.activeSubagents.values()].filter((sa) => allowed.has(sa.name));
+    let latestChange: number | undefined;
+    for (const sa of scoped) {
+      const changedAt = sa.completedAt ?? sa.startedAt;
+      if (latestChange === undefined || changedAt > latestChange) latestChange = changedAt;
+    }
+    const asOfDay = latestChange !== undefined ? this.clockDay(latestChange) : undefined;
+    for (const sa of scoped) {
+      if (sa.status !== 'running') continue;
       const parent = this.parentMap.get(sa.name) ?? 'agent';
-      const parentShort = parent.replace(/^(spawn|fork)-/, '').replace(/-d\d+-\d+$/, '').replace(/-retry\d+$/, '');
+      const parentShort = this.launcherShownOf.get(sa.name) ?? parent;
       const task = sa.task.length > 50 ? sa.task.slice(0, 47) + '...' : sa.task;
-      lines.push(`  ${sa.name} [${sa.type}] ${sa.status} ${elapsed}s ${sa.toolCallsCount}calls parent:${parentShort} "${task}"`);
+      const startDay = this.clockDay(sa.startedAt);
+      const since = startDay === asOfDay ? this.clockTime(sa.startedAt) : `${startDay} ${this.clockTime(sa.startedAt)}`;
+      lines.push(`  ${sa.name} [${sa.type}] running since ${since} parent:${parentShort} "${task}"`);
     }
 
     // Also show async handles still running, but only those owned by the
@@ -1795,18 +1824,45 @@ export class SubagentModule implements Module {
     // and the caller has no descendants to begin with).
     for (const [name] of this.asyncHandles) {
       if (!allowed.has(name)) continue;
-      if (!this.activeSubagents.has(name) && !this.activeSubagents.has(`spawn-${name}`)) {
-        lines.push(`  ${name} [async] pending`);
-      }
+      if (!this.runningEntry(name)) lines.push(`  ${name} [async] pending`);
     }
 
-    if (lines.length === 0) return [];
+    if (lines.length === 0) {
+      if (!this.newestStatusListsRun(agentName)) return [];
+      lines.push('  (none running)');
+    }
 
+    const asOf = latestChange !== undefined ? `, as of ${asOfDay} ${this.clockTime(latestChange)} ${this.timeZone}` : '';
     return [{
-      namespace: 'subagent-fleet',
+      namespace: FLEET_NAMESPACE,
       position: 'afterUser',
-      content: [{ type: 'text', text: `[Fleet Status]\n${lines.join('\n')}` }],
+      content: [{ type: 'text', text: `[Fleet Status${asOf}]\n${lines.join('\n')}` }],
     }];
+  }
+
+  // context-manager stores a long status in shards, in order, each carrying
+  // the mark, so the newest row is its last shard, whose lines are runs'
+  // whenever the status lists one.
+  private newestStatusListsRun(agentName: string): boolean {
+    const rows = this.ctx!.queryMessages({ participant: FLEET_PARTICIPANT }, { forAgent: agentName }).messages;
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const mark = storedInjectionMarkOf(rows[i]!.metadata);
+      if (mark?.namespace !== FLEET_NAMESPACE || mark.agent !== agentName) continue;
+      const text = rows[i]!.content.map((block) => (block.type === 'text' ? block.text : '')).join('');
+      return text.split('\n').some((line) => {
+        const shown = line.trim();
+        return shown !== '' && !FLEET_HEADING.test(shown) && shown !== '(none running)';
+      });
+    }
+    return false;
+  }
+
+  private clockTime(at: number): string {
+    return formatZonedDateTime(at, this.timeZone).slice(11, 19);
+  }
+
+  private clockDay(at: number): string {
+    return formatZonedDateTime(at, this.timeZone).slice(0, 10);
   }
 
   // =========================================================================
@@ -2150,8 +2206,17 @@ export class SubagentModule implements Module {
    *  the name. */
   private claimName(name: string, parent: string | undefined): void {
     this.lastInputTokens.delete(name);
-    if (parent) this.parentMap.set(name, parent);
-    else this.parentMap.delete(name);
+    if (parent) {
+      this.parentMap.set(name, parent);
+      this.launcherShownOf.set(name, this.shownName(parent));
+    } else {
+      this.unlinkParent(name);
+    }
+  }
+
+  private unlinkParent(name: string): void {
+    this.parentMap.delete(name);
+    this.launcherShownOf.delete(name);
   }
 
   /** Drop a run's attempts from the index as the run ends: nameInUse keeps
@@ -2324,18 +2389,45 @@ export class SubagentModule implements Module {
    */
   private getDescendantDisplayNames(rootFrameworkAgentName: string): Set<string> {
     const result = new Set<string>();
-    const queue: string[] = [rootFrameworkAgentName];
-    while (queue.length > 0) {
-      const parentFw = queue.shift()!;
-      for (const [childDisplayName, parentName] of this.parentMap) {
-        if (parentName === parentFw && !result.has(childDisplayName)) {
-          result.add(childDisplayName);
-          const childLive = this.liveSubagents.get(childDisplayName);
-          if (childLive) queue.push(childLive.frameworkAgentName);
-        }
+    this.collectDescendants(rootFrameworkAgentName, this.runOfAttempt.get(rootFrameworkAgentName), result);
+    return result;
+  }
+
+  private collectDescendants(attempt: string | undefined, run: string | undefined, into: Set<string>): void {
+    const goingOn = new Set(this.runOfAttempt.values());
+    const pending: Array<{ attempt: string | undefined; run: string | undefined }> = [{ attempt, run }];
+    while (pending.length > 0) {
+      const next = pending.shift()!;
+      for (const [child, parent] of this.parentMap) {
+        if (into.has(child)) continue;
+        const launched = parent === next.attempt || (next.run !== undefined && this.runOfAttempt.get(parent) === next.run);
+        if (!launched) continue;
+        into.add(child);
+        if (goingOn.has(child)) pending.push({ attempt: undefined, run: child });
       }
     }
-    return result;
+  }
+
+  private scopeOf(agentFrameworkName: string): Set<string> {
+    const scope = this.getDescendantDisplayNames(agentFrameworkName);
+    if (agentFrameworkName !== this.config.parentAgentName) return scope;
+    const goingOn = new Set(this.runOfAttempt.values());
+    for (const child of this.orphanedRuns()) {
+      if (scope.has(child)) continue;
+      scope.add(child);
+      if (goingOn.has(child)) this.collectDescendants(undefined, child, scope);
+    }
+    return scope;
+  }
+
+  private orphanedRuns(): string[] {
+    if (!this.ctx) return [];
+    const listed = new Set(this.ctx.getAgents().map((agent) => agent.name));
+    const orphans: string[] = [];
+    for (const [child, parent] of this.parentMap) {
+      if (!listed.has(parent) && !this.runOfAttempt.has(parent)) orphans.push(child);
+    }
+    return orphans;
   }
 
   /** The direct children of the run named: the parentMap entries whose
@@ -2431,16 +2523,10 @@ export class SubagentModule implements Module {
    * Peek at a running subagent's live state: full context, streaming output,
    * pending tool calls. Returns null if the subagent is not running.
    * If name is omitted, returns snapshots for all running subagents.
-   *
-   * Postmortem 2026-05-28 P3 #8: when a `callerFrameworkAgentName` is
-   * supplied (the normal tool-call path threads it through `handlePeek`),
-   * the result is scoped to the caller's descendants — peers/cousins are
-   * filtered out. Internal callers without a known identity (omit the arg)
-   * keep the global view for backward compatibility.
    */
   async peek(name?: string, callerFrameworkAgentName?: string): Promise<SubagentPeekSnapshot[]> {
     const allowed = callerFrameworkAgentName
-      ? this.getDescendantDisplayNames(callerFrameworkAgentName)
+      ? this.scopeOf(callerFrameworkAgentName)
       : null;
     if (name) {
       if (allowed && !allowed.has(name)) return [];
@@ -2471,11 +2557,12 @@ export class SubagentModule implements Module {
       // over the budget it compiles at is returned, where a real compile
       // refuses it.
       const compiled = await live.contextManager.compile(undefined, undefined, { dryRun: true });
-      messageCount = compiled.messages.length;
+      const said = compiledWithoutStoredInjections(compiled);
+      messageCount = said.length;
       // Extract a short snippet from the last message for observability
       // without dumping the entire context into the caller's window.
-      if (compiled.messages.length > 0) {
-        const last = compiled.messages[compiled.messages.length - 1];
+      if (said.length > 0) {
+        const last = said[said.length - 1];
         const textBlocks = last.content
           .filter((b: ContentBlock) => b.type === 'text')
           .map((b: ContentBlock) => (b as { type: 'text'; text: string }).text);
@@ -2873,7 +2960,9 @@ export class SubagentModule implements Module {
       };
     }
 
-    const parentAgentName = callerAgentName ?? this.config.parentAgentName ?? 'agent';
+    const launcher = callerAgentName ?? this.config.parentAgentName;
+    const parentAgentName = launcher ?? UNNAMED_LAUNCHER;
+    const launcherShown = launcher === undefined ? undefined : this.shownName(launcher);
     // Resolved once, before any slot, and kept through the slot wait and
     // every retry: the caller's settings, context and tool rules as they are
     // now. A caller that can't be resolved, or a module with no framework
@@ -2894,7 +2983,7 @@ export class SubagentModule implements Module {
     // goes on; a sync run has no hard limit.
     if (input.sync) {
       const promise = this.runSpawn(launch, input, callerAgentName, callerDepth, undefined, ticket);
-      return await this.runDetachable(input.name, 'spawn', promise, parentAgentName, input.timeoutMs ?? this.maxExecutionMs, launch);
+      return await this.runDetachable(input.name, 'spawn', promise, launcher, input.timeoutMs ?? this.maxExecutionMs, launch);
     }
 
     // Async mode (default): fire-and-forget, deliver result as message.
@@ -2905,8 +2994,8 @@ export class SubagentModule implements Module {
 
     promise
       .then(
-        result => this.deliverAsyncResult(input.name, result, parentAgentName),
-        err => this.deliverAsyncError(input.name, err, parentAgentName),
+        result => this.deliverAsyncResult(input.name, result, launcher, launcherShown),
+        err => this.deliverAsyncError(input.name, err, launcher, launcherShown),
       )
       .catch(err => console.error(`[subagent] delivering ${input.name}'s result: ${err instanceof Error ? err.message : String(err)}`));
 
@@ -2925,7 +3014,9 @@ export class SubagentModule implements Module {
       };
     }
 
-    const parentAgentName = callerAgentName ?? this.config.parentAgentName ?? 'agent';
+    const launcher = callerAgentName ?? this.config.parentAgentName;
+    const parentAgentName = launcher ?? UNNAMED_LAUNCHER;
+    const launcherShown = launcher === undefined ? undefined : this.shownName(launcher);
     // Resolved once, before any slot, and kept through the slot wait and
     // every retry: the caller's settings, context and tool rules as they are
     // now. A caller that can't be resolved, or a module with no framework
@@ -2946,7 +3037,7 @@ export class SubagentModule implements Module {
     // goes on; a sync run has no hard limit.
     if (input.sync) {
       const promise = this.runFork(launch, input, callerAgentName, callerDepth, undefined, callToolUseId, ticket);
-      return await this.runDetachable(input.name, 'fork', promise, parentAgentName, input.timeoutMs ?? this.maxExecutionMs, launch);
+      return await this.runDetachable(input.name, 'fork', promise, launcher, input.timeoutMs ?? this.maxExecutionMs, launch);
     }
 
     // Async mode (default): fire-and-forget, deliver result as message.
@@ -2957,14 +3048,18 @@ export class SubagentModule implements Module {
 
     promise
       .then(
-        result => this.deliverAsyncResult(input.name, result, parentAgentName),
-        err => this.deliverAsyncError(input.name, err, parentAgentName),
+        result => this.deliverAsyncResult(input.name, result, launcher, launcherShown),
+        err => this.deliverAsyncError(input.name, err, launcher, launcherShown),
       )
       .catch(err => console.error(`[subagent] delivering ${input.name}'s result: ${err instanceof Error ? err.message : String(err)}`));
 
     // runFork ran synchronously up to its slot wait, so `ticket` already
     // says whether this launch is starting or queued.
     return { success: true, data: this.launchReceipt(launch, `Subagent '${input.name}' accepted as a fork.`, ticket) };
+  }
+
+  private shownName(agentName: string): string {
+    return this.runOfAttempt.get(agentName) ?? agentName;
   }
 
   /** A refusal when a subagent already has this name. A name means one
@@ -2993,37 +3088,69 @@ export class SubagentModule implements Module {
     };
   }
 
-  private deliverAsyncResult(name: string, result: SubagentResult, parentAgentName: string): void {
+  private deliverAsyncResult(name: string, result: SubagentResult, launcher: string | undefined, launcherShown = launcher): void {
     this.asyncHandles.delete(name);
     if (!this.ctx) return;
 
-    this.ctx.addMessage('user', [{
-      type: 'text',
-      text: `[Subagent '${name}' returned]\n\n${result.summary}`,
-    }]);
+    const wake = this.addForLauncher(launcher, launcherShown, name, 'returned', result.summary);
+    if (wake === null) return;
     this.ctx.pushEvent({
       type: 'inference-request',
-      agentName: parentAgentName,
+      agentName: wake,
       reason: `subagent-completed:${name}`,
       source: 'subagent',
     });
   }
 
-  private deliverAsyncError(name: string, err: unknown, parentAgentName: string): void {
+  private deliverAsyncError(name: string, err: unknown, launcher: string | undefined, launcherShown = launcher): void {
     this.asyncHandles.delete(name);
     if (!this.ctx) return;
 
     const message = err instanceof Error ? err.message : String(err);
-    this.ctx.addMessage('user', [{
-      type: 'text',
-      text: `[Subagent '${name}' failed]\n\nError: ${message}`,
-    }]);
+    const wake = this.addForLauncher(launcher, launcherShown, name, 'failed', `Error: ${message}`);
+    if (wake === null) return;
     this.ctx.pushEvent({
       type: 'inference-request',
-      agentName: parentAgentName,
+      agentName: wake,
       reason: `subagent-failed:${name}`,
       source: 'subagent',
     });
+  }
+
+  private addForLauncher(launcher: string | undefined, launcherShown: string | undefined, name: string, outcome: 'returned' | 'failed', body: string): string | null {
+    const ctx = this.ctx!;
+    const say = (forWhom: string, forAgent?: string): void => {
+      const content = [{ type: 'text' as const, text: `[Subagent '${name}' ${outcome}${forWhom}]\n\n${body}` }];
+      if (forAgent !== undefined) ctx.addMessage('user', content, undefined, { forAgent });
+      else ctx.addMessage('user', content);
+    };
+    // The empty name is none, as claimName reads it, and agent-framework
+    // refuses it as a write's target even where an agent is registered under it.
+    if (launcher === undefined || launcher === '') {
+      say('');
+      return UNNAMED_LAUNCHER;
+    }
+    const listed = new Set(ctx.getAgents().map((agent) => agent.name));
+    const shown = launcherShown ?? launcher;
+    if (listed.has(launcher)) {
+      say(launcher === this.config.parentAgentName ? '' : `, for '${shown}'`, launcher);
+      return launcher;
+    }
+    // agent-framework lists no attempt of a run between its attempts, or while
+    // the next is being set up (registerLive comes before it lists the agent),
+    // and refuses a write for an agent it doesn't list.
+    const run = this.runOfAttempt.get(launcher);
+    if (run !== undefined) {
+      const current = this.liveSubagents.get(run)?.frameworkAgentName;
+      if (current !== undefined && listed.has(current)) {
+        say(`, for '${shown}': launched by an earlier attempt`, current);
+        return current;
+      }
+      say(`, for '${shown}': launched by an attempt that has ended`);
+      return null;
+    }
+    say(`, for '${shown}', which has ended`);
+    return null;
   }
 
   /** A spawn's or fork's failure as the agent reads it, in the call's answer
@@ -3058,13 +3185,15 @@ export class SubagentModule implements Module {
     name: string,
     type: 'spawn' | 'fork',
     promise: Promise<SubagentResult>,
-    parentAgentName: string,
+    launcher: string | undefined,
     autoDetachMs?: number,
     /** Rendered into both returns, so a sync caller gets the same launch
      *  description an async caller's receipt carries. */
     launch?: SubagentLaunch,
   ): Promise<ToolResult> {
     const launchText = launch ? describeSubagentLaunch(launch) : undefined;
+    const parentAgentName = launcher ?? UNNAMED_LAUNCHER;
+    const launcherShown = launcher === undefined ? undefined : this.shownName(launcher);
     let detachResolve: ((value: 'detached') => void) | null = null;
     const detachPromise = new Promise<'detached'>(resolve => { detachResolve = resolve; });
 
@@ -3124,8 +3253,8 @@ export class SubagentModule implements Module {
       this.asyncHandles.set(name, { name, type, promise, parentAgentName });
       promise
         .then(
-          result => this.deliverAsyncResult(name, result, parentAgentName),
-          err => this.deliverAsyncError(name, err, parentAgentName),
+          result => this.deliverAsyncResult(name, result, launcher, launcherShown),
+          err => this.deliverAsyncError(name, err, launcher, launcherShown),
         )
         .catch(err => console.error(`[subagent] delivering ${name}'s result: ${err instanceof Error ? err.message : String(err)}`));
 
@@ -3227,7 +3356,7 @@ export class SubagentModule implements Module {
       cancel.dispose();
       // A run that never started leaves no parent link behind, whether a
       // cancel or the slot's timeout ended its wait.
-      this.parentMap.delete(input.name);
+      this.unlinkParent(input.name);
       if (err instanceof SubagentTerminated) return this.endQueued(input.name, err);
       throw this.failedRun(input.name, 'spawn', err, run);
     }
@@ -3436,7 +3565,7 @@ export class SubagentModule implements Module {
       cancel.dispose();
       // A run that never started leaves no parent link behind, whether a
       // cancel or the slot's timeout ended its wait.
-      this.parentMap.delete(input.name);
+      this.unlinkParent(input.name);
       if (err instanceof SubagentTerminated) return this.endQueued(input.name, err);
       throw this.failedRun(input.name, 'fork', err, run);
     }
@@ -3535,10 +3664,10 @@ export class SubagentModule implements Module {
             // returned, where a real compile refused it and failed the fork;
             // the fork's own launch check, a real compile of its own context,
             // still refuses a first context the fork can't use.
-            const { messages: compiled } = await Promise.race([
+            const compiled = compiledWithoutStoredInjections(await Promise.race([
               parentCM.compile(undefined, undefined, { dryRun: true }),
               cancel.promise,
-            ]);
+            ]));
             const cutAtCall = orient({ kind: 'cut-at-call' });
             const transformed = callToolUseId
               ? materialiseStructuralFork(
@@ -3746,6 +3875,7 @@ export class SubagentModule implements Module {
       for (let i = messages.length - 1; i >= 0; i--) {
         const msg = messages[i];
         if (msg.participant === 'user' || msg.participant === 'User') continue;
+        if (storedInjectionMarkOf(msg.metadata) !== undefined) continue;
         const texts = msg.content
           .filter((b: ContentBlock) => b.type === 'text')
           .map((b: ContentBlock) => (b as { type: 'text'; text: string }).text);

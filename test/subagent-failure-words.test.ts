@@ -205,8 +205,8 @@ describe('every input is checked against the type its schema declares', () => {
       const enabled = () => internal(h.subagent).ctx.getState<{ hudEnabled?: unknown }>()?.hudEnabled;
       expect((await h.subagent.handleToolCall(call('hud', { enabled: true }))).success).toBe(true);
       for (const [input, problem] of [
-        [{}, 'enabled is missing: give true to show the fleet status summary before each inference, or false to hide it'],
-        [undefined, 'enabled is missing: give true to show the fleet status summary before each inference, or false to hide it'],
+        [{}, 'enabled is missing: give true to show the fleet status summary, or false to stop showing it'],
+        [undefined, 'enabled is missing: give true to show the fleet status summary, or false to stop showing it'],
         [{ enabled: 'false' }, 'enabled must be true or false, not "false"'],
         [{ enabled: 0 }, 'enabled must be true or false, not 0'],
       ] as const) {

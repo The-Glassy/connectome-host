@@ -50,6 +50,8 @@ import { takeRecipeWarnings } from './recipe.js';
 import { bunFloorNotice } from './bun-floor-check.js';
 import { hostUpdate } from './update/update.js';
 import { effectiveContextBudgetTokens } from './framework-agent-config.js';
+import { storedInjectionMarkOf } from '@animalabs/agent-framework';
+import { storedInjectionLabel } from './stored-injection.js';
 
 /** Format a token count compactly: 1.2M / 3.5k / 42. */
 export function fmtTokens(n: number): string {
@@ -117,6 +119,22 @@ export function sliceViewport(len: number, cursor: number, avail: number): { sta
  *  share it. */
 function headerMessage(message: string): string {
   return message.length > 70 ? `${message.slice(0, 67).replace(/[\uD800-\uDBFF]$/, '')}…` : message;
+}
+
+export function historyInjectionLine(
+  msg: { content: ReadonlyArray<{ type: string; text?: unknown }>; metadata?: unknown; shardIndex?: number },
+): string | null | undefined {
+  const mark = storedInjectionMarkOf(msg.metadata);
+  if (!mark) return undefined;
+  if (typeof msg.shardIndex === 'number' && msg.shardIndex > 0) return null;
+  const text = msg.content
+    .filter((b) => b.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text as string)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const line = text === '' ? storedInjectionLabel(mark) : `${storedInjectionLabel(mark)} ${text}`;
+  return line.length > 120 ? `${line.slice(0, 117).replace(/[\uD800-\uDBFF]$/, '')}…` : line;
 }
 
 /**
@@ -1006,6 +1024,12 @@ export async function runTui(app: AppContext): Promise<void> {
       : `── session history (${messages.length} messages) ──`, DIM_GRAY);
 
     for (const msg of messages) {
+      const injected = historyInjectionLine(msg);
+      if (injected !== undefined) {
+        if (injected !== null) addLine(injected, DIM_GRAY);
+        continue;
+      }
+
       const toolNames: string[] = [];
 
       for (const block of msg.content) {

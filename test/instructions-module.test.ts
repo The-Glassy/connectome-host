@@ -143,6 +143,18 @@ describe('InstructionsModule', () => {
     expect((await mod.gatherContext('a'))[0]!.position).toBe('beforeUser');
   });
 
+  test('off system, the instructions are placed at each compile, not stored', async () => {
+    writeFileSync(join(dir, 'AGENTS.md'), 'x');
+    for (const position of ['beforeUser', 'afterUser'] as const) {
+      const mod = await moduleOver(workspaceOver('instructions'), { position });
+      const [injection] = await mod.gatherContext('a');
+      expect((injection as { placedEachCompile?: unknown }).placedEachCompile).toBe(true);
+    }
+    const atSystem = await moduleOver(workspaceOver('instructions'));
+    const [injection] = await atSystem.gatherContext('a');
+    expect('placedEachCompile' in injection!).toBe(false);
+  });
+
   test('returns the same injection for every agent name', async () => {
     writeFileSync(join(dir, 'AGENTS.md'), 'shared doc');
     const mod = await moduleOver(workspaceOver('instructions'));

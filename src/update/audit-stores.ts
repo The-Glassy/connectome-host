@@ -41,7 +41,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { resolveTimeZone, type ContextStrategy } from '@animalabs/agent-framework';
+import { resolveTimeZone, storedInjectionMarkOf, type ContextStrategy } from '@animalabs/agent-framework';
 import { JsStore } from '@animalabs/chronicle';
 import {
   ContextManager, StoreTopologyError, WindowedPassthroughStrategy, type StoredMessage,
@@ -88,11 +88,27 @@ const USAGE = `Usage: ${AUDIT_STORES_FLAG} [${RECIPE_OPTION} <recipe>] <data dir
 
 /** agent-framework's view of a resident's messages (createAgent, in
  *  framework.ts): a message a tune-out diverted never enters it, so the
- *  strategy never chunks one into its pyramid. agent-framework 0.24.0
- *  doesn't export it, so this is a copy, and test/update-audit-stores.test.ts
- *  opens the same stores through agent-framework's own path to keep the two
- *  in step. */
-const residentView = (message: StoredMessage): boolean => !message.metadata?.tuneOut;
+ *  strategy never chunks one into its pyramid, and neither does another
+ *  agent's stored context injection (context-manager #155 part 5), since
+ *  the residents share the slot. agent-framework doesn't export it, so this
+ *  is a copy, and test/update-audit-stores.test.ts opens the same stores
+ *  through agent-framework's own path to keep the two in step. */
+const residentView = (name: string) => (message: StoredMessage): boolean =>
+  !message.metadata?.tuneOut && !isAnotherAgentsInjection(message.metadata, name);
+
+/** agent-framework's view of the subconscious's messages
+ *  (createSubconsciousAgent): its own namespace and the residents' slot
+ *  merged, tuned-out rows included, less every other agent's stored context
+ *  injection. agent-framework doesn't export it, so this is a copy. */
+export const subconsciousView = (name: string) => (message: StoredMessage): boolean =>
+  !isAnotherAgentsInjection(message.metadata, name);
+
+/** Whether a row is another agent's stored context injection, as
+ *  agent-framework's views tell it (`stored-injections.ts`). */
+function isAnotherAgentsInjection(metadata: unknown, name: string): boolean {
+  const mark = storedInjectionMarkOf(metadata);
+  return mark !== undefined && mark.agent !== name;
+}
 
 /** A membrane for one open that gives no model: each of its methods a
  *  strategy calls, complete, stream, streamYielding or any other, throws, so
@@ -324,9 +340,10 @@ export interface AuditRepair {
 /** What the audit opens in a store: the agent's namespace, its strategy, and
  *  the subconscious's namespace, when the recipe enables it. */
 interface Resident {
+  name: string;
   namespace: string;
   strategy: () => ContextStrategy;
-  subconscious?: { namespace: string; reAnchorFraction?: number };
+  subconscious?: { name: string; namespace: string; reAnchorFraction?: number };
 }
 
 /** What the audit opens in one data directory: each session's store, as a
@@ -747,7 +764,7 @@ async function auditNamespace(store: JsStore, resident: Resident, repairs: LoadR
     namespace: resident.namespace,
     model: noModel(),
     open: (membrane) => ContextManager.open({
-      store, namespace: resident.namespace, strategy, membrane, viewFilter: residentView,
+      store, namespace: resident.namespace, strategy, membrane, viewFilter: residentView(resident.name),
     }),
   }];
   const { subconscious } = resident;
@@ -760,6 +777,7 @@ async function auditNamespace(store: JsStore, resident: Resident, repairs: LoadR
         namespace: subconscious.namespace,
         isolate: true,
         auxiliaryMessageViews: [{}],
+        viewFilter: subconsciousView(subconscious.name),
         strategy: new WindowedPassthroughStrategy({
           reAnchorFraction: subconscious.reAnchorFraction,
           maxMessageTokens: (strategy as { maxMessageTokens?: number }).maxMessageTokens,
@@ -1229,10 +1247,18 @@ async function residentOf(dataDir: string, read: RecipeRead, loaded?: ExtensionR
     names,
     indexed,
     as: (name) => ({
+      name,
       namespace: `agents/${name}`,
       strategy,
       ...(subconscious?.enabled
-        ? { subconscious: { namespace: `subconscious/${name}`, reAnchorFraction: subconscious.reAnchorFraction } }
+        ? {
+          subconscious: {
+            // agent-framework's default name, as the recipe's doc says.
+            name: subconscious.name ?? 'Subconscious',
+            namespace: `subconscious/${name}`,
+            reAnchorFraction: subconscious.reAnchorFraction,
+          },
+        }
         : {}),
     }),
   };

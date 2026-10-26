@@ -9,7 +9,7 @@ import type {
   StoredMessage,
 } from '@animalabs/context-manager';
 import type { ContentBlock } from '@animalabs/membrane';
-import { formatZonedTime, resolveTimeZone } from '@animalabs/agent-framework';
+import { formatZonedTime, resolveTimeZone, storedInjectionMarkOf } from '@animalabs/agent-framework';
 
 export type FrontdeskStrategyOptions = Partial<AutobiographicalConfig> & { timeZone?: string };
 
@@ -282,7 +282,7 @@ export class FrontdeskStrategy extends AutobiographicalStrategy {
    * message within the following WINDOW messages.
    */
   protected updateSalience(store: MessageStoreView): void {
-    const messages = store.getAll();
+    const messages = store.getAll().filter((m) => storedInjectionMarkOf(m.metadata) === undefined);
     const assistant = this.config.summaryParticipant ?? 'Claude';
     const salient = new Set<string>();
     const WINDOW = 8;

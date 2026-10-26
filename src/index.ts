@@ -53,7 +53,7 @@ import { SubagentModule } from './modules/subagent-module.js';
 import { historyModuleOptions, assertSemanticSearchRegistered } from './history-semantic.js';
 import { LessonsModule } from './modules/lessons-module.js';
 import { RetrievalModule } from './modules/retrieval-module.js';
-import { buildRetrievalModuleConfig } from './retrieval-config.js';
+import { retrievalModuleConfig } from './retrieval-config.js';
 import { TuiModule } from './modules/tui-module.js';
 import { TimeModule } from './modules/time-module.js';
 import { waitToBeListed } from './fleet-begin.js';
@@ -83,7 +83,7 @@ import { armTrialLog } from './update/trial-log.js';
 import { HOST_PACKAGE_JSON } from './bun-floor-check.js';
 import { switchSessionSteps } from './session-switch.js';
 import { resolveAgentName } from './agent-name.js';
-import { generateSessionName } from './synesthete.js';
+import { generateSessionName, namingSummary } from './synesthete.js';
 import {
   type Recipe,
   DEFAULT_RECIPE,
@@ -311,6 +311,7 @@ async function createFramework(
       provider: resolveProvider(recipe),
       defaultModel: subagentConfig.defaultModel || model,
       defaultMaxTokens: subagentConfig.defaultMaxTokens,
+      timeZone,
     });
     moduleInstances.push(subagentModule);
   }
@@ -363,9 +364,7 @@ async function createFramework(
   // configured retrieval-model calls), which adds per-turn context churn.
   // Enable explicitly only when an agent actually curates a lesson library.
   if (modules.retrieval && lessonsModule) {
-    moduleInstances.push(new RetrievalModule(
-      buildRetrievalModuleConfig(membrane, modules.retrieval, recipe.agent.provider),
-    ));
+    moduleInstances.push(new RetrievalModule(retrievalModuleConfig(membrane, recipe)));
   }
 
   // History browsing (native chronicle indexes + summary-backed overview).
@@ -807,17 +806,7 @@ function setupSynesthete(app: AppContext): void {
     if (!cm) return;
 
     const { messages } = cm.queryMessages({});
-    const summary = messages
-      .filter(m => m.content.some((b: { type: string }) => b.type === 'text'))
-      .slice(0, 6)
-      .map(m => {
-        const text = m.content
-          .filter((b: { type: string }): b is { type: 'text'; text: string } => b.type === 'text')
-          .map((b: { text: string }) => b.text)
-          .join(' ');
-        return `${m.participant}: ${text.slice(0, 200)}`;
-      })
-      .join('\n');
+    const summary = namingSummary(messages);
 
     generateSessionName(app.membrane, summary, namingExamples).then(name => {
       if (name) {

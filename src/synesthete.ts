@@ -6,6 +6,7 @@
  */
 
 import type { Membrane } from '@animalabs/membrane';
+import { storedInjectionMarkOf } from '@animalabs/agent-framework';
 
 const DEFAULT_EXAMPLES = [
   'Context Window Budgeting',
@@ -26,6 +27,22 @@ Examples of good names:
 ${exampleList}
 
 Respond with ONLY the name, nothing else. No quotes, no explanation.`;
+}
+
+export function namingSummary(
+  messages: ReadonlyArray<{ participant: string; content: ReadonlyArray<{ type: string; text?: unknown }>; metadata?: unknown }>,
+): string {
+  return messages
+    .filter(m => m.content.some(b => b.type === 'text') && storedInjectionMarkOf(m.metadata) === undefined)
+    .slice(0, 6)
+    .map(m => {
+      const text = m.content
+        .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+        .map(b => b.text)
+        .join(' ');
+      return `${m.participant}: ${text.slice(0, 200)}`;
+    })
+    .join('\n');
 }
 
 /**

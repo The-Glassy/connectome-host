@@ -120,6 +120,14 @@ export function standardKvUnifiedConfig(recipe: Recipe, model: string): RecipeKv
   };
 }
 
+export function strategyMessageCap(recipe: Recipe): number | undefined {
+  const strategyConfig = recipe.agent.strategy;
+  const strategyType = strategyConfig?.type ?? 'autobiographical';
+  if (strategyType === 'passthrough') return undefined;
+  if (!isBuiltinStrategyType(strategyType)) return strategyConfig?.maxMessageTokens;
+  return strategyConfig?.maxMessageTokens ?? 10000;
+}
+
 export function buildFrameworkStrategy(
   recipe: Recipe,
   model: string,
@@ -156,7 +164,7 @@ export function buildFrameworkStrategy(
       ? { compressionMaxTokens: strategyConfig.compressionMaxTokens }
       : {}),
     autoTickOnNewMessage: true,
-    maxMessageTokens: strategyConfig?.maxMessageTokens ?? 10000,
+    maxMessageTokens: strategyMessageCap(recipe),
     ...(strategyType === 'frontdesk' ? { timeZone } : {}),
   };
 

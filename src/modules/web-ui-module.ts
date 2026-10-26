@@ -40,6 +40,8 @@ import type {
 import { WorkspaceReadError } from '@animalabs/agent-framework';
 import { unknownToolResult } from './unknown-tool.js';
 import { workspaceReadFields } from '../workspace-read-result.js';
+import { storedInjectionMarkOf } from '@animalabs/agent-framework';
+import { storedInjectionLabel } from '../stored-injection.js';
 import type { ServerWebSocket } from 'bun';
 import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
@@ -1474,8 +1476,8 @@ export class WebUiModule implements Module {
    *
    * Transparent by default: no inference of its own, no Chronicle writes, no
    * external MCPL calls. Pass `?injections=1` to gather the dynamic injections
-   * (lessons/retrieval/MCPL context) for full fidelity, which is NOT
-   * transparent: it can run inference and fire MCPL `beforeInference` hooks.
+   * (lessons/retrieval/MCPL context) too, which is NOT transparent: it can run
+   * inference and fire MCPL `beforeInference` hooks.
    */
   private async handleDebugContext(url: URL): Promise<Response> {
     const app = this.panelApp();
@@ -3586,6 +3588,7 @@ interface MessageLike {
   id?: string;
   participant: string;
   content: ReadonlyArray<unknown>;
+  metadata?: unknown;
   timestamp?: number | Date;
   bodyGroupId?: string;
   shardIndex?: number;
@@ -3611,7 +3614,7 @@ function capText(s: string, cap: number): { text: string; truncated?: boolean } 
  *
  * `index` is the message's store slot index — the client's paging cursor.
  */
-function toWireEntry(
+export function toWireEntry(
   msg: MessageLike,
   index: number,
   opts: { mediaRefs?: boolean } = {},
@@ -3724,10 +3727,17 @@ function toWireEntry(
     }
   }
 
+  const injection = storedInjectionMarkOf(msg.metadata);
+  if (injection) {
+    const label = storedInjectionLabel(injection);
+    blocks.unshift({ kind: 'text', text: label });
+    textParts.unshift(label);
+  }
+
   // Messages that are purely tool results are turn-plumbing, not prose;
   // surface them as participant 'tool' so the client can pair/hide them.
-  const participant = toolResults > 0 && conversational === 0
-    ? 'tool'
+  const participant = injection ? 'system'
+    : toolResults > 0 && conversational === 0 ? 'tool'
     : normalizeParticipant(msg.participant);
 
   const entry: WelcomeMessageEntry = {

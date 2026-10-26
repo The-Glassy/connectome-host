@@ -23,7 +23,7 @@ import { loadExtensions } from '../src/extensions.js';
 import { DEFAULT_RECIPE, loadSavedRecipe, saveRecipe, validateRecipe } from '../src/recipe.js';
 import { SessionManager } from '../src/session-manager.js';
 import { startFramework } from '../src/start-framework.js';
-import { auditStores, fleetChildRepair, type AuditOptions } from '../src/update/audit-stores.js';
+import { auditStores, fleetChildRepair, subconsciousView, type AuditOptions } from '../src/update/audit-stores.js';
 import { AUDIT_POINTER, loadRepairAlert, loadRepairLines, type LoadRepairReport } from '../src/web/load-repair-alert.js';
 import * as contract from '../src/update/contract.js';
 import { makeRepairStore } from './load-repair-store.js';
@@ -91,15 +91,19 @@ async function makeStore(path: string, namespace: string, crossed: boolean): Pro
 /** A store of 120 messages in `agents/agent` whose summary L2-x merges an L1
  *  over 40..49 with one over 60..69, and no record owns 50..59 (Effie-2289's
  *  case, room-203 #164796). A start chunks that run before its topology
- *  check, which gives L2-x holes, unless the messages are ones a tune-out
- *  diverted (`tunedOut`), which a start's view leaves out. The seed opens with
- *  `auditOnly` only so that adding the messages makes no chunk records. */
-async function makeSpanStore(path: string, tunedOut: boolean): Promise<void> {
+ *  check, which gives L2-x holes, unless the messages are ones a start's view
+ *  leaves out. The seed opens with `auditOnly` only so that adding the messages
+ *  makes no chunk records. */
+async function makeSpanStore(path: string, run?: 'tuned-out' | 'injected' | 'own-injected'): Promise<void> {
   const seed = new AutobiographicalStrategy({ adaptiveResolution: true, hierarchical: true, autoTickOnNewMessage: false, auditOnly: true });
   const manager = await ContextManager.open({ path, namespace: 'agents/agent', strategy: seed, membrane: MODEL });
   const ids: string[] = [];
   for (let i = 0; i < 120; i++) {
-    const diverted = tunedOut && i >= 50 && i <= 59 ? { tuneOut: { epochId: 'test' } } : undefined;
+    const inRun = i >= 50 && i <= 59;
+    const diverted = inRun && run === 'tuned-out' ? { tuneOut: { epochId: 'test' } }
+      : inRun && (run === 'injected' || run === 'own-injected')
+        ? { system: true, kind: 'context-injection', contextInjection: { agent: run === 'injected' ? 'other' : 'agent', namespace: 'retrieval', contentHash: `h${i}`, part: 0, parts: 1 } }
+        : undefined;
     ids.push(manager.addMessage(i % 2 ? 'agent' : 'user', [{ type: 'text', text: `message ${i} ` + 'word '.repeat(60) }], diverted));
   }
   const summary = (id: string, level: number, sourceIds: string[], first: string, last: string, mergedInto?: string) => ({
@@ -441,8 +445,10 @@ describe('the store audit', () => {
     const cases: Record<string, { make: (store: string) => Promise<void>; subconscious?: true; off?: true }> = {
       crossed: { make: (store) => makeStore(store, 'agents/agent', true) },
       plain: { make: (store) => makeStore(store, 'agents/agent', false) },
-      'unowned run inside a span': { make: (store) => makeSpanStore(store, false) },
-      'tuned-out run inside a span': { make: (store) => makeSpanStore(store, true) },
+      'unowned run inside a span': { make: (store) => makeSpanStore(store) },
+      'tuned-out run inside a span': { make: (store) => makeSpanStore(store, 'tuned-out') },
+      "another agent's stored injections inside a span": { make: (store) => makeSpanStore(store, 'injected') },
+      "the agent's own stored injections inside a span": { make: (store) => makeSpanStore(store, 'own-injected') },
       'a subconscious that opens': { make: (store) => makeStore(store, 'agents/agent', false), subconscious: true },
       "a subconscious whose context a start can't read": { make: makeBrokenSubconsciousStore, subconscious: true },
       'the same store, its subconscious off': { make: makeBrokenSubconsciousStore, off: true },
@@ -486,6 +492,8 @@ describe('the store audit', () => {
       plain: 'opens',
       'unowned run inside a span': 'refused',
       'tuned-out run inside a span': 'opens',
+      "another agent's stored injections inside a span": 'opens',
+      "the agent's own stored injections inside a span": 'refused',
       'a subconscious that opens': 'opens',
       "a subconscious whose context a start can't read": 'refused',
       'the same store, its subconscious off': 'opens',
@@ -495,6 +503,74 @@ describe('the store audit', () => {
     }
     expect(said["a subconscious whose context a start can't read"]!.audit).toContain(' (subconscious/agent): refused: ');
   }, 90_000);
+
+  test("the subconscious's view leaves out other agents' stored injections", () => {
+    const view = subconsciousView('Subconscious');
+    const row = (metadata?: Record<string, unknown>) => ({ id: 'm', participant: 'x', content: [], timestamp: 0, ...(metadata ? { metadata } : {}) }) as never;
+    const injection = (agent: string) => ({ system: true, kind: 'context-injection', contextInjection: { agent, namespace: 'retrieval', contentHash: 'h', part: 0, parts: 1 } });
+    expect(view(row(injection('agent')))).toBe(false);
+    expect(view(row(injection('Subconscious')))).toBe(true);
+    expect(view(row({ tuneOut: { channel: 'c' } }))).toBe(true);
+    expect(view(row())).toBe(true);
+  });
+
+  test("the audit opens a named subconscious with its own name's view, and the resident with the resident's", async () => {
+    const { dir } = await makeDataDirWith('named-subconscious', [(store) => makeStore(store, 'agents/agent', false)]);
+    saveRecipe(dir, { ...DEFAULT_RECIPE, subconscious: { enabled: true, name: 'Muse', systemPrompt: 'attend to the agent' } });
+    const views = new Map<string, (message: never) => boolean>();
+    const open = ContextManager.open.bind(ContextManager);
+    const spy = spyOn(ContextManager, 'open').mockImplementation(((options: { namespace?: string; viewFilter?: (message: never) => boolean }) => {
+      if (options.namespace !== undefined && options.viewFilter) views.set(options.namespace, options.viewFilter);
+      return open(options as never);
+    }) as never);
+    try {
+      expect((await audit([dir])).status).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+    const row = (agent: string) => ({ id: 'm', participant: 'x', content: [], timestamp: 0, metadata: {
+      system: true, kind: 'context-injection', contextInjection: { agent, namespace: 'retrieval', contentHash: 'h', part: 0, parts: 1 },
+    } }) as never;
+    const muse = views.get('subconscious/agent')!;
+    const agent = views.get('agents/agent')!;
+    expect([muse(row('Muse')), muse(row('agent')), muse(row('Subconscious'))]).toEqual([true, false, false]);
+    expect([agent(row('agent')), agent(row('Muse'))]).toEqual([true, false]);
+  });
+
+  test("the audit's subconscious view answers as the filter agent-framework opens a named subconscious with", async () => {
+    // agent-framework doesn't export createSubconsciousAgent's filter, so this
+    // takes the one it passes to ContextManager.open for the subconscious's
+    // namespace, and asks it and the audit's copy about the same rows.
+    const { stores } = await makeDataDirWith('framework-subconscious', [(store) => makeStore(store, 'agents/agent', false)]);
+    let frameworkView: ((message: never) => boolean) | undefined;
+    const open = ContextManager.open.bind(ContextManager);
+    const spy = spyOn(ContextManager, 'open').mockImplementation(((options: { namespace?: string; viewFilter?: (message: never) => boolean }) => {
+      if (options.namespace === 'subconscious/agent') frameworkView = options.viewFilter;
+      return open(options as never);
+    }) as never);
+    try {
+      const recipe = validateRecipe(structuredClone({ ...DEFAULT_RECIPE, subconscious: { enabled: true, name: 'Muse', systemPrompt: 'attend to the agent' } }));
+      const model = recipeModel(recipe, process.env.MODEL);
+      const strategy = buildFrameworkStrategy(recipe, model, resolveTimeZone(recipe.agent.timezone));
+      const framework = await AgentFramework.create({
+        storePath: stores[0]!,
+        membrane: new Membrane(new MockAdapter()),
+        agents: [buildFrameworkAgentConfig(recipe, 'agent', model, strategy)],
+        modules: [],
+        subconscious: recipe.subconscious!,
+      });
+      await framework.stop();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(frameworkView).toBeDefined();
+    const ours = subconsciousView('Muse');
+    const injection = (agent: string) => ({ system: true, kind: 'context-injection', contextInjection: { agent, namespace: 'retrieval', contentHash: 'h', part: 0, parts: 1 } });
+    const rows = [injection('agent'), injection('Muse'), injection('Subconscious'), { tuneOut: { channel: 'c' } }, undefined]
+      .map((metadata) => ({ id: 'm', participant: 'x', content: [], timestamp: 0, ...(metadata ? { metadata } : {}) }) as never);
+    expect(rows.map((row) => ours(row))).toEqual(rows.map((row) => frameworkView!(row)));
+    expect(rows.map((row) => ours(row))).toEqual([false, true, false, true, true]);
+  });
 
   test("a crossed store opens under a resident's kv-unified block that keeps gap-bearing summaries, as at its start", async () => {
     const { dir, stores } = await makeDataDir('data', [{ namespace: 'agents/agent', crossed: true }]);

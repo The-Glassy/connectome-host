@@ -15,8 +15,7 @@
  * context and trigger retry-storm spawn behavior.
  *
  * The fix uses `parentMap` (already maintained for cancelChildren) to walk
- * descendants. A caller sees only its own subtree — peers and ancestors are
- * filtered out.
+ * descendants.
  */
 import { describe, test, expect } from 'bun:test';
 import {
@@ -51,6 +50,7 @@ function makeTree(): SubagentModule {
   const privateView = mod as unknown as {
     liveSubagents: Map<string, FakeLiveState>;
     frameworkNameIndex: Map<string, string>;
+    runOfAttempt: Map<string, string>;
   };
 
   const installOne = (displayName: string, frameworkAgentName: string, parent?: string): void => {
@@ -63,6 +63,7 @@ function makeTree(): SubagentModule {
       pendingToolCalls: [],
       activeCallIds: new Set(),
     };
+    privateView.runOfAttempt.set(frameworkAgentName, displayName);
     privateView.liveSubagents.set(displayName, live);
     privateView.frameworkNameIndex.set(frameworkAgentName, displayName);
     const entry: ActiveSubagent = {

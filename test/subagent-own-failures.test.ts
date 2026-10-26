@@ -1380,6 +1380,173 @@ describe('a name means one subagent until its result has come back', () => {
     } finally { await h.cleanup(); }
   }, 20_000);
 
+  test('an async result goes to the window of the subagent that launched it, its line naming it, and its wake to it', async () => {
+    const h = await harness({ maxRetries: 0 }, async (agent) => agent.name.includes('lead') ? new Promise(() => { /* runs on */ }) : ran('done'));
+    const ctx = (h.subagent as unknown as { ctx: {
+      addMessage(participant: string, content: Array<{ type: string; text?: string }>, metadata?: unknown, opts?: { forAgent?: string }): unknown;
+      pushEvent(event: { type: string; agentName?: string }): unknown;
+    } }).ctx;
+    const add = ctx.addMessage.bind(ctx);
+    const push = ctx.pushEvent.bind(ctx);
+    const written: Array<{ text: string; forAgent?: string }> = [];
+    const woken: string[] = [];
+    ctx.addMessage = (participant, content, metadata, opts) => {
+      const text = content[0]?.text ?? '';
+      if (text.startsWith('[Subagent ')) written.push({ text, ...(opts?.forAgent !== undefined ? { forAgent: opts.forAgent } : {}) });
+      return add(participant, content, metadata, opts);
+    };
+    ctx.pushEvent = (event) => {
+      if (event.type === 'inference-request' && event.agentName) woken.push(event.agentName);
+      return push(event);
+    };
+    try {
+      await h.subagent.handleToolCall(spawn('lead'));
+      await until(() => h.running('lead'));
+      const lead = internal(h.subagent).liveSubagents.get('lead')!.frameworkAgentName;
+      expect((await h.subagent.handleToolCall({ ...spawn('child'), callerAgentName: lead })).success).toBe(true);
+      await until(() => written.length > 0);
+      expect(lead).not.toBe('lead');
+      expect(written).toEqual([{ text: `[Subagent 'child' returned, for 'lead']\n\ndone`, forAgent: lead }]);
+      expect(woken).toEqual([lead]);
+    } finally {
+      h.subagent.cancelSubagent('lead');
+      await h.cleanup();
+    }
+  }, 20_000);
+
+  for (const call of [spawn, fork]) {
+    test(`an async result for a ${call.name} that has ended reaches the primary, not a later run under its name, which isn't woken`, async () => {
+      const isLead = (agentName: string) => agentName.startsWith(call === spawn ? 'spawn-lead-' : 'lead-d');
+      let leadRuns = 0;
+      let firstLead = '';
+      let releaseChild!: () => void;
+      const childMayEnd = new Promise<void>((resolve) => { releaseChild = resolve; });
+      let h!: Harness;
+      h = await harness({ maxConcurrent: 3, maxRetries: 0 }, async (agent) => {
+        if (isLead(agent.name)) {
+          if (++leadRuns === 1) {
+            firstLead = agent.name;
+            await h.subagent.handleToolCall({ ...spawn('child'), callerAgentName: agent.name });
+            return ran('done');
+          }
+          return new Promise(() => { /* the second run under the name runs until cancelled */ });
+        }
+        await childMayEnd;
+        return ran('child done');
+      });
+      const sub = internal(h.subagent);
+      const ctx = (h.subagent as unknown as { ctx: {
+        addMessage(participant: string, content: Array<{ type: string; text?: string }>, metadata?: unknown, opts?: { forAgent?: string }): unknown;
+        pushEvent(event: { type: string; agentName?: string; reason?: string }): unknown;
+      } }).ctx;
+      const add = ctx.addMessage.bind(ctx);
+      const push = ctx.pushEvent.bind(ctx);
+      const written: Array<{ text: string; forAgent?: string }> = [];
+      const woken: string[] = [];
+      ctx.addMessage = (participant, content, metadata, opts) => {
+        const text = content[0]?.text ?? '';
+        if (text.startsWith("[Subagent 'child'")) written.push({ text, ...(opts?.forAgent !== undefined ? { forAgent: opts.forAgent } : {}) });
+        return add(participant, content, metadata, opts);
+      };
+      ctx.pushEvent = (event) => {
+        if (event.type === 'inference-request' && event.agentName && event.reason?.endsWith(':child')) woken.push(event.agentName);
+        return push(event);
+      };
+      try {
+        await h.subagent.handleToolCall(call('lead'));
+        await until(() => h.running('child') && !sub.asyncHandles.has('lead'));
+        expect((await h.subagent.handleToolCall(call('lead'))).success).toBe(true);
+        await until(() => leadRuns === 2 && h.running('lead'));
+        const secondLead = sub.liveSubagents.get('lead')!.frameworkAgentName;
+        expect(secondLead).not.toBe(firstLead);
+        releaseChild();
+        await until(() => written.length > 0);
+        expect(written).toEqual([{ text: "[Subagent 'child' returned, for 'lead', which has ended]\n\nchild done" }]);
+        expect(woken).toEqual([]);
+      } finally {
+        h.subagent.cancelSubagent('lead');
+        await h.cleanup();
+      }
+    }, 20_000);
+  }
+
+  for (const kind of ['an async fork', 'a failing spawn', 'a sync spawn moved to the background'] as const) {
+    test(`${kind}'s result names its launcher by its display name`, async () => {
+      let h!: Harness;
+      let lead = '';
+      h = await harness({ maxConcurrent: 3, maxRetries: 0 }, async (agent) => {
+        if (agent.name.startsWith('spawn-lead-')) {
+          lead = agent.name;
+          const call = kind === 'an async fork' ? fork('child') : kind === 'a failing spawn' ? spawn('child') : spawn('child', { sync: true, timeoutMs: 50 });
+          await h.subagent.handleToolCall({ ...call, callerAgentName: agent.name });
+          return new Promise(() => { /* the launcher runs on, so it's listed */ });
+        }
+        if (kind === 'a failing spawn') throw new Error('broke');
+        if (kind === 'a sync spawn moved to the background') await sleep(300);
+        return ran('child done');
+      });
+      const ctx = (h.subagent as unknown as { ctx: {
+        addMessage(participant: string, content: Array<{ type: string; text?: string }>, metadata?: unknown, opts?: { forAgent?: string }): unknown;
+      } }).ctx;
+      const add = ctx.addMessage.bind(ctx);
+      const written: Array<{ text: string; forAgent?: string }> = [];
+      ctx.addMessage = (participant, content, metadata, opts) => {
+        const text = content[0]?.text ?? '';
+        if (text.startsWith("[Subagent 'child'")) written.push({ text, ...(opts?.forAgent !== undefined ? { forAgent: opts.forAgent } : {}) });
+        return add(participant, content, metadata, opts);
+      };
+      try {
+        await h.subagent.handleToolCall(spawn('lead'));
+        await until(() => written.length > 0);
+        expect(lead).toStartWith('spawn-lead-');
+        const outcome = kind === 'a failing spawn' ? 'failed' : 'returned';
+        expect(written[0]!.text).toStartWith(`[Subagent 'child' ${outcome}, for 'lead']\n\n`);
+        expect(written[0]!.forAgent).toBe(lead);
+      } finally {
+        h.subagent.cancelSubagent('lead');
+        await h.cleanup();
+      }
+    }, 20_000);
+  }
+
+  test('a child whose launcher has ended is listed in the primary\'s fleet status while it runs', async () => {
+    let releaseChild!: () => void;
+    const childMayEnd = new Promise<void>((resolve) => { releaseChild = resolve; });
+    let h!: Harness;
+    h = await harness({ maxConcurrent: 3, maxRetries: 0 }, async (agent) => {
+      if (agent.name.startsWith('spawn-lead-')) {
+        await h.subagent.handleToolCall({ ...spawn('child'), callerAgentName: agent.name });
+        return ran('done');
+      }
+      await childMayEnd;
+      return ran('child done');
+    });
+    const sub = internal(h.subagent);
+    const status = async () => ((await h.subagent.gatherContext('parent'))[0]?.content[0] as { text: string } | undefined)?.text;
+    try {
+      expect((await h.subagent.handleToolCall({ id: 't-hud', name: 'hud', input: { enabled: true }, callerAgentName: 'parent' })).success).toBe(true);
+      await h.subagent.handleToolCall(spawn('lead'));
+      await until(() => h.running('child') && !sub.asyncHandles.has('lead'));
+      expect(await status()).toContain("child [spawn] running since");
+      expect((await h.subagent.peek(undefined, 'parent')).map((snapshot) => snapshot.name)).toContain('child');
+      expect((await h.subagent.peek('child', 'parent')).map((snapshot) => snapshot.name)).toEqual(['child']);
+      releaseChild();
+      await until(() => !sub.asyncHandles.has('child'));
+      expect((await status()) ?? '').not.toContain('child [spawn] running');
+    } finally { await h.cleanup(); }
+  }, 20_000);
+
+  test('an async result with no launcher named, by the call or the config, lands as before', async () => {
+    const h = await harness({ parentAgentName: undefined, maxRetries: 0 }, async () => ran('done'));
+    const delivered = deliveries(h);
+    try {
+      const { callerAgentName: _caller, ...noCaller } = spawn('scout');
+      expect((await h.subagent.handleToolCall(noCaller as ToolCall)).success).toBe(true);
+      await until(() => delivered.requests.length > 0);
+      expect(delivered.messages.filter((m) => m.startsWith("[Subagent 'scout'"))).toEqual(["[Subagent 'scout' returned]\n\ndone"]);
+    } finally { await h.cleanup(); }
+  }, 20_000);
+
   for (const call of [spawn, fork]) {
     test(`a cancel of a new ${call.name} under a name doesn't reach a child the name's last run left running`, async () => {
       const isLead = (agentName: string) => agentName.startsWith(call === spawn ? 'spawn-lead-' : 'lead-d');

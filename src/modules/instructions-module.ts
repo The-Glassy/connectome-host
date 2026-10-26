@@ -56,8 +56,8 @@ import type {
   ToolDefinition,
   ToolCall,
   ToolResult,
+  ModuleContextInjection,
 } from '@animalabs/agent-framework';
-import type { ContextInjection } from '@animalabs/context-manager';
 import { unknownToolResult } from './unknown-tool.js';
 
 /**
@@ -206,7 +206,7 @@ export class InstructionsModule implements Module {
    * Same injection for every agent — resident and ephemeral subagents alike
    * share the one living document (that is the point of the module).
    */
-  async gatherContext(_agentName: string): Promise<ContextInjection[]> {
+  async gatherContext(_agentName: string): Promise<ModuleContextInjection[]> {
     // A module that isn't started, stopped or given the next session's
     // workspace but not yet started, belongs to no running session: a turn
     // that reaches it then injects nothing and changes nothing.
@@ -275,13 +275,13 @@ export class InstructionsModule implements Module {
       this.alerted = false;
       this.notifyOps('instructions-unavailable-clear', `"${this.path}" loaded again; agents have their instructions`);
     }
-    return [
-      {
-        namespace: 'instructions',
-        position: this.position,
-        content: [{ type: 'text', text: `${this.header}\n\n${content}` }],
-      },
-    ];
+    const injection: ModuleContextInjection = {
+      namespace: 'instructions',
+      position: this.position,
+      content: [{ type: 'text', text: `${this.header}\n\n${content}` }],
+    };
+    if (this.position !== 'system') injection.placedEachCompile = true;
+    return [injection];
   }
 
   /** How long a read may take: three quarters of the registry's budget for
