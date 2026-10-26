@@ -224,3 +224,53 @@ describe("the TUI's subagent exhaustion, through runTui", () => {
     expect(times(at('after switch').frame, `${web}after switch`)).toBe(1);
   }, 40000);
 });
+
+function parentRows(frame: string): Map<string, string> {
+  const rows: Array<{ name: string; column: number }> = [];
+  for (const line of frame.split('\n')) {
+    const row = /([▼►─]) (\S+)  \[/.exec(line);
+    if (row) rows.push({ name: row[2]!, column: row.index });
+  }
+  const parents = new Map<string, string>();
+  rows.forEach((row, i) => {
+    const parent = rows.slice(0, i).reverse().find(r => r.column < row.column);
+    if (parent) parents.set(row.name, parent.name);
+  });
+  return parents;
+}
+
+describe("the TUI's fleet rows, through runTui", () => {
+  test("a restored child hangs under its parent's row: a fork named web-retry1, or web saved by its retry name from before forks were named by depth", async () => {
+    const fleet = (await play('fleet-parents')).get('fleet');
+    if (!fleet) throw new Error('missing fleet frame');
+    const parents = parentRows(fleet.frame);
+    expect(parents.get('saved-child')).toBe('web');
+    expect(parents.get('live-child')).toBe('web-retry1');
+  }, 40000);
+
+  for (const scenario of ['fork-figures', 'fork-figures-reversed']) {
+    test(`${scenario}: each fork's row shows its own context figure, beside a fork whose name is its own plus a suffix`, async () => {
+      const fleet = (await play(scenario)).get('fleet');
+      if (!fleet) throw new Error('missing fleet frame');
+      expect(fleet.frame).toMatch(/web-retry1  \[sending \d+s\] 50\.0kctx/);
+      expect(fleet.frame).toMatch(/web  \[sending \d+s\] 20\.0kctx/);
+    }, 40000);
+  }
+});
+
+describe("the TUI's numbered fork phases, through runTui", () => {
+  for (const scenario of ['numbered-fork-failed', 'numbered-fork-exhausted']) {
+    test(scenario + ': only the numbered row changes from sending to failed', async () => {
+      const steps = await play(scenario);
+      const before = steps.get('before');
+      const after = steps.get('after');
+      if (!before || !after) throw new Error('missing numbered fork frames');
+
+      expect(before.frame).toMatch(/web  \[sending /);
+      expect(before.frame).toMatch(/web-1  \[sending /);
+      expect(after.frame).toMatch(/web-1  \[failed /);
+      expect(after.frame).toMatch(/web  \[sending /);
+      expect(after.frame).not.toMatch(/web  \[failed /);
+    }, 40000);
+  }
+});

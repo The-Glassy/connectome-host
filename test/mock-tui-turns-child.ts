@@ -4,8 +4,9 @@
  * step names to every listener, as agent-framework's emitTrace calls each
  * one, and its abortInference aborts only once told an agent's model call is
  * in flight, then sends `inference:aborted` alone, as agent-framework
- * 0.22.3's does. In the `subagents` and `subagent-exhausted` scenarios its
- * subagent module stands in for the host's.
+ * 0.22.3's does. In the `subagents`, `subagent-exhausted`, numbered-fork,
+ * fork-figures and fleet-parents scenarios its subagent module stands in for
+ * the host's.
  * Prints one `TUI_STEP` line of JSON per step: the frame's text and the
  * aborts asked for so far.
  */
@@ -53,7 +54,7 @@ function fakeFramework(name: string) {
     send(type: string, extra: Trace = {}) {
       for (const listener of [...listeners]) listener({ type, agentName: 'agent', ...extra });
     },
-    getAllModules: () => (['subagents', 'subagent-exhausted'].includes(scenario) ? [subagents] : []),
+    getAllModules: () => (['subagents', 'subagent-exhausted', 'numbered-fork-failed', 'numbered-fork-exhausted', 'fork-figures', 'fork-figures-reversed', 'fleet-parents'].includes(scenario) ? [subagents] : []),
     getAllAgents: () => (scenario === 'subagents' ? [{ name: 'agent' }, { name: 'spawn-1' }] : [{ name: 'agent' }]),
     getModule: () => undefined,
     getAgent: (agentName: string) => agentName === 'agent'
@@ -253,9 +254,69 @@ async function play(): Promise<void> {
     first.send('inference:tokens', { agentName: 'spawn-1' });
     await Promise.resolve();
     await step('subagent compiled');
+  } else if (scenario === 'numbered-fork-failed' || scenario === 'numbered-fork-exhausted') {
+    for (const name of ['web', 'web-1']) {
+      subagents.activeSubagents.set(name, {
+        name, status: 'running', startedAt: Date.now(),
+        task: 'Check numbered fork attribution', toolCallsCount: 0,
+      });
+    }
+    const tab = () => pressed(() => mockInput.pressTab(), 'Tab');
+    await until(async () => (await frame()).includes('Session: first'), 'initial render');
+    await tab();
+    await until(async () => {
+      const text = await frame();
+      return /web  \[sending /.test(text) && /web-1  \[sending /.test(text);
+    }, 'both running subagent rows');
+    await step('before');
+
+    const agentName = 'web-1-d1-1700000000001';
+    first.send('inference:started', { agentName });
+    first.send(scenario === 'numbered-fork-failed' ? 'inference:failed' : 'inference:exhausted', {
+      agentName, error: 'numbered fork failure',
+    });
+    await tab();
+    await tab();
+    await step('after');
+  } else if (scenario === 'fork-figures' || scenario === 'fork-figures-reversed') {
+    for (const name of ['web-retry1', 'web']) {
+      subagents.activeSubagents.set(name, {
+        name, status: 'running', startedAt: Date.now(),
+        task: 'Check each row reads its own figure', toolCallsCount: 0,
+      });
+    }
+    const usage: Array<[string, number]> = [['web-retry1-d1-1700000000000', 50000], ['web-d1-1700000000001', 20000]];
+    if (scenario === 'fork-figures-reversed') usage.reverse();
+    for (const [agentName, input] of usage) {
+      first.send('inference:started', { agentName });
+      first.send('inference:usage', { agentName, tokenUsage: { input, output: 10 } });
+    }
+    await until(async () => (await frame()).includes('Session: first'), 'initial render');
+    await pressed(() => mockInput.pressTab(), 'Tab');
+    await until(async () => /web  \[sending /.test(await frame()), 'the rows');
+    await step('fleet');
+  } else if (scenario === 'fleet-parents') {
+    for (const name of ['web', 'web-retry1', 'saved-child', 'live-child']) {
+      subagents.activeSubagents.set(name, {
+        name, status: 'running', startedAt: Date.now(),
+        task: 'Check which row each child hangs under', toolCallsCount: 0,
+      });
+    }
+    subagents.parentMap.set('saved-child', 'web-retry2');
+    subagents.parentMap.set('live-child', 'web-retry1-d1-1700000000001');
+    await until(async () => (await frame()).includes('Session: first'), 'initial render');
+    first.send('branches:changed', { event: 'switched', branch: 'restored', previous: 'main', source: 'test' });
+    await pressed(() => mockInput.pressTab(), 'Tab');
+    await until(async () => /web  \[sending /.test(await frame()), 'the rows');
+    await pressed(() => mockInput.pressArrow('down'), 'Down');
+    await pressed(() => mockInput.pressEnter(), 'Enter');
+    await pressed(() => mockInput.pressArrow('down'), 'Down');
+    await pressed(() => mockInput.pressArrow('down'), 'Down');
+    await pressed(() => mockInput.pressEnter(), 'Enter');
+    await step('fleet');
   } else if (scenario === 'subagent-exhausted') {
     const agentName = 'spawn-web-1700000000000';
-    subagents.activeSubagents.set(agentName, {
+    subagents.activeSubagents.set('spawn-web', {
       name: 'web', status: 'running', startedAt: Date.now(),
       task: 'Check stream failures', toolCallsCount: 0,
     });
