@@ -21,7 +21,8 @@
     says 0 turns a limit off. A recipe that sets neither keeps the defaults, 6
     images and 20 MiB, as before.
   - **A pin or document mark on a long message now covers the whole
-    message.** Under adaptive resolution, which this host turns on unless a
+    message.** Under adaptive resolution, which this host turns on for agents
+    on the autobiographical strategy (the default) or frontdesk unless a
     recipe sets `adaptiveResolution: false`, a pin or mark the Pins panel made
     on a single message the store keeps in parts covered only its first part;
     it now covers every part. So the first compile after upgrading rewrites
