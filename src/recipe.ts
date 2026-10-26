@@ -749,8 +749,8 @@ export interface RecipeWorkspaceMount {
   path: string;
   /**
    * Left out, the host makes a mount read-write (workspace-mounts.ts). A
-   * direct mount (`backend: 'direct'`) must say its mode, which in
-   * agent-framework 0.24 can only be 'read-only'; one that doesn't stops the
+   * direct mount (`backend: 'direct'`) must say its mode, 'read-only', or
+   * 'read-write' from agent-framework 0.27.0; one that doesn't stops the
    * recipe loading (validateRecipe).
    */
   mode?: 'read-write' | 'read-only';
@@ -758,8 +758,8 @@ export interface RecipeWorkspaceMount {
    * Where the mount's tools get what they read, as agent-framework's
    * `MountConfig.backend` says (its default is 'chronicle'). 'direct' reads
    * disk's own copy as it is, keeps none of the mount's files in the store,
-   * and runs no scan or watcher: for a checkout an agent reads, not one it
-   * changes. A direct mount says `mode: 'read-only'`, and the framework
+   * and runs no scan or watcher, so a writable one's writes have no undo. A
+   * direct mount says its mode, and the framework
    * refuses one with a setting that would never act there, such as a watch
    * other than 'never', a wake on change or auto-materialize, which stops
    * the recipe loading (validateRecipe). A mount configured direct whose
@@ -777,9 +777,9 @@ export interface RecipeWorkspaceMount {
    * list doesn't cover is refused by reads and writes and left out of
    * listings and searches, and a pattern the framework can't read stops the
    * recipe loading (validateRecipe). agent-framework keeps its own files
-   * (spilled tool results, fetched references) only in a read-write mount
-   * without an include, the first one there is: a recipe whose every
-   * writable mount has one keeps none of them in a file.
+   * (spilled tool results, saved payloads, fetched references) only in the
+   * first read-write mount with no include that isn't configured direct: a
+   * recipe with no such mount keeps none of them in a file.
    */
   include?: string[];
   watch?: 'always' | 'on-agent-action' | 'never';
@@ -814,7 +814,8 @@ export interface RecipeWorkspaceMount {
   /**
    * Persist every write/edit/delete to disk immediately. Required for mounts
    * shared across agents as a communication channel (tickets, reports, etc.)
-   * so other agents' chokidar watchers actually see the change.
+   * so other agents' chokidar watchers actually see the change. A direct
+   * mount refuses it: its writes are on disk when they answer.
    */
   autoMaterialize?: boolean;
   /** With `watch: 'always'`, how long changes are gathered before the workspace looks at them, in ms (the framework's default is 300). */
@@ -867,8 +868,9 @@ export interface RecipeModules {
    * depth (its include), with history in Chronicle; it isn't materialized
    * on agent writes (buildWorkspaceMounts). Since it has an include,
    * agent-framework keeps none of its own files there: a recipe whose other
-   * mounts are all read-only keeps no over-cap tool result or fetched
-   * reference in a file. No mount of the recipe's own is named `_config`.
+   * mounts are each read-only, have an include, or are configured direct
+   * keeps no over-cap tool result, saved payload or fetched reference in a
+   * file. No mount of the recipe's own is named `_config`.
    */
   workspace?: boolean | { mounts: RecipeWorkspaceMount[]; configMount?: boolean };
   /**
@@ -884,13 +886,16 @@ export interface RecipeModules {
    * named by the path is cross-checked at load time in every configuration
    * (explicit mounts and the implicit "input"+"products" default alike), so
    * a path naming a nonexistent mount is a load error, never a silent
-   * no-injection. A read-write instructions mount must also set
-   * `autoMaterialize: true`: workspace writes are Chronicle-first and the
-   * injection reads disk, so without materialization an agent's own
-   * curation edits would never reach the injection. A read-only mount is
-   * the alternative when the file is maintained outside the agent (edits
-   * then propagate to the injection but not to `workspace--read`, which
-   * serves Chronicle). A missing FILE remains fail-open at runtime: no
+   * no-injection. A read-write instructions mount that isn't configured
+   * direct must also set `autoMaterialize: true`: its writes are
+   * Chronicle-first and the injection reads disk, so without
+   * materialization an agent's own curation edits would never reach the
+   * injection. A direct mount's write is on disk when it answers, and in
+   * a session it runs as 'chronicle' its writes are refused. A read-only
+   * mount is the alternative when the file is maintained outside
+   * the agent (edits then propagate to the injection but not to
+   * `workspace--read`, which serves Chronicle unless the mount runs
+   * direct). A missing FILE remains fail-open at runtime: no
    * injection, with a log line and an `instructions-unavailable` ops alert.
    *
    * Cache economics: with position 'system' the injected block sits in the
@@ -2833,10 +2838,6 @@ export function validateRecipe(raw: unknown): Recipe {
         if (!m || typeof m !== 'object') {
           throw new Error(`${where} must be an object`);
         }
-        // The host takes a mount named _config for its own, the session's
-        // config directory that configMount adds, by the name alone: saveAs
-        // refuses it, an instructions path can't read through it, and a
-        // branch command re-materializes it. So the name is the host's.
         if (m.name === '_config') {
           throw new Error(`${where} is named "_config", the name of the host's own mount of the session's config directory, which configMount: true adds. Give this mount another name.`);
         }
@@ -2851,12 +2852,8 @@ export function validateRecipe(raw: unknown): Recipe {
           const mustBe = MOUNT_KEY_CHECKS[key](m[key]);
           if (mustBe) throw new Error(`${where}.${key} must be ${mustBe}`);
         }
-        // Writing a checkout with no store and no undo should be said in the
-        // recipe, so a direct mount states its mode: a default would give a
-        // recipe a meaning a later framework release, where a direct mount
-        // can be read-write, could change.
         if (m.backend === 'direct' && m.mode === undefined) {
-          throw new Error(`${where} is direct, so it must say its mode: add "mode": "read-only", the only mode a direct mount takes in agent-framework 0.24`);
+          throw new Error(`${where} is direct, so it must say its mode: add "mode": "read-only", or "read-write" for one the agent writes on disk directly, with no undo`);
         }
       }
       // What a mount's keys must be together, such as a direct mount's
@@ -2955,7 +2952,8 @@ export function validateRecipe(raw: unknown): Recipe {
       // — without it, an agent's own curation edits would never appear in
       // the injection (and its workspace read would show the new content,
       // hiding the drift entirely). Read-only mounts are exempt: disk is
-      // their only write path.
+      // their only write path. So are direct ones: a write there is on disk
+      // when it answers, or refused in a session the mount runs as chronicle.
       {
         const effectivePath =
           typeof mods.instructions === 'object'
@@ -2990,14 +2988,15 @@ export function validateRecipe(raw: unknown): Recipe {
             `instructions mount instead.`,
           );
         }
-        if (match.mode !== 'read-only' && match.autoMaterialize !== true) {
+        if (match.mode !== 'read-only' && match.backend !== 'direct' && match.autoMaterialize !== true) {
           throw new Error(
             `modules.instructions.path ${JSON.stringify(effectivePath)} uses read-write mount ` +
-            `${JSON.stringify(mountName)} without autoMaterialize. Workspace writes are ` +
+            `${JSON.stringify(mountName)} without autoMaterialize. Its writes are ` +
             `Chronicle-first and reach disk only when the mount materializes, while the ` +
             `instructions injection reads disk — agent edits to the file would silently never ` +
-            `take effect. Set autoMaterialize: true on the mount` +
-            `${declaredExplicitly ? '' : ' (the implicit default workspace cannot; declare explicit mounts)'}, ` +
+            `take effect. Set autoMaterialize: true on the mount, or configure it ` +
+            `"backend": "direct" with "mode": "read-write" so edits reach disk at once, with no undo` +
+            `${declaredExplicitly ? '' : ' (the implicit default workspace can do neither; declare explicit mounts)'}, ` +
             `or make the mount read-only if the file is maintained outside the agent.`,
           );
         }

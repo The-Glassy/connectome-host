@@ -137,8 +137,8 @@ describe('recipe modules.instructions validation', () => {
     }))).toThrow(/host-managed "_config"/);
   });
 
-  test('rejects a read-write instructions mount without autoMaterialize (split-brain guard)', () => {
-    // Workspace writes are Chronicle-first; the injection reads disk. A rw
+  test('rejects a read-write Chronicle instructions mount without autoMaterialize (split-brain guard)', () => {
+    // A Chronicle mount's writes are Chronicle-first; the injection reads disk. A rw
     // mount that never materializes would silently freeze the injection at
     // the pre-curation content.
     expect(() => validateRecipe(recipe({
@@ -152,11 +152,13 @@ describe('recipe modules.instructions validation', () => {
     }))).toThrow(/autoMaterialize/);
   });
 
-  test('accepts a direct instructions mount, which is read-only', () => {
-    expect(() => validateRecipe(recipe({
-      instructions: true,
-      workspace: { mounts: [{ name: 'instructions', path: './instructions', backend: 'direct', mode: 'read-only' }] },
-    }))).not.toThrow();
+  test('accepts a direct instructions mount, read-only or read-write, with no autoMaterialize', () => {
+    for (const mode of ['read-only', 'read-write']) {
+      expect(() => validateRecipe(recipe({
+        instructions: true,
+        workspace: { mounts: [{ name: 'instructions', path: './instructions', backend: 'direct', mode }] },
+      }))).not.toThrow();
+    }
   });
 
   test('cross-checks against the implicit default workspace too', () => {
@@ -174,7 +176,7 @@ describe('recipe modules.instructions validation', () => {
     // The implicit 'products' mount is rw without autoMaterialize — and the
     // implicit workspace cannot set it, so this directs to explicit mounts.
     expect(() => validateRecipe(recipe({ instructions: { path: 'products/AGENTS.md' } })))
-      .toThrow(/implicit default workspace cannot/);
+      .toThrow(/implicit default workspace can do neither/);
   });
 
   test('allows instructions: false alongside workspace: false', () => {

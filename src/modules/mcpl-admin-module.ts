@@ -9,8 +9,7 @@
  *   - mcpl_unload {id}         → disconnect a server and remove its tools
  *
  * Persistence model (agent overlay):
- *   Agent deployments are written to `mcpl-servers.agent.json` (cwd), or a
- *   fleet child's `mcpl-servers.agent.child.json` in its data directory
+ *   Agent deployments are written to the agent overlay
  *   (DEFAULT_AGENT_OVERLAY_PATH), which
  *   index.ts merges over the recipe/file server list at startup — so agent
  *   deployments survive host restarts without touching human-owned recipe
@@ -64,7 +63,7 @@ import { shown } from './shown.js';
 export interface McplAdminModuleConfig {
   /** IANA zone propagated to newly deployed stdio servers. */
   timeZone?: string;
-  /** Path to the agent overlay file. Default: DEFAULT_AGENT_OVERLAY_PATH, `mcpl-servers.agent.json` in cwd, or a fleet child's `mcpl-servers.agent.child.json` in its data directory. */
+  /** Path to the agent overlay file. Default: DEFAULT_AGENT_OVERLAY_PATH. */
   overlayPath?: string;
   /** Path to the human-owned server config file (read-only here). */
   configPath?: string;

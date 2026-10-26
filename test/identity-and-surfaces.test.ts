@@ -108,7 +108,6 @@ describe('identity module', () => {
     expect(again.error).toContain('Nothing changed: this host is already registered as "Ferro"');
   });
 
-
   it('request: allowlisted service, host-attached access, no credential in result', async () => {
     const dir = tempDir('ident-');
     let authSeen = '';
@@ -868,11 +867,8 @@ describe('identity: what the agent reads when a call fails', () => {
     expect(left.success).toBe(false);
     expect(seen.orrery).toBe(before);
     expectSays(left.error, '`saveAs` "files/out.json" isn\'t a path the mount "files" holds', 'falls outside its include');
-    // The remedy names what a mount with an include holds, and doesn't offer
-    // `_config`, whose files are the gate's config.
     expectSays(left.error, 'a mount it can write to ("files" for *.md or *.txt, "notes")');
     expect(left.error).not.toContain('_config');
-    // A file `_config`'s include covers isn't kept there either, before anything is sent.
     const config = await mod.handleToolCall(call('request', { service: 'orrery', path: '/api/x', method: 'POST', body: {}, saveAs: '_config/gate.json' }));
     expect(config.success).toBe(false);
     expect(seen.orrery).toBe(before);
@@ -1793,9 +1789,6 @@ describe('identity request: fromFile reads only what the mount allows', () => {
     expect(bodies).toEqual([]);
   });
 
-  // A file the mount's include leaves out, such as an autosave beside the
-  // config `_config` holds, is no copy anywhere an upload can read: the
-  // read's own reason is given, with no disk remedy and no store fallback.
   it("refuses a file its mount's include leaves out, in the read's words", async () => {
     const { mountDir, workspace, bodies, upload } = await mounted({ include: ['gate.json', 'gate.js'] });
     writeFileSync(join(mountDir, '#gate.json#'), 'an autosave');

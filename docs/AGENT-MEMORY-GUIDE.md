@@ -210,9 +210,10 @@ impressionistic with age and depth.
   `maxMessageTokens` (10000 by default here) is truncated in your context, and
   a tool result over its inline cap (24000 characters by default, yours to
   change as `tool_result_inline_max_chars`) is written in full to a
-  `tool-results/` file when a writable workspace mount is available. The
-  inline result contains a preview and a reference to that file. With no
-  writable mount, or if the spill write fails, the result reports that the
+  `tool-results/` file in the first writable workspace mount with no
+  `include` that isn't configured direct. The inline result contains a
+  preview and a reference to that file. With no such mount, or if the spill
+  write fails, the result reports that the
   content beyond the preview was not retained. Do not treat that preview as
   the complete result.
   When `workspace--read` is available, use it to read large files in bounded pages.

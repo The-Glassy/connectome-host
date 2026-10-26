@@ -270,8 +270,6 @@ describe('what a switch copies', () => {
     expect(items.present).toContain(elsewhere);
     expect(items.present).not.toContain(join(work, 'mcpl-servers.agent.json'));
 
-    // The machine's own takes it as the host does: the variable from the
-    // working directory, else the file there.
     const named = process.env.MCPL_AGENT_OVERLAY_FILE;
     try {
       process.env.MCPL_AGENT_OVERLAY_FILE = join('overlays', 'host.json');
