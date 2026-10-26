@@ -70,14 +70,14 @@ describe('a batch run\'s failed turn', () => {
     attempt('Connection error.');
     emit('inference:started');
     emit('inference:exhausted', { error: 'Stream aborted: timeout', errorType: 'timeout' });
-    expect(err).toEqual(['Error: Connection error.', '(turn ended: Stream aborted: timeout)', 'Turn ended after 2 attempts. Check the network.']);
+    expect(err).toEqual(['Error: Connection error.', '(turn ended: Stream aborted: timeout)', '2 attempts in all. Check the network.']);
   });
 
-  test('a first attempt that ends without a failure is one attempt', () => {
+  test('a first attempt that ends without a failure adds only what to check', () => {
     const { err, emit } = batch((type) => (type === 'timeout' ? 'Check the network.' : undefined));
     emit('inference:started');
     emit('inference:exhausted', { error: 'Stream aborted: timeout', errorType: 'timeout' });
-    expect(err).toEqual(['(turn ended: Stream aborted: timeout)', 'Turn ended after 1 attempt. Check the network.']);
+    expect(err).toEqual(['(turn ended: Stream aborted: timeout)', 'Check the network.']);
   });
 
   test('a failure whose start it never saw is neither printed nor counted', () => {
@@ -111,19 +111,26 @@ describe('the TUI\'s failure line', () => {
     expect(failureCountLine('Connection error.', 1)).toBe('Error: Connection error.');
     expect(failureCountLine('Connection error.', 3)).toBe('Error (×3): Connection error.');
     expect(failures.onTrace({ type: 'inference:exhausted', agentName: 'clerk', errorType: 'network' }))
-      .toEqual({ show: 'ended', attempts: 3, errorType: 'network' });
+      .toEqual({ show: 'ended', attempts: 3, alone: false, errorType: 'network' });
   });
 
   test('a turn stopped after a failure says nothing of attempts, and a lone end is one attempt', () => {
     const failures = createTurnFailures();
     failures.onTrace({ type: 'inference:failed', agentName: 'clerk', error: 'x' });
     expect(failures.onTrace({ type: 'inference:aborted', agentName: 'clerk' })).toBeNull();
-    expect(failures.onTrace({ type: 'inference:exhausted', agentName: 'clerk', error: 'Stream aborted' })).toEqual({ show: 'ended', attempts: 1 });
+    expect(failures.onTrace({ type: 'inference:exhausted', agentName: 'clerk', error: 'Stream aborted' })).toEqual({ show: 'ended', attempts: 1, alone: true });
   });
 
   test('the give-up line counts one attempt as one', () => {
-    expect(turnEndedLine(1, undefined)).toBe('Turn ended after 1 attempt.');
-    expect(turnEndedLine(2, 'Check ANTHROPIC_API_KEY.')).toBe('Turn ended after 2 attempts. Check ANTHROPIC_API_KEY.');
+    expect(turnEndedLine({ attempts: 1, alone: false }, undefined)).toBe('Turn ended after 1 attempt.');
+    expect(turnEndedLine({ attempts: 2, alone: false }, 'Check ANTHROPIC_API_KEY.')).toBe('Turn ended after 2 attempts. Check ANTHROPIC_API_KEY.');
+  });
+
+  test("after an end that said the turn ended, the line adds only what's new", () => {
+    expect(turnEndedLine({ attempts: 1, alone: true }, undefined)).toBeUndefined();
+    expect(turnEndedLine({ attempts: 1, alone: true }, 'Check the network.')).toBe('Check the network.');
+    expect(turnEndedLine({ attempts: 2, alone: true }, undefined)).toBe('2 attempts in all.');
+    expect(turnEndedLine({ attempts: 2, alone: true }, 'Check the network.')).toBe('2 attempts in all. Check the network.');
   });
 
   test('a shown line is updated in place, and a gone one is replaced by a new line', () => {

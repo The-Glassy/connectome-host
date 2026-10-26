@@ -1,7 +1,6 @@
 - The TUI's session history and the Web UI's conversation call a message
   "you" only when it came in as the host's own input: typed in the TUI or
-  the Web UI, a piped line, the API, or a fleet parent's message to its
-  child. The host's own messages read as the host's, by kind:
+  the Web UI, a piped line, or a fleet parent's message to its child. The host's own messages read as the host's, by kind:
   agent-framework's clock and notices, and the host's notes of a session's
   start time, a restart it asked for, a subagent's return or failure and a
   voice reply cut off, which now carry `hostNote` in their metadata. A

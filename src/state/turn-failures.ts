@@ -3,7 +3,7 @@ import { TURN_SETTLED_TRACES, traceError } from './turn-trace.js';
 export type FailureStep =
   | { show: 'line'; text: string }
   | { show: 'count'; text: string; count: number }
-  | { show: 'ended'; attempts: number; errorType?: string };
+  | { show: 'ended'; attempts: number; alone: boolean; errorType?: string };
 
 export interface TurnFailures {
   onTrace(event: { type: string; agentName?: unknown; error?: unknown; errorType?: unknown }): FailureStep | null;
@@ -37,6 +37,7 @@ export function createTurnFailures(): TurnFailures {
       return {
         show: 'ended',
         attempts: run ? run.attempts + (run.retrying ? 1 : 0) : 1,
+        alone: !run || run.retrying,
         ...(typeof event.errorType === 'string' ? { errorType: event.errorType } : {}),
       };
     },
@@ -47,8 +48,10 @@ export function failureCountLine(text: string, count: number): string {
   return count > 1 ? `Error (×${count}): ${text}` : `Error: ${text}`;
 }
 
-export function turnEndedLine(attempts: number, hint: string | undefined): string {
-  return `Turn ended after ${attempts} attempt${attempts === 1 ? '' : 's'}.${hint ? ` ${hint}` : ''}`;
+export function turnEndedLine(step: { attempts: number; alone: boolean }, hint: string | undefined): string | undefined {
+  if (!step.alone) return `Turn ended after ${step.attempts} attempt${step.attempts === 1 ? '' : 's'}.${hint ? ` ${hint}` : ''}`;
+  const said = [step.attempts > 1 ? `${step.attempts} attempts in all.` : undefined, hint].filter((part) => part !== undefined);
+  return said.length > 0 ? said.join(' ') : undefined;
 }
 
 export interface ShownLine {

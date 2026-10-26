@@ -2304,8 +2304,11 @@ export async function runTui(app: AppContext): Promise<void> {
     // turn the follower held running, and the bar's Escape hint follows that.
     else if (agent === rootAgentName && STREAM_END_TRACES.has(event.type as string)) updateStatus();
     if (agent === rootAgentName && failure) {
-      if (failure.show === 'ended') addEvent(turnEndedLine(failure.attempts, failedTurnHint(failure.errorType)), RED);
-      else showFailure(agent, '', failure, RED);
+      if (failure.show !== 'ended') showFailure(agent, '', failure, RED);
+      else {
+        const ended = turnEndedLine(failure, failedTurnHint(failure.errorType));
+        if (ended) addEvent(ended, RED);
+      }
     }
   }
 

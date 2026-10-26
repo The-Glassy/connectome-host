@@ -120,7 +120,8 @@ export function createPipedTurns(
         out.write('\n');
       }
     }
-    if (primary && step?.show === 'ended') out.error(turnEndedLine(step.attempts, hint(step.errorType)));
+    const ended = primary && step?.show === 'ended' ? turnEndedLine(step, hint(step.errorType)) : undefined;
+    if (ended) out.error(ended);
     if (!TURN_SETTLED_TRACES.has(event.type)) {
       streams.set(agent, 'failed');
       return;
