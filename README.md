@@ -606,6 +606,13 @@ Claude model and cannot be sent through an OpenAI adapter. Anthropic/Claude
 uses different native thinking controls and does not accept this OpenAI-shaped
 option.
 
+Retrieval fits its lessons block under the per-message cap of every window it
+gathers for: the recipe strategy's `maxMessageTokens` (10,000 unless the recipe
+sets it, none for `passthrough`), and with `modules.subagents` on, a subagent's
+or a fork's 10,000. For a strategy an extension registers, retrieval knows only
+the recipe's `agent.strategy.maxMessageTokens`, so set it there if that strategy
+cuts long messages, or its cut can fall mid-lesson.
+
 ### Shared instructions
 
 `modules.instructions` keeps a living instructions document (CLAUDE.md
