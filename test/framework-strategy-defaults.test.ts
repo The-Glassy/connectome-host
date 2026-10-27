@@ -186,6 +186,25 @@ describe('standard-recipe memory defaults', () => {
     expect(configView(omitted).productionBudgetTokens).toBeUndefined();
   });
 
+  test('literal thinking-wrapper compression recovery is explicit opt-in and passed through', () => {
+    const configured = buildFrameworkStrategy(
+      recipe({
+        name: 'Mira',
+        strategy: { type: 'autobiographical', recoverLiteralThinkingWrappedCompression: true },
+      }),
+      'claude-3-opus-20240229',
+      'America/Los_Angeles',
+    );
+    expect(configView(configured).recoverLiteralThinkingWrappedCompression).toBe(true);
+
+    const omitted = buildFrameworkStrategy(
+      recipe({ name: 'Mira', strategy: { type: 'autobiographical' } }),
+      'claude-3-opus-20240229',
+      'America/Los_Angeles',
+    );
+    expect(configView(omitted).recoverLiteralThinkingWrappedCompression).toBeUndefined();
+  });
+
   test('explicit recipe values override the defaults', () => {
     const strategy = buildFrameworkStrategy(
       recipe({
