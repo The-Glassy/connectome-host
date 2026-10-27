@@ -510,6 +510,7 @@ export const TRACE_SCOPES: Readonly<Record<string, FrameScopes>> = {
   'host:quiesce': HEALTH,
   'host:resume': HEALTH,
   'host:quiesced_boot': HEALTH,
+  'inference:waiting': HEALTH,
   // Alerts: failures and refusals, the gate's decisions, modules coming and
   // going, MCPL servers and conversations, and what operators did.
   'ops:alert': OPS,
