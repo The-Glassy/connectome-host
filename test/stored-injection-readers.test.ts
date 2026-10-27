@@ -107,7 +107,13 @@ describe('/undo steps back past stored injections', () => {
       switchBranch: async (name: string) => { current = name; },
     };
     const app = {
-      framework: { getAgent: () => undefined, getAllAgents: () => [{ getContextManager: () => cm }], getAllModules: () => [] },
+      framework: {
+        getAgent: () => undefined,
+        getAllAgents: () => [{ getContextManager: () => cm }],
+        getAllModules: () => [],
+        getStore: () => ({ currentBranch: () => cm.currentBranch() }),
+        switchBranch: (name: string) => cm.switchBranch(name),
+      },
       branchState: createBranchState(),
       userMessageCount: 0,
     } as never;
