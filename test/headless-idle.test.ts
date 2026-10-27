@@ -7,11 +7,12 @@ import { join } from 'node:path';
 import { connectWhenAccepting } from './ipc-connect.ts';
 
 const FIXTURE = join(import.meta.dir, 'mock-headless-self-restart-child.ts');
+const REAL_FRAMEWORK = join(import.meta.dir, 'real-framework-headless-child.ts');
 const CONFIRM_MS = 500;
 
-function start(mode: 'quiet-exit' | 'quiet-idle' | 'text-exit', hold: string) {
+function start(mode: 'quiet-exit' | 'quiet-idle' | 'text-exit', hold: string, fixture = FIXTURE) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'headless-idle-')));
-  const child = spawn(process.execPath, [FIXTURE, mode, hold], {
+  const child = spawn(process.execPath, [fixture, mode, hold], {
     cwd: dir, env: { ...process.env, DATA_DIR: dir }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   const watchdog = setTimeout(() => child.kill('SIGKILL'), 12_000);
@@ -58,16 +59,19 @@ async function client(dir: string, closed: Promise<unknown>) {
     }
     for (const wake of waiting.splice(0)) wake();
   });
-  const next = async (phase: string, nth = 1): Promise<Record<string, unknown>> => {
+  const nextOf = async (matches: (e: Record<string, unknown>) => boolean, what: string, nth = 1): Promise<Record<string, unknown>> => {
     for (;;) {
-      const found = lines.filter((e) => e.type === 'lifecycle' && e.phase === phase)[nth - 1];
+      const found = lines.filter(matches)[nth - 1];
       if (found) return found;
-      if (exited) throw new Error(`the fixture ended before lifecycle ${phase}`);
+      if (exited) throw new Error(`the fixture ended before ${what}`);
       await new Promise<void>((wake) => { waiting.push(wake); setTimeout(wake, 100); });
     }
   };
+  const next = (phase: string, nth = 1) =>
+    nextOf((e) => e.type === 'lifecycle' && e.phase === phase, `lifecycle ${phase}`, nth);
   return {
     next,
+    nextOf: (type: string) => nextOf((e) => e.type === type, type),
     seen: (type: string) => lines.filter((e) => e.type === type).length,
     send: (...lines: object[]) => socket.write(lines.map((line) => `${JSON.stringify(line)}\n`).join('')),
     close: () => socket.destroy(),
@@ -185,6 +189,27 @@ test.concurrent('ready says idle only while the host is still quiet: an event qu
   }
 }, 15_000);
 
+test.concurrent('a session switch under way holds the host from quiet: ready says not idle during it, and a new idle follows it', async () => {
+  const { dir, child, closed } = start('quiet-idle', 'none');
+  try {
+    const first = await client(dir, closed);
+    await first.next('ready');
+    writeFileSync(join(dir, 'go'), '');
+    await first.next('idle');
+    first.close();
+    writeFileSync(join(dir, 'switch-begun'), '');
+    while (!existsSync(join(dir, 'switching'))) await Bun.sleep(10);
+    const during = await client(dir, closed);
+    expect(await during.next('ready')).toMatchObject({ idle: false });
+    writeFileSync(join(dir, 'switch-ended'), '');
+    expect(await during.next('idle')).toMatchObject({ texts: 0 });
+    during.close();
+  } finally {
+    child.kill('SIGTERM');
+    await closed;
+  }
+}, 15_000);
+
 test.concurrent('ready says idle while only a background script left running goes on after the idle', async () => {
   const { dir, child, closed } = start('quiet-idle', 'script-until-released');
   try {
@@ -288,18 +313,19 @@ test.concurrent('a text whose processing outlasts the quiet\'s 500 ms is covered
   }
 }, 15_000);
 
-test.concurrent('a text the framework refuses to queue, as when it has stopped, isn\'t left in flight', async () => {
+test.concurrent('a text the framework refuses goes to the next framework a switch installs, and the idle covers it once that has processed it', async () => {
   const { dir, child, closed } = start('quiet-idle', 'none');
   try {
     const watching = await client(dir, closed);
     await watching.next('ready');
     writeFileSync(join(dir, 'go'), '');
     await watching.next('idle');
-    const refusedAt = Date.now();
     watching.send({ type: 'text', content: 'throws' });
+    while (!existsSync(join(dir, 'texts-taken'))) await Bun.sleep(10);
+    watching.send({ type: 'text', content: 'switch' });
     const second = await watching.next('idle', 2);
-    expect(second).toMatchObject({ texts: 1 });
-    expect(Number(second.ts) - refusedAt).toBeGreaterThanOrEqual(CONFIRM_MS);
+    expect(second).toMatchObject({ texts: 2 });
+    expect(Number(second.ts) - await processedAt(dir)).toBeGreaterThanOrEqual(CONFIRM_MS);
     watching.close();
   } finally {
     child.kill('SIGTERM');
@@ -327,6 +353,59 @@ test.concurrent('after the host\'s framework is replaced, as a session switch do
   }
 }, 15_000);
 
+test.concurrent('after a session switch, describe gives the new session\'s agents, not the replaced one\'s', async () => {
+  const { dir, child, closed } = start('quiet-idle', 'none');
+  try {
+    const watching = await client(dir, closed);
+    await watching.next('ready');
+    writeFileSync(join(dir, 'go'), '');
+    await watching.next('idle');
+    watching.send({ type: 'text', content: 'switch to a successor' });
+    await watching.next('idle', 2);
+    watching.send({ type: 'describe', corrId: 'after-switch' });
+    const snapshot = await watching.nextOf('snapshot') as { tree: { nodes: Array<{ name: string }>; callIdIndex: object } };
+    expect(snapshot.tree.nodes.map((node) => node.name)).toEqual(['successor']);
+    expect(snapshot.tree.callIdIndex).toEqual({});
+    watching.close();
+  } finally {
+    child.kill('SIGTERM');
+    await closed;
+  }
+}, 15_000);
+
+test.concurrent('after a session switch, the replaced framework\'s traces don\'t reach the socket, and the new one\'s do', async () => {
+  const { dir, child, closed } = start('quiet-idle', 'none');
+  try {
+    const watching = await client(dir, closed);
+    await watching.next('ready');
+    writeFileSync(join(dir, 'go'), '');
+    await watching.next('idle');
+    watching.send({ type: 'text', content: 'switch, then the old framework traces' });
+    await watching.nextOf('new-framework-trace');
+    expect(watching.seen('replaced-framework-trace')).toBe(0);
+    watching.close();
+  } finally {
+    child.kill('SIGTERM');
+    await closed;
+  }
+}, 15_000);
+
+test.concurrent('on the installed agent-framework, a text ends in an idle that covers it, once its modules have processed it', async () => {
+  const { dir, child, closed } = start('quiet-idle', 'none', REAL_FRAMEWORK);
+  try {
+    const watching = await client(dir, closed);
+    await watching.next('ready');
+    watching.send({ type: 'text', content: 'hello' });
+    const idle = await watching.next('idle');
+    expect(idle).toMatchObject({ texts: 1 });
+    expect(Number(idle.ts) - await processedAt(dir)).toBeGreaterThanOrEqual(CONFIRM_MS);
+    watching.close();
+  } finally {
+    child.kill('SIGTERM');
+    await closed;
+  }
+}, 15_000);
+
 test.concurrent('a text that comes right behind a framework\'s replacement, still processing, isn\'t dropped from flight', async () => {
   const { dir, child, closed } = start('quiet-idle', 'none');
   try {
@@ -345,17 +424,21 @@ test.concurrent('a text that comes right behind a framework\'s replacement, stil
   }
 }, 15_000);
 
-test.concurrent('a text the replaced framework was still processing leaves flight with it, so the host goes quiet on the new one', async () => {
+test.concurrent('texts the replaced framework hadn\'t finished go to the new framework, each once and in order, and the idle covers them once that has processed them', async () => {
   const { dir, child, closed } = start('quiet-idle', 'none');
   try {
     const watching = await client(dir, closed);
     await watching.next('ready');
     writeFileSync(join(dir, 'go'), '');
     await watching.next('idle');
-    watching.send({ type: 'text', content: 'stuck' });
-    while (!existsSync(join(dir, 'texts-taken'))) await Bun.sleep(10);
+    watching.send({ type: 'text', content: 'stuck first' }, { type: 'text', content: 'stuck second' });
+    const pushes = join(dir, 'pushes');
+    while (!existsSync(pushes) || readFileSync(pushes, 'utf8').split('\n').length < 3) await Bun.sleep(10);
     watching.send({ type: 'text', content: 'switch' });
-    expect(await watching.next('idle', 2)).toMatchObject({ texts: 2 });
+    const second = await watching.next('idle', 2);
+    expect(second).toMatchObject({ texts: 3 });
+    expect(Number(second.ts) - await processedAt(dir)).toBeGreaterThanOrEqual(CONFIRM_MS);
+    expect(readFileSync(pushes, 'utf8').split('\n').filter((line) => line.startsWith('1 '))).toEqual(['1 stuck first', '1 stuck second']);
     watching.close();
   } finally {
     child.kill('SIGTERM');

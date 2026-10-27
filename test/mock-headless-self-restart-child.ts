@@ -1,7 +1,7 @@
 import { runHeadless } from '../src/headless.ts';
 import type { AppContext } from '../src/index.ts';
 import { selfRestart } from '../src/self-restart.ts';
-import { existsSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const MODES = ['self-restart', 'sigterm-first', 'exit-when-idle', 'held', 'cancel-in-wait', 'arm-after-idle', 'late-arm-gap', 'unseen-turn',
@@ -22,6 +22,7 @@ const dataDir = process.env.DATA_DIR!;
 
 const agent = { name: 'fixture', state: { status: 'idle' as string } };
 let listeners: Array<(event: unknown) => void> = [];
+let generation = 0;
 const trace = (event: unknown) => { for (const listener of listeners) listener(event); };
 let heldFrom = 0;
 let heldUntil = 0;
@@ -77,15 +78,32 @@ const startTurn = () => {
 };
 const pushEvent = (event: { content?: string }) => {
   writeFileSync(join(dataDir, 'texts-taken'), '');
-  if (event.content === 'throws') throw new Error('the queue is closed');
-  if (event.content === 'stuck') return;
+  appendFileSync(join(dataDir, 'pushes'), `${generation} ${event.content}\n`);
+  if (event.content === 'throws' && generation === 0) throw new Error('Queue is closed');
+  if (event.content?.startsWith('stuck') && generation === 0) return;
   if (event.content === 'switch') {
     trace({ type: 'process:completed', processEvent: event });
     replaceFramework();
     quietAt(Date.now());
     return;
   }
-  if (textSlow || event.content === 'slow') {
+  if (event.content === 'switch to a successor') {
+    trace({ type: 'inference:tool_calls_yielded', agentName: 'fixture', calls: [{ id: 'call-before-the-switch', name: 'look' }] });
+    trace({ type: 'process:completed', processEvent: event });
+    replaceFramework([{ name: 'successor', state: { status: 'idle' } }]);
+    quietAt(Date.now());
+    return;
+  }
+  if (event.content === 'switch, then the old framework traces') {
+    trace({ type: 'process:completed', processEvent: event });
+    const replaced = listeners;
+    replaceFramework();
+    for (const listener of [...replaced]) listener({ type: 'replaced-framework-trace' });
+    trace({ type: 'new-framework-trace' });
+    quietAt(Date.now());
+    return;
+  }
+  if (textSlow || event.content === 'slow' || event.content === 'throws' || event.content?.startsWith('stuck')) {
     setTimeout(() => {
       trace({ type: 'process:completed', processEvent: event });
       quietAt(Date.now());
@@ -116,6 +134,14 @@ if (mode === 'quiet-idle') {
     clearInterval(going);
     startTurn();
   }, 20);
+  const switchFlag = setInterval(() => {
+    if (!existsSync(join(dataDir, 'switch-begun'))) return;
+    app.switching = true;
+    writeFileSync(join(dataDir, 'switching'), '');
+    if (!existsSync(join(dataDir, 'switch-ended'))) return;
+    clearInterval(switchFlag);
+    app.switching = false;
+  }, 20);
   const switching = setInterval(() => {
     if (!existsSync(join(dataDir, 'switch-busy'))) return;
     clearInterval(switching);
@@ -131,12 +157,15 @@ if (mode === 'quiet-idle') {
   setTimeout(startTurn, 200);
 }
 
-const framework = () => {
+const framework = (agents: Array<{ name: string; state: { status: string } }> = [agent]) => {
   const own: Array<(event: unknown) => void> = [];
   listeners = own;
   return {
-    getAllAgents: () => [agent],
-    onTrace: (cb: (event: unknown) => void) => { own.push(cb); return () => {}; },
+    getAllAgents: () => agents,
+    onTrace: (cb: (event: unknown) => void) => {
+      own.push(cb);
+      return () => { if (own.includes(cb)) own.splice(own.indexOf(cb), 1); };
+    },
     getHostModeStatus: () => ({
       drained: !holding('turn'),
       activeTurns: holding('turn') ? 1 : 0,
@@ -155,13 +184,14 @@ const framework = () => {
     },
   };
 };
-const app: { recipe: unknown; agentName: string; framework: ReturnType<typeof framework>; onFrameworkReplaced?: () => void } = {
+const app: { recipe: unknown; agentName: string; framework: ReturnType<typeof framework>; onFrameworkReplaced?: () => void; switching?: boolean } = {
   recipe: { name: 'Self-restart test', agent: { name: 'fixture' } },
   agentName: 'fixture',
   framework: framework(),
 };
-function replaceFramework(): void {
-  app.framework = framework();
+function replaceFramework(agents?: Array<{ name: string; state: { status: string } }>): void {
+  generation += 1;
+  app.framework = framework(agents);
   app.onFrameworkReplaced?.();
 }
 await runHeadless(app as unknown as AppContext, ['exit-when-idle', 'cancel-in-wait', 'quiet-exit', 'text-exit'].includes(mode) ? ['--exit-when-idle'] : []);

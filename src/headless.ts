@@ -155,6 +155,15 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
   let subscription = new Set<string>(['*']);
   let textsReceived = 0;
   const textsProcessing = new Map<unknown, unknown>();
+  const pushText = (message: Parameters<typeof app.framework.pushEvent>[0]): void => {
+    textsProcessing.set(message, app.framework);
+    try {
+      app.framework.pushEvent(message);
+    } catch (error) {
+      textsProcessing.set(message, null);
+      log(`text refused, kept in flight for the next framework a session switch installs, if one does: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
   let hadAtLeastOneInference = false;
   let idleEmitted = false;
   let idleSince = 0;
@@ -186,11 +195,14 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
   }
 
   const treeReducer = new AgentTreeReducer();
-  try {
-    treeReducer.seedFrameworkAgents(app.framework.getAllAgents().map(a => a.name));
-  } catch (err) {
-    log(`seed framework agents failed: ${String(err)}`);
-  }
+  const seedTree = (): void => {
+    try {
+      treeReducer.seedFrameworkAgents(app.framework.getAllAgents().map(a => a.name));
+    } catch (err) {
+      log(`seed framework agents failed: ${String(err)}`);
+    }
+  };
+  seedTree();
   const startedAt = Date.now();
 
   type TraceEvent = Parameters<Parameters<typeof app.framework.onTrace>[0]>[0];
@@ -205,8 +217,15 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
   const followFramework = (): void => {
     if (app.framework === traced) return;
     traced = app.framework;
+    treeReducer.reset();
+    seedTree();
     for (const follower of followers) follower.follow(traced);
-    for (const [text, framework] of textsProcessing) if (framework !== traced) textsProcessing.delete(text);
+    const carried = [...textsProcessing].filter(([, framework]) => framework !== traced).map(([text]) => text);
+    for (const text of carried) {
+      textsProcessing.delete(text);
+      pushText(text as Parameters<typeof app.framework.pushEvent>[0]);
+    }
+    if (carried.length > 0) log(`carried ${carried.length} text(s) the replaced framework hadn't finished to the new one`);
   };
   app.onFrameworkReplaced = followFramework;
 
@@ -255,20 +274,13 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
         idleEmitted = false;
         idleSince = 0;
         exitSince = 0;
-        const message: Parameters<typeof app.framework.pushEvent>[0] = {
+        pushText({
           type: 'external-message',
           source: 'headless',
           content: cmd.content,
           metadata: {},
           triggerInference: true,
-        };
-        textsProcessing.set(message, app.framework);
-        try {
-          app.framework.pushEvent(message);
-        } catch (error) {
-          textsProcessing.delete(message);
-          throw error;
-        }
+        });
         return;
       }
       case 'command': {
@@ -460,7 +472,7 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
   }
 
   const quietButScripts = (): boolean => {
-    if (textsProcessing.size > 0) return false;
+    if (app.switching || textsProcessing.size > 0) return false;
     const host = app.framework.getHostModeStatus();
     if (!host.drained || host.gatedRequests > 0) return false;
     if (app.framework.getQueueDepth() > 0) return false;

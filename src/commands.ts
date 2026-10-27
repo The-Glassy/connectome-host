@@ -40,6 +40,7 @@ import { fmtTokens } from './tui.js';
 import { formatToolClassRows, readToolClasses } from './tool-lifecycle-config.js';
 import { type FleetModule, formatChildRow } from './modules/fleet-module.js';
 import { EXACT_VERSION } from './update/install.js';
+import { SWITCH_UNDER_WAY } from './session-switch.js';
 import { hostUpdate } from './update/update.js';
 import { goBackLines, statusLines } from './web/update-text.js';
 
@@ -57,6 +58,7 @@ interface AppContext {
     snapshot(): CredentialState;
     runAction(id: CredentialActionId, params?: { token?: string }): Promise<CredentialState>;
   } | null;
+  switching?: boolean;
   switchSession(id: string): Promise<void>;
 }
 
@@ -482,7 +484,12 @@ function handleSessionList(app: AppContext): CommandResult {
   return { lines };
 }
 
+const switchUnderWay: CommandResult = {
+  lines: [{ text: `${SWITCH_UNDER_WAY[0]!.toUpperCase()}${SWITCH_UNDER_WAY.slice(1)}.`, style: 'system' }],
+};
+
 function handleSessionNew(app: AppContext, name?: string): CommandResult {
+  if (app.switching) return switchUnderWay;
   const session = app.sessionManager.createSession(name);
   resetBranchState(app.branchState);
 
@@ -493,6 +500,7 @@ function handleSessionNew(app: AppContext, name?: string): CommandResult {
 }
 
 function handleSessionSwitch(app: AppContext, nameOrId?: string): CommandResult {
+  if (app.switching) return switchUnderWay;
   if (!nameOrId) {
     return { lines: [{ text: 'Usage: /session switch <name or id>', style: 'system' }] };
   }

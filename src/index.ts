@@ -152,6 +152,7 @@ interface AppContext {
   credentials: CredentialMonitor | null;
   subscriptionUnmetered: boolean;
   stopping?: boolean;
+  switching?: boolean;
   onFrameworkReplaced?: () => void;
 
   switchSession(id: string): Promise<void>;
