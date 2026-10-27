@@ -933,7 +933,8 @@ export interface RecipeModules {
    * agent-framework keeps none of its own files there: a recipe whose other
    * mounts are each read-only, have an include, or are configured direct
    * keeps no over-cap tool result, saved payload or fetched reference in a
-   * file. No mount of the recipe's own is named `_config`.
+   * file. No mount of the recipe's own is named `_config`, and no two of
+   * them share a name, compared exactly.
    */
   workspace?: boolean | { mounts: RecipeWorkspaceMount[]; configMount?: boolean };
   /**
@@ -2763,7 +2764,7 @@ export function validateRecipe(raw: unknown): Recipe {
         const name = m.name as string;
         const first = firstIndexByName.get(name);
         if (first !== undefined) {
-          throw new Error(`workspace.mounts[${i}] is named ${JSON.stringify(name)}, as workspace.mounts[${first}] is: a workspace takes each mount name once, since its tools and the instructions find a mount by its name. Give one of them another name.`);
+          throw new Error(`${where} is named ${JSON.stringify(name)}, as workspace.mounts[${first}] is: a workspace takes each mount name once, since its tools and the instructions find a mount by its name. Give one of them another name.`);
         }
         firstIndexByName.set(name, i);
         if (m.backend === 'direct' && m.mode === undefined) {

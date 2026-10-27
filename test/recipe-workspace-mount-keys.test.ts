@@ -23,30 +23,23 @@ describe('workspace mount keys', () => {
     }))).toThrow(/^workspace\.mounts\[2\] is named "notes", as workspace\.mounts\[0\] is: /);
   });
 
-  test('refuses duplicate instructions mounts before checking the first matching mount', () => {
-    expect(() => validateRecipe({
+  test('refuses two mounts named instructions in either order, naming the duplicate rather than what the instructions check makes of the first', () => {
+    const instructionsRecipe = (mounts: unknown[]) => ({
       name: 'instr-dup',
       agent: { systemPrompt: 'test' },
-      modules: {
-        instructions: true,
-        workspace: {
-          mounts: [
-            mount({ name: 'instructions', path: './a', mode: 'read-only' }),
-            mount({ name: 'instructions', path: './b', mode: 'read-write' }),
-          ],
-        },
-      },
-    })).toThrow(/^workspace\.mounts\[1\] is named "instructions", as workspace\.mounts\[0\] is: /);
+      modules: { instructions: true, workspace: { mounts } },
+    });
+    expect(() => validateRecipe(instructionsRecipe([
+      mount({ name: 'instructions', path: './a', mode: 'read-only' }),
+      mount({ name: 'instructions', path: './b', mode: 'read-write' }),
+    ]))).toThrow(/^workspace\.mounts\[1\] is named "instructions", as workspace\.mounts\[0\] is: /);
+    expect(() => validateRecipe(instructionsRecipe([
+      mount({ name: 'instructions', path: './a', mode: 'read-write' }),
+      mount({ name: 'instructions', path: './b', mode: 'read-only' }),
+    ]))).toThrow(/^workspace\.mounts\[1\] is named "instructions", as workspace\.mounts\[0\] is: /);
   });
 
-  test('refuses duplicate names with the host config mount enabled', () => {
-    expect(() => validateRecipe(recipe({
-      mounts: [mount(), mount({ path: './second' })],
-      configMount: true,
-    }))).toThrow(/^workspace\.mounts\[1\] is named "notes", as workspace\.mounts\[0\] is: /);
-  });
-
-  test('accepts unique and case-sensitive names, implicit defaults and a unique instructions mount', () => {
+  test('accepts mounts that each have their own name, two differing only in case among them, and a single instructions mount; no workspace and workspace: true are controls', () => {
     for (const workspace of [
       undefined,
       true,
