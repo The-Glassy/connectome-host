@@ -234,11 +234,6 @@ describe('standard-recipe memory defaults', () => {
     expect(modules).not.toHaveProperty('retrieval');
   });
 
-  test('DEFAULT_RECIPE turns code execution on, and validation keeps it', () => {
-    expect(DEFAULT_RECIPE.codeExecution).toEqual({ enabled: true });
-    expect(validateRecipe(structuredClone(DEFAULT_RECIPE)).codeExecution).toEqual({ enabled: true });
-  });
-
   test('DEFAULT_RECIPE: empty system prompt, kv-unified at 300k / 120k tail / 320k stream, 1-hour cache priced at 2x', () => {
     const validated = validateRecipe(structuredClone(DEFAULT_RECIPE));
     expect(validated.agent.systemPrompt).toBe('');

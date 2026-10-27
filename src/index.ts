@@ -103,7 +103,7 @@ import {
   resolveProvider,
 } from './recipe.js';
 import { createBranchState, resetBranchState, handleExport, type BranchState } from './commands.js';
-import { buildFrameworkAgentConfig, membraneCachingOverride, recipeModel, autoContinueSupportWarning } from './framework-agent-config.js';
+import { buildFrameworkAgentConfig, membraneCachingOverride, recipeModel, autoContinueSupportWarning, codeExecutionOption } from './framework-agent-config.js';
 import { buildFrameworkStrategy, buildConversationsConfig } from './framework-strategy.js';
 import { AUDIT_STORES_FLAG, auditStoresFromEntry, checkActiveStore, placesOnTrial } from './update/audit-stores.js';
 import { buildWorkspaceMounts } from './workspace-mounts.js';
@@ -499,7 +499,7 @@ agents: [agentConfig],
     // A 429 while a subscription window is spent is a quota, not a throttle:
     // park until it resets instead of retrying into it.
     ...(quotaMeter ? { providerHold: quotaProviderHold(quotaMeter, () => model) } : {}),
-    ...(recipe.codeExecution ? { codeExecution: recipe.codeExecution } : {}),
+    ...codeExecutionOption(recipe),
     ...(conversations ? { conversations } : {}),
     // Passed through as written: agent-framework fills in the subconscious's
     // defaults.

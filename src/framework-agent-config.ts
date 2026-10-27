@@ -42,6 +42,16 @@ export type FrameworkAgentConfig = AgentConfig & {
  * in the Dec 2024 preview and was dropped at GA, and Bedrock refuses it with
  * an account-level "your request did not allow prompt caching".
  */
+/**
+ * agent-framework's `codeExecution` option as `AgentFramework.create` takes it:
+ * the recipe's block when it has one (the built-in default recipe does), and
+ * nothing otherwise, so an agent-framework without the option reads nothing it
+ * doesn't know.
+ */
+export function codeExecutionOption(recipe: Recipe): { codeExecution?: NonNullable<Recipe['codeExecution']> } {
+  return recipe.codeExecution ? { codeExecution: recipe.codeExecution } : {};
+}
+
 export function bedrockModelSupportsPromptCaching(model: string): boolean {
   const id = model.toLowerCase();
   if (!id.includes('claude')) return false;
