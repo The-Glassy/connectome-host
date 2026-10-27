@@ -33,6 +33,12 @@ export interface RecipeStrategy {
    *  Required for pre-4.x models (Claude 3 Opus caps at 4096) — without it the
    *  summarizer's 16k floor is rejected and the agent never folds. */
   compressionMaxTokens?: number;
+  /**
+   * Opt-in compatibility for a non-reasoning model that authors the complete
+   * compression result inside one closed literal `<thinking>…</thinking>`
+   * text wrapper. Recovers only that exact whole-response shape as prose.
+   */
+  recoverLiteralThinkingWrappedCompression?: boolean;
   maxMessageTokens?: number;
   /** Maximum live image count, newest-first (default 6). Zero means up to
    * context-manager's image ceiling, 500, and a larger value is held to it. */
@@ -2489,6 +2495,7 @@ export function validateRecipe(raw: unknown): Recipe {
       'compressionMergeSourceOnlyFallback',
       'compressionSplitFallback',
       'compressionSplitPlaceholder',
+      'recoverLiteralThinkingWrappedCompression',
     ] as const) {
       if (strategy[key] !== undefined && typeof strategy[key] !== 'boolean') {
         throw new Error(`Recipe agent.strategy.${key} must be a boolean.`);
