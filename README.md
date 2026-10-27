@@ -145,12 +145,13 @@ folding** (a cost-aware solver that weighs budget fit, prompt-cache cost and
 continuity), a context budget with a verbatim tail of 40% of it, compression by
 the agent's own model, and summaries voiced as the agent itself
 (`summaryParticipant` defaults to `agent.name`). On a model the host knows a
-window for (Claude from 4.5 on, on Anthropic's API), the budget is the smaller
+window for (Claude from 4.5 on, on Anthropic's API), with an `agent.maxTokens`
+that is unset or a positive number, the budget is the smaller
 of 300k and the window less the system prompt and 32k for the tools: 300k (a
 120k tail) on a 1M-window model with a system prompt under 668k tokens, and on
 a 200k-window model 168k less the system prompt, so a compile that keeps to
-the budget less `maxTokens` leaves `maxTokens` of the window for the reply. On a model the host knows no window
-for, it's 300k, so set `agent.contextBudgetTokens` yourself there. Where the
+the budget less `maxTokens` leaves `maxTokens` of the window for the reply. Otherwise it's 300k, so set
+`agent.contextBudgetTokens` yourself. Where the
 head and a tail of 40% of the budget wouldn't fit in the budget less
 `maxTokens` (with context-manager's over-budget grace), the tail is 40% of the
 budget less `maxTokens`. On Anthropic's API

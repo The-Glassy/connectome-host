@@ -3,9 +3,10 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { defaultTokenEstimator } from '@animalabs/context-manager';
+import { ContextManager, defaultTokenEstimator } from '@animalabs/context-manager';
 import { DEFAULT_RECIPE, type Recipe, loadRecipe, loadRecipeDetailed, loadSavedRecipe, saveRecipe, savedRecipePath, validateRecipe } from '../src/recipe.js';
 import { effectiveContextBudgetTokens, recipeFit } from '../src/recipe-fit.js';
+import { LIMITS_TABLE } from '../src/model-limits.js';
 import { buildFrameworkAgentConfig } from '../src/framework-agent-config.js';
 import { buildFrameworkStrategy } from '../src/framework-strategy.js';
 
@@ -475,8 +476,8 @@ describe('a recipe load refuses what Anthropic refuses', () => {
     expect(text).not.toContain('or less');
   });
 
-  test('the default recipe fits the model with the smallest window and output', () => {
-    expect(recipeFit(DEFAULT_RECIPE, HAIKU)).toEqual({ checked: true, fits: true });
+  test('the default recipe, which no loader checks, fits every model the table holds', () => {
+    for (const { id } of LIMITS_TABLE) expect([id, recipeFit(DEFAULT_RECIPE, id)]).toEqual([id, { checked: true, fits: true }]);
   });
 
   test('a load checks the model the host will run, MODEL first, and says when MODEL chose it', async () => {
@@ -486,7 +487,23 @@ describe('a recipe load refuses what Anthropic refuses', () => {
     const error = await loadRecipe(recipeFile({ model: OPUS, contextBudgetTokens: 400_000 })).catch((e: Error) => e);
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain('200,000');
-    expect((error as Error).message).toContain('MODEL');
+    expect((error as Error).message).toContain(`${HAIKU} is MODEL in the environment, which the host runs in place of agent.model.`);
+  });
+
+  test('a refusal names MODEL only where MODEL changes the model the recipe runs', async () => {
+    process.env.MODEL = HAIKU;
+    const same = await loadRecipe(recipeFile({ model: HAIKU, contextBudgetTokens: 400_000 })).catch((e: Error) => e);
+    expect((same as Error).message).toContain('200,000');
+    expect((same as Error).message).not.toContain('is MODEL in the environment');
+    process.env.MODEL = OPUS;
+    const theDefault = await loadRecipe(recipeFile({ maxTokens: 128_001 })).catch((e: Error) => e);
+    expect((theDefault as Error).message).toContain('128,000');
+    expect((theDefault as Error).message).not.toContain('is MODEL in the environment');
+    process.env.MODEL = HAIKU;
+    for (const named of [{}, { model: '' }]) {
+      const another = await loadRecipe(recipeFile({ ...named, contextBudgetTokens: 400_000 })).catch((e: Error) => e);
+      expect((another as Error).message).toContain(`${HAIKU} is MODEL in the environment, which the host runs in place of its default, ${OPUS}.`);
+    }
   });
 
   test('a URL system prompt counts as the text it fetches', async () => {
@@ -509,6 +526,64 @@ describe('a recipe load refuses what Anthropic refuses', () => {
     await expect(loadSavedRecipe(dir)).rejects.toThrow('64,000');
     expect((await loadSavedRecipe(dir, { fetchSystemPrompt: false }))?.agent.maxTokens).toBe(64_001);
   });
+});
+
+describe('context-manager\'s own strategy at the edges the fit computes', () => {
+  // The fit copies context-manager's head-and-tail rule; these drive the strategy the host builds, at the version
+  // installed, so a change there to the reservation over plain messages, or to where a window of them ends, fails
+  // here. A 4,000-token head and a 6,000-token own tail, each filled exactly, put context-manager's edge where the
+  // fit's is.
+  const cases: Array<[string, Record<string, unknown>]> = [
+    ['the default grace', {}],
+    ['a null grace', { overBudgetGraceRatio: null }],
+    ['a grace of 0.35', { overBudgetGraceRatio: 0.35 }],
+    ['a negative grace', { overBudgetGraceRatio: -1 }],
+  ];
+  const agentWith = (strategy: Record<string, unknown>, budget: number) => ({
+    systemPrompt: '', model: HAIKU, maxTokens: 16_384, contextBudgetTokens: budget,
+    strategy: { type: 'autobiographical', headWindowTokens: 4_000, recentWindowTokens: 6_000, ...strategy },
+  });
+  function edgeOf(strategy: Record<string, unknown>): number {
+    const fits = (budget: number) => {
+      const fit = recipeFit(validateRecipe({ name: 'fit', agent: agentWith(strategy, budget) }), HAIKU);
+      return fit.checked && fit.fits;
+    };
+    let lo = 16_385, hi = 100_000;
+    while (lo < hi) { const mid = lo + Math.floor((hi - lo) / 2); if (fits(mid)) hi = mid; else lo = mid + 1; }
+    return lo;
+  }
+  async function compiled(strategy: Record<string, unknown>, budget: number, messages = 10): Promise<true | string> {
+    const recipe = validateRecipe({ name: 'fit', agent: agentWith(strategy, budget) });
+    const root = mkdtempSync(join(tmpdir(), 'fit-edge-'));
+    try {
+      const cm = await ContextManager.open({ path: join(root, 'store'), strategy: buildFrameworkStrategy(recipe, HAIKU, 'UTC') as never });
+      try {
+        const thousand = promptOfAbout(1_000);
+        for (let i = 0; i < messages; i++) cm.addMessage(i % 2 ? 'res' : 'Antra', [{ type: 'text', text: thousand }]);
+        await cm.compile({ maxTokens: budget, reserveForResponse: 16_384 });
+        return true;
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      } finally {
+        cm.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+  for (const [name, strategy] of cases) {
+    test(`with ${name}, the fit's least budget compiles a full head and tail, and one less is refused at the reservation`, async () => {
+      const edge = edgeOf(strategy);
+      expect(await compiled(strategy, edge)).toBe(true);
+      expect(await compiled(strategy, edge - 1)).toContain('Head/tail reservation exceeded budget');
+    });
+
+    test(`with ${name}, history past the windows leaves the head and tail at their sizes when one less is refused`, async () => {
+      const refusal = await compiled(strategy, edgeOf(strategy) - 1, 12);
+      expect(refusal).toContain('Head/tail reservation exceeded budget');
+      expect(refusal).toContain('head=4000, tail=6000');
+    });
+  }
 });
 
 describe('a recipe that sets no budget', () => {

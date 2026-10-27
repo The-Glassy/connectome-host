@@ -16,8 +16,12 @@ const TWO_HUNDRED_K: ModelLimits = { maxContextTokens: 200_000, maxOutputTokens:
 // the 1M-window models and their 128k output, and puts every other model at
 // 200k; https://platform.claude.com/docs/en/models/sonnet-4-5/overview gives
 // Sonnet 4.5's 64k output. The API refuses a prompt over the window, and a
-// max_tokens over the maximum output.
-const LIMITS_TABLE: readonly LimitsRow[] = [
+// max_tokens over the maximum output. Anthropic retired Sonnet 4.5's 1M beta,
+// `context-1m-2025-08-07`, on 2026-04-30: the header has no effect, and a
+// request past 200k is refused
+// (https://platform.claude.com/docs/en/release-notes/overview), so its row is
+// 200k whatever betas a recipe sends.
+export const LIMITS_TABLE: readonly LimitsRow[] = [
   { id: 'claude-fable-5-1', ...ONE_M },
   { id: 'claude-fable-5', ...ONE_M },
   { id: 'claude-mythos-5-1', ...ONE_M },

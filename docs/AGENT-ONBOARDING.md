@@ -374,8 +374,8 @@ churn in the field.
 autobiographical + `adaptiveResolution: true` + `foldingStrategy: "kv-unified"` with the
 host's standard `kvUnified` block (§5b) + same-model compression (`compressionModel` falls
 back to `agent.model`) + `summaryParticipant` = `agent.name`. Omitted sizes: a
-`contextBudgetTokens` of 300k, or on a model the host knows a window for the smaller of 300k
-and the window less the system prompt and 32k for the tools (§11.1); a `recentWindowTokens`
+`contextBudgetTokens` of 300k, or, on Anthropic's API for a model the host knows a window for, with a `maxTokens`
+that is unset or a positive number, the smaller of 300k and the window less the system prompt and 32k for the tools (§11.1); a `recentWindowTokens`
 of 40% of the budget (120k at 300k), or 40% of the budget less `maxTokens` where the head and
 40% of the budget wouldn't fit beside `maxTokens` with context-manager's over-budget grace; and a `maxStreamTokens` of the
 budget plus 20k when the budget is also omitted, else 150k. That tail is worked out once, from the
@@ -696,11 +696,12 @@ prompt + tools  ≤  model window`, for a compile that keeps to the budget less 
 verbatim tail can pass that by up to the grace). A long turn's tool results add to the prompt
 between compiles, so at a full compile a budget over the working rule leaves a turn less room
 before the API refuses its prompt. `maxStreamTokens` counts uncached input only, so with prompt caching on it doesn't
-bound a turn. On Anthropic's API the host checks the hard limit for you: a recipe that sets no
-budget gets one that keeps the working rule, leaving 32k for the tools, and a load that resolves
+bound a turn. On Anthropic's API the host checks part of this for you, on a model it knows a
+window for and a recipe whose numbers it can read: a recipe that sets no budget gets one that keeps the working
+rule, leaving 32k for the tools, and a load that resolves
 the system prompt refuses a budget whose prompt, without the tools, would pass the window, a
 budget that leaves too little room for the head and the verbatim tail once `maxTokens` is kept
-for the reply, or a `maxTokens` over the model's maximum output, naming the numbers and each change that, made alone, would let it load. On any other provider, or for a model it knows no window for, it prints one line at
+for the reply, or a `maxTokens` over the model's maximum output, naming the numbers and the changes it found that would let it load. On any other provider, or for a model it knows no window for, it prints one line at
 start saying the fit wasn't checked, and the rules are yours to keep. As a conversation **grows**, the equilibrium
 context creeps up — watch the makeup view and trim budget / `recentWindowTokens` before it
 crosses the line. (This was the opus4 outage; diagnosing it is *why* the makeup view exists.)

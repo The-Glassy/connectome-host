@@ -386,9 +386,8 @@ export interface RecipeAgent {
   clock?: ClockConfig | false;
   /**
    * Extra Anthropic beta flags sent as the `anthropic-beta` header on every
-   * request (e.g. `["context-1m-2025-08-07"]` for the 1M context window on
-   * models where it is opt-in, like claude-sonnet-4-5). Merged with any
-   * transport-required betas (OAuth). Anthropic provider only.
+   * request. Merged with any transport-required betas (OAuth). Anthropic
+   * provider only.
    */
   anthropicBetas?: string[];
   strategy?: RecipeStrategy;
@@ -1713,10 +1712,12 @@ async function resolveSystemPrompt(recipe: Recipe): Promise<Recipe> {
 
 export function runningFit(recipe: Recipe, envModel: string | undefined): RecipeFit {
   const fit = recipeFit(recipe, recipeModel(recipe, envModel));
-  if (!envModel || !fit.checked || fit.fits) return fit;
+  const own = recipeModel(recipe, undefined);
+  if (!envModel || envModel === own || !fit.checked || fit.fits) return fit;
+  const replaced = recipe.agent.model ? 'agent.model' : `its default, ${own}`;
   return {
     ...fit,
-    refusal: `${fit.refusal} ${envModel} is MODEL in the environment, which the host runs in place of agent.model.`,
+    refusal: `${fit.refusal} ${envModel} is MODEL in the environment, which the host runs in place of ${replaced}.`,
   };
 }
 
