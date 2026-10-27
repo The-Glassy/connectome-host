@@ -195,7 +195,8 @@ describe('headless daemon: its data directory', () => {
       const exited = child;
       const code = await new Promise<number | null>((resolveExit) => exited.once('close', (c) => resolveExit(c)));
       expect(code).toBe(1);
-      expect(stderr).toContain(`The host can't make its data directory ${dataDir}, so it stops:`);
+      expect(stderr).toContain(`The host can't make its data directory ${dataDir}, so it stops: `);
+      expect(stderr).toMatch(/, so it stops: E[A-Z]+: /);
       expect(stderr).toContain('Set DATA_DIR to a path where this user has or can make a directory');
       expect(stderr).not.toContain('Fatal error');
     } finally {

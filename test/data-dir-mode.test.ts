@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { SessionManager } from '../src/session-manager.js';
@@ -54,13 +54,47 @@ describe('a data directory a script makes before any host runs', () => {
     expect(modeOf(data)).toBe(0o700);
   });
 
-  test("the evacuator's recipe file is created readable by its owner alone, and one already there keeps its mode", () => {
-    const out = join(freshDataDir(), 'evacuated-recipe.json');
-    underUmask022(() => writeRecipeOut(out, { agent: { name: 'Claude' } }));
+  test("the evacuator's recipe file and saved state are readable by their owner alone after every write", () => {
+    const data = freshDataDir();
+    const out = join(data, 'evacuated-recipe.json');
+    const state = join(data, 'evacuator-state.json');
+    underUmask022(() => {
+      writeRecipeOut(out, { agent: { name: 'Claude' } });
+      saveState(data, { model: 'claude-opus-4-1' });
+    });
     expect(modeOf(out)).toBe(0o600);
+    expect(modeOf(state)).toBe(0o600);
     chmodSync(out, 0o644);
-    underUmask022(() => writeRecipeOut(out, { agent: { name: 'Claude' } }));
-    expect(modeOf(out)).toBe(0o644);
+    chmodSync(state, 0o644);
+    writeFileSync(`${state}.tmp`, 'left by a crash\n', { mode: 0o644 });
+    underUmask022(() => {
+      writeRecipeOut(out, { agent: { name: 'Claude' } });
+      saveState(data, { model: 'claude-opus-4-1' });
+    });
+    expect(modeOf(out)).toBe(0o600);
+    expect(modeOf(state)).toBe(0o600);
+  });
+
+  test("a legacy store's move into sessions makes the sessions directory for its owner alone", () => {
+    const data = freshDataDir();
+    mkdirSync(join(data, 'store'), { recursive: true });
+    underUmask022(() => new SessionManager(data).migrateIfNeeded());
+    expect(modeOf(join(data, 'sessions'))).toBe(0o700);
+  });
+
+  test('a script leaves a data directory that is already there its mode', () => {
+    for (const make of [
+      (data: string) => new SessionManager(data).createSession('imported'),
+      (data: string) => new SessionManager(data).save({ version: 1, activeSessionId: '', sessions: {} }),
+      (data: string) => saveState(data, { model: 'claude-opus-4-1' }),
+      (data: string) => writeRecipeOut(join(data, 'evacuated-recipe.json'), { agent: { name: 'Claude' } }),
+    ]) {
+      const data = freshDataDir();
+      mkdirSync(data, { mode: 0o755 });
+      chmodSync(data, 0o755);
+      underUmask022(() => make(data));
+      expect(modeOf(data)).toBe(0o755);
+    }
   });
 
   test("the Codex importer makes its instance directory and the rollout's copy's directory for their owner alone", () => {

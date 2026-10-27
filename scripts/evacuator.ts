@@ -33,7 +33,7 @@
  *   --reset                 Clear checkpoint state before running
  */
 
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, renameSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, renameSync, statSync } from 'node:fs';
 import { join, resolve, dirname, sep as pathSep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -219,6 +219,7 @@ function loadState(dataDir: string): State {
 export function writeRecipeOut(out: string, recipe: Record<string, unknown>): void {
   mkdirSync(dirname(out), { recursive: true, mode: PRIVATE_DIR_MODE });
   writeFileSync(out, JSON.stringify(recipe, null, 2) + '\n', { mode: 0o600 });
+  chmodSync(out, 0o600);
 }
 
 /** rename(2) replaces atomically only within one filesystem, so the temp file
@@ -227,7 +228,8 @@ export function saveState(dataDir: string, state: State): void {
   mkdirSync(dataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
   const final = statePath(dataDir);
   const tmp = `${final}.tmp`;
-  writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n');
+  writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
+  chmodSync(tmp, 0o600);
   renameSync(tmp, final);
 }
 
@@ -270,11 +272,15 @@ function editInline(content: string, suffix = '.md', header?: string): string {
   const editor = process.env.EDITOR || 'vi';
   const tmpPath = join(tmpdir(), `evacuator-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${suffix}`);
   const initial = header ? `${header}\n${content}` : content;
-  writeFileSync(tmpPath, initial);
+  writeFileSync(tmpPath, initial, { mode: 0o600 });
   try {
     const result = spawnSync(editor, [tmpPath], { stdio: 'inherit' });
     if (result.status !== 0) {
       console.error(`Editor exited with status ${result.status}`);
+      try {
+        unlinkSync(tmpPath);
+      } catch {
+      }
       process.exit(1);
     }
     let edited = readFileSync(tmpPath, 'utf-8');

@@ -174,7 +174,7 @@ export class SessionManager {
     const id = this.generateId();
     const now = new Date().toISOString();
 
-    mkdirSync(this.sessionsDir, { recursive: true });
+    mkdirSync(this.sessionsDir, { recursive: true, mode: PRIVATE_DIR_MODE });
     const newPath = join(this.sessionsDir, id);
     renameSync(legacyStorePath, newPath);
 
