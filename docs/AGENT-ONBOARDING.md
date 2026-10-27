@@ -298,15 +298,25 @@ ln -sfn ../../../connectome-local/context-manager/node_modules/@animalabs/chroni
   "modules": { "webui": { "port": 7343, "host": "127.0.0.1",
                           "basicAuth": { "username": "${WEBUI_USER}", "password": "${WEBUI_PASS}" } },
                "identity": true, "history": true, "mcplAdmin": true,
-               "subagents": false, "lessons": false, "retrieval": false
+               "subagents": false, "lessons": false, "retrieval": false,
+               "heartbeat": true
                /* + wake policies, workspace mounts (files/, notes/) */ },
   "mcpServers": {
     "shell":   { /* terminal-sessions stdio server; "env": { "SESSION_SERVER_TOKEN": "${SESSION_SERVER_TOKEN}", "SESSION_SERVER_PORT": "${SESSION_SERVER_PORT}" } */ },
-    "discord": { /* discord-mcpl; "env": { "DISCORD_TOKEN": "${DISCORD_TOKEN}", "DISCORD_GUILD_ID": "${DISCORD_GUILD_ID}", ... } */ },
-    "heartbeat": { /* heartbeat-mcpl; "env": { "HEARTBEAT_CONFIG_FILE": "${HEARTBEAT_CONFIG_FILE}" } */ }
+    "discord": { /* discord-mcpl; "env": { "DISCORD_TOKEN": "${DISCORD_TOKEN}", "DISCORD_GUILD_ID": "${DISCORD_GUILD_ID}", ... } */ }
   }
 }
 ```
+
+The heartbeat is agent-framework's (`modules.heartbeat`), from the first
+agent-framework release after 0.27.0; on 0.27.0 or earlier `modules.heartbeat`
+is ignored, so keep heartbeat-mcpl under `mcpServers.heartbeat` there. A recipe
+can't name both. To move a resident off the server, replace its `mcpServers.heartbeat`
+with `"heartbeat": { "importFrom": { "configPath": "<its HEARTBEAT_CONFIG_FILE>",
+"remindersPath": "<its HEARTBEAT_REMINDERS_FILE>" } }` under `modules`: the first
+start brings its schedule and reminders along and leaves the old files as they
+are. Its wake rules for `source: "heartbeat"` push events keep applying: the
+framework's ticks and reminders reach the gate as that server's pushes did.
 
 These are the values the long-running production residents converge on for a
 ≥500k-window model (300k budget / 100k recent tail / 32k reply). For a **200k-window**

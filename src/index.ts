@@ -39,6 +39,7 @@ import {
 import { LoggingAnthropicAdapter, offPathRefusalAlert } from './logging-adapter.js';
 import { recipeFormatter } from './recipe-formatter.js';
 import { gateOptionsFor } from './gate-options.js';
+import { heartbeatOptionsFor, withoutHeartbeatMcpl } from './heartbeat-options.js';
 import { CredentialMonitor } from './credential-state.js';
 import { AnthropicOAuthCredentials } from './anthropic-credentials.js';
 import { LoggingProviderAdapter } from './logging-provider-wrapper.js';
@@ -479,13 +480,21 @@ async function createFramework(
   for (const notice of deprecatedConversationsNotices(recipe.conversations)) console.warn(`[deprecated] ${notice}`);
   const conversations = buildConversationsConfig(recipe, agentName, model, timeZone, extensionRegistry);
 
+  // The framework's heartbeat (heartbeat-options.ts), with heartbeat-mcpl
+  // left out beside it.
+  const heartbeatOptions = heartbeatOptionsFor(modules.heartbeat, config.dataDir);
+  const mcplServers = heartbeatOptions ? withoutHeartbeatMcpl(finalServers, (line) => console.warn(line)) : finalServers;
+
   const framework = await AgentFramework.create({
     storePath,
     membrane,
 agents: [agentConfig],
     modules: moduleInstances,
-    mcplServers: finalServers,
+    mcplServers,
     gate: gateOptions,
+    // Passed by spread, so an agent-framework without it reads nothing it
+    // doesn't know (and the line after create says so).
+    ...(heartbeatOptions !== undefined ? { heartbeat: heartbeatOptions } : {}),
     timeZone,
     // A 429 while a subscription window is spent is a quota, not a throttle:
     // park until it resets instead of retrying into it.
@@ -497,6 +506,14 @@ agents: [agentConfig],
     ...(recipe.subconscious ? { subconscious: recipe.subconscious } : {}),
     ...(toolClassConfig(recipe) as object),
   });
+
+  // An agent-framework without the heartbeat ignores modules.heartbeat: the
+  // agent then has no heartbeat or reminders at all, which is said here.
+  if (heartbeatOptions && !framework.getAllTools().some((tool) => tool.name.startsWith('heartbeat--'))) {
+    console.warn('[heartbeat] modules.heartbeat is on, but this agent-framework has no heartbeat (it came after 0.27.0), so the '
+      + 'agent has no heartbeat or reminders. Update agent-framework, or turn modules.heartbeat off and run heartbeat-mcpl '
+      + 'under mcpServers.heartbeat.');
+  }
 
   if (historyModule) {
     const cm = framework.getAgent(agentName)?.getContextManager();
