@@ -117,8 +117,10 @@ function notesUrl(version: string): string {
 }
 
 export const NOT_AN_INSTALL = 'This host wasn\'t started through an install\'s entry point, so it can\'t update itself. ' +
-  'docs/DEPLOYMENTS.md, "Updating an install", says how to update it by hand, and how one setup makes an install ' +
-  'update itself from then on.';
+  'Installed from npm, it can: run the package\'s src/update/setup.ts with bun once, from the directory you start ' +
+  'the host in and with the DATA_DIR you start it with (`bun node_modules/@animalabs/connectome-host/src/update/setup.ts` ' +
+  'when it\'s installed there); setup then says how to start the host. A clone updates by hand: ' +
+  'docs/DEPLOYMENTS.md, "Updating an install", "By hand".';
 
 export const GO_BACK_UNREAD = 'whether a Go back is offered';
 

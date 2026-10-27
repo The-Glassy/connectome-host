@@ -320,9 +320,9 @@ with that pattern.
 - **`/ws` upgrade gets 403 behind a proxy**: the Origin check rejected it.
   Forward the original `Host` header, or list the public origin in
   `allowedOrigins`.
-- **WebUI bundle not found at .../dist/web**: in a checkout, run
-  `bun install` at the repository root, whose `postinstall` script builds
-  the SPA, or `bun run build:web`. The npm package carries the SPA built,
+- **WebUI bundle not found at .../dist/web**: in a clone, run
+  `bun run build:web` at the repository root, as the host's warning
+  says. The npm package carries the SPA built,
   so an installed package without it needs reinstalling.
 - **Disconnect banner stuck**: the host process may have crashed. Check
   `journalctl -u connectome-host -n 100` (or the equivalent for your

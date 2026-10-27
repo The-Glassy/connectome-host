@@ -159,7 +159,7 @@ const REPLY_FLUSH_BEFORE_SIGTERM_MS = 150;
 const FLEET_REQUEST_TTL_MS = 30_000;
 
 const BUNDLE_REMEDY =
-  'In a checkout, run `npm run build:web` (the postinstall runs it); an installed package carries it built, so reinstall the package.';
+  'In a clone, run `bun run build:web` in its root; an install from npm carries the bundle built, so there, install the package again.';
 
 const HTTP_PANEL_OPS: Record<string, string> = {
   '/debug/context/makeup': 'context-makeup',
@@ -396,7 +396,7 @@ export class WebUiModule implements Module {
     sharedServer = state;
     if (!existsSync(join(state.staticRoot, 'index.html'))) {
       console.warn(
-        `[webui] bundle not found at ${state.staticRoot}: the Web UI will answer 503 until it is built. ` +
+        `[webui] bundle not found at ${state.staticRoot}: the Web UI will answer 503 until it's there. ` +
         BUNDLE_REMEDY,
       );
     }

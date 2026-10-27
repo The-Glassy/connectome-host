@@ -33,18 +33,33 @@ the host is put together is in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Quick start
 
-```bash
-# Prerequisites: Bun 1.4.3+ and Node.js 22.12+ (Node builds the web UI), plus credentials
-export ANTHROPIC_API_KEY=sk-ant-...     # or ANTHROPIC_AUTH_TOKEN (Claude subscription)
+Install a release from npm, in a folder of its own. You need [Bun](https://bun.sh/) 1.4.3+ and credentials for one provider, or none for the offline run. The package carries the rest, the Web UI built.
 
-bun install                                   # also builds the web UI bundle
-bun src/index.ts                              # generic assistant (or the last recipe you loaded)
-bun src/index.ts recipes/mock-test.json       # zero-cost offline smoke run, no credentials needed
-bun src/index.ts path/to/recipe.json          # load a recipe
-bun src/index.ts https://example.com/r.json   # recipe from URL
+```bash
+mkdir my-agent && cd my-agent
+bun add @animalabs/connectome-host        # or: npm install @animalabs/connectome-host
+export ANTHROPIC_API_KEY=sk-ant-...       # or ANTHROPIC_AUTH_TOKEN (Claude subscription)
+
+H=node_modules/@animalabs/connectome-host
+bun $H/src/index.ts                               # generic assistant (or the last recipe you loaded)
+bun $H/src/index.ts $H/recipes/mock-test.json     # zero-cost offline smoke run, no credentials needed
+bun $H/src/index.ts path/to/recipe.json           # load a recipe
+bun $H/src/index.ts https://example.com/r.json    # recipe from URL
 ```
 
-Bun loads `.env` automatically; `.env.example` lists the common variables.
+Bun loads `.env` from the folder you run in; `$H/.env.example` lists the common variables. An install from npm can update itself once it's set up: [`docs/DEPLOYMENTS.md`](docs/DEPLOYMENTS.md), "Updating an install".
+
+**From a clone** instead, check out a release, since `main` holds work that isn't released yet. A clone needs git, and Node.js 22.12+ and npm to build the Web UI.
+
+```bash
+git clone --branch "v$(npm view @animalabs/connectome-host version)" https://github.com/anima-research/connectome-host
+cd connectome-host
+bun install
+bun run build:web     # the Web UI; the host runs without it
+bun src/index.ts      # and the rest as above, with the clone's own paths
+```
+
+A clone updates by hand, as [`docs/DEPLOYMENTS.md`](docs/DEPLOYMENTS.md), "Updating an install", says under "By hand", and builds the Web UI again after each update. The rest of this README writes commands as they run in a clone: from an npm install, put `node_modules/@animalabs/connectome-host/` before `src/`, `recipes/` and `scripts/`.
 
 ## Recipes
 
@@ -666,7 +681,7 @@ are one free-form curated document, always present verbatim.
 
 ## Prerequisites
 
-- [Bun](https://bun.sh/) 1.4.3+ runs the host; [Node.js](https://nodejs.org/) 22.12+ and npm build the web UI
+- [Bun](https://bun.sh/) 1.4.3+ runs the host. In a clone, [Node.js](https://nodejs.org/) 22.12+ and npm build the web UI; the npm package carries it built
 - No Rust toolchain: `@animalabs/chronicle` ships prebuilt native binaries
 - Credentials for one provider: an Anthropic API key, a Claude subscription
   OAuth token (`claude setup-token`), an OpenAI or OpenRouter key, AWS
@@ -675,14 +690,7 @@ are one free-form curated document, always present verbatim.
 
 ### Install
 
-```bash
-bun install      # or npm install; the postinstall step builds the web UI
-```
-
-Installed from npm instead (`npm install @animalabs/connectome-host`), the
-package carries the web UI already built. npm 12 and bun may report its
-`postinstall` as blocked: it builds the web UI only in a checkout, so nothing
-is lost.
+From npm, `bun add @animalabs/connectome-host` or `npm install @animalabs/connectome-host`; the package runs no install script. In a clone, `bun install`, then `bun run build:web` for the web UI. The [Quick start](#quick-start) has both.
 
 ## Environment variables
 
@@ -773,8 +781,8 @@ or supply credentials for a remote deployment:
 "modules": { "webui": { "basicAuth": { "username": "${WEBUI_USERNAME}", "password": "${WEBUI_PASSWORD}" } } }
 ```
 
-In a checkout, build the SPA bundle once with `bun run build:web` (also runs
-on install via postinstall); the npm package carries it built. Deployment
+In a clone, build the SPA bundle with `bun run build:web`, and again after
+each update; the npm package carries it built. Deployment
 behind a reverse proxy, observer access and all
 endpoints are covered in [`docs/webui-deployment.md`](docs/webui-deployment.md).
 

@@ -398,13 +398,11 @@ while a clone installs from its tag's `bun.lock`. So:
   from the host. Then install the new version: `npm install
   @animalabs/connectome-host@<version>`, or `bun add
   @animalabs/connectome-host@<version>`, or in a clone `git fetch --tags`,
-  `git checkout v<version>` and `bun install`. In a clone, `bun install` also
-  builds the Web UI unless install scripts are off. If it says that build
-  failed, or scripts were off, run `bun run build:web` before starting:
-  until a build succeeds, the Web UI serves whatever `dist/web` holds, if
-  anything, which isn't this version's build. If that fails too, the host
-  still runs without this version's Web UI, and going back, below, restores
-  the one you had.
+  `git checkout v<version>`, `bun install` and `bun run build:web`. Until
+  that build succeeds, the Web UI serves whatever `dist/web` holds, if
+  anything, which isn't this version's build. If it fails, the host still
+  runs without this version's Web UI, and going back, below, restores the
+  one you had.
 - **Before starting them,** run `npm ls` as before and compare. For each of
   the three libraries that moved, read its notes between the two versions,
   `https://github.com/anima-research/<library>/blob/main/CHANGELOG.md`, for
@@ -476,7 +474,7 @@ while a clone installs from its tag's `bun.lock`. So:
   the version in `package.json`, so a lockfile restored alone is refused.
   In a clone,
   check out the tag you noted and run `bun install`, then `bun run
-  build:web` if it says the Web UI's build failed or scripts were off. Put
+  build:web`. Put
   back the version of any MCPL server you updated, and any recipe or `.env`
   change you made for the newer version. Then restore the copy of what each
   agent keeps in place of what's there now, not over it, so files the newer

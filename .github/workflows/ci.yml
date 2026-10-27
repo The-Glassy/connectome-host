@@ -45,10 +45,7 @@ jobs:
 
       # npm ci never rewrites package-lock.json, and fails when the lock
       # doesn't match package.json or lacks a package this platform needs,
-      # where npm 11's `npm install` re-resolves it silently. --ignore-scripts
-      # keeps the root postinstall's `npm --prefix web install` from doing
-      # the same to web/package-lock.json before the strict step below
-      # checks it.
+      # where npm 11's `npm install` re-resolves it silently.
       - name: Install dependencies (strict lockfile)
         run: npm ci --ignore-scripts --no-audit --no-fund
 

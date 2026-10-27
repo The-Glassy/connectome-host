@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   COMMAND_WAYS, PAGE_WAYS, bannerOf, busyLines, commandFor, dialogStill, goBackLines, keptDismissal, noticeLines, openWays,
   restartLines, shownBanner, statusLines,
@@ -251,5 +253,14 @@ describe('each way named as its caller names it', () => {
 
   test('both tables name the same ways', () => {
     expect(Object.keys(PAGE_WAYS)).toEqual(Object.keys(COMMAND_WAYS));
+  });
+});
+
+describe('a host not started through an install', () => {
+  test("/update says what to run to make an npm install update itself: setup's command, at a path the package holds", () => {
+    const text = statusLines({ ...base, install: false }).join('\n');
+    const setup = /`bun (node_modules\/@animalabs\/connectome-host\/(src\/update\/setup\.ts))`/.exec(text);
+    expect(setup).not.toBeNull();
+    expect(existsSync(join(import.meta.dir, '..', setup![2]!))).toBe(true);
   });
 });
