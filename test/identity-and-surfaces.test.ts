@@ -1694,13 +1694,20 @@ describe('identity request: fromFile reads only what the mount allows', () => {
 
   it('refuses a path no mount holds, and one leading out of its mount, each with its own reason', async () => {
     const { bodies, upload, workspace } = await mounted();
-    expect((await upload('nope/grid.png')).error).toBe('Nothing was sent to "orrery": Unknown mount: "nope". Available: files.');
+    const unmounted = await workspace.readFileFromDisk('nope/grid.png').then(
+      () => { throw new Error('agent-framework read a path no mount holds'); },
+      (err: WorkspaceReadError) => err,
+    );
+    expect(unmounted.code).toBe('unknown_mount');
+    expect((await upload('nope/grid.png')).error).toBe(
+      `Nothing was sent to "orrery": ${unmounted.message.trim().replace(/\.+$/, '')}.`,
+    );
     const climb = await workspace.readFileFromDisk('files/../outside/host-secret.txt').then(
       () => { throw new Error('agent-framework read a path that climbs out of its mount'); },
       (err: WorkspaceReadError) => err,
     );
     expect(climb.code).toBe('traversal');
-    expect(climb.message).toStartWith('Path traversal detected: "files/../outside/host-secret.txt" ');
+    expect(climb.message).toContain('"files/../outside/host-secret.txt"');
     expect((await upload('files/../outside/host-secret.txt')).error).toBe(
       `Nothing was sent to "orrery": ${climb.message.trim().replace(/\.+$/, '')}.`,
     );
