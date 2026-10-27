@@ -38,6 +38,7 @@ import {
 } from '@animalabs/membrane';
 import { LoggingAnthropicAdapter, offPathRefusalAlert } from './logging-adapter.js';
 import { recipeFormatter } from './recipe-formatter.js';
+import { gateOptionsFor } from './gate-options.js';
 import { CredentialMonitor } from './credential-state.js';
 import { AnthropicOAuthCredentials } from './anthropic-credentials.js';
 import { LoggingProviderAdapter } from './logging-provider-wrapper.js';
@@ -310,19 +311,9 @@ async function createFramework(
     moduleInstances.push(historyModule);
   }
 
-  let gateOptions: import('@animalabs/agent-framework').GateOptions | undefined;
-  if (modules.wake !== false) {
-    gateOptions = { configPath: join(storePath, 'config', 'gate.json') };
-    if (typeof modules.wake === 'object' && 'policies' in modules.wake) {
-      gateOptions.config = modules.wake as import('@animalabs/agent-framework').GateConfig;
-    }
-    // The `sleep` tool's privileged users, who may wake the agent through a
-    // sleep window: ./sleep-privileged.json in the working directory, shared by
-    // every session, unless SLEEP_PRIVILEGED_FILE names another. Edit the file
-    // to change the list.
-    gateOptions.privilegedUsersPath =
-      process.env.SLEEP_PRIVILEGED_FILE || resolve('./sleep-privileged.json');
-  }
+  // Gate config — core AF EventGate feature, with the reply judge
+  // (gate-options.ts). Path is per-session: {storePath}/config/gate.json
+  const gateOptions = gateOptionsFor(modules.wake, storePath);
 
   let workspaceModule: WorkspaceModule | null = null;
   const workspaceMounts = buildWorkspaceMounts(modules.workspace, storePath);

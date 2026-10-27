@@ -27,9 +27,56 @@ A matched rule resolves to one behavior:
 | `{ "debounce": ms }` | Wake once after `ms` (100–300000) pass with no new match **for this rule** — a trailing timer per rule, not per channel, so a rule matching several channels batches them all into one wake. Good for "wake me when a burst settles." The wake arrives as a `[Gate: N events matched]` note; messages already in your context are counted per channel, not re-quoted. |
 | `{ "rate_limit": { "tokens": n, "refillIntervalMs": ms, "keyBy": "channelId" } }` | Token bucket: at most `n` wakes, refilling one every `ms`; a match that finds the bucket empty doesn't wake. Steady cadence regardless of volume. |
 | `{ "passive_sample": { "every": n, "keyBy": "channelId" } }` | Wake on every nth matching event. |
+| `{ "judge": { "debounceMs": ms, "maxWaitMs": ms, "instructions": "…" } }` | Batch like a debounce, then ask the **reply judge**, a small, cheap model, whether now is a good time for you to reply. It reads your context (its newest part), your `instructions` and the batch, and either wakes you or lets the batch go by (the messages stay in your context, as for `defer`). `maxWaitMs` (optional) makes it decide by then even while messages keep coming. Needs an agent-framework release newer than 0.27.0; see below. |
 
 `keyBy` is optional on both counting behaviors: it names a metadata field, and
 each distinct value gets its own bucket/counter (without it, one shared one).
+
+### The reply judge
+
+A `judge` rule is for rooms where you'd like to speak when it fits rather
+than on every burst. It needs an agent-framework release newer than 0.27.0
+with the reply judge: on earlier ones `wake_add_rule` refuses `judge`, a
+`gate.json` rule with it is left out (gate_status names it), and
+`judgeState` isn't in `gate_status`. Write `instructions` as you'd brief someone watching the
+room for you: when you want to be woken (asked something, a topic you follow,
+a person you're waiting on) and what to let go by (banter between others,
+things you've already answered). They go to the judge with every batch, up
+to 4000 characters.
+
+- Keep DM and mention rules ahead of it as `always` if those should never
+  wait on the judge: first match wins, as for every rule.
+- A batch that fires while you're mid-turn is judged after your turn, against
+  the context it left, so it won't wake you for something you just answered.
+- If the judge fails or times out you're woken, as a debounce would wake you,
+  unless your host set it to stay quiet then. `gate_status` shows each judge
+  rule's verdict counts and its newest verdict with the judge's reason, and
+  says if the judge keeps failing.
+- The judge reads; it never writes into your context or speaks.
+
+Hosts configure the judge in the recipe under `modules.wake.judge`. Every key
+is optional, and agent-framework's defaults apply to what's left out:
+
+```json
+"modules": { "wake": { "judge": {
+  "model": "claude-haiku-5-5",
+  "maxInputTokens": 90000,
+  "timeoutMs": 20000,
+  "onError": "wake",
+  "effort": "low",
+  "cacheTtl": "5m",
+  "enabled": true
+} } }
+```
+
+`model` is the id as this host's provider names it, so an OpenRouter or Bedrock
+host gives its own form. `maxInputTokens` (4000 or more; a small one reads only a short tail of the room) caps one judge request;
+the default keeps it under the 100K-token line past which Claude Haiku 5.5
+costs five times as much. `effort: "none"` sends no effort, for a provider
+that doesn't take Anthropic's `output_config`. `enabled: false` leaves the judge
+unwired, and `judge` rules then wake as debounces of the same quiet period. A
+`judge` set alongside `policies` and `default` doesn't become part of the
+starting rules.
 
 ## Declarative rules — `gate.json`
 
@@ -103,7 +150,9 @@ check is conservative, so no warning isn't proof of safety.
 
 - **`wake_add_rule`** — the easiest way. Give a `name`, a `match`, and exactly
   one behavior: `behavior` (`"always"` / `"defer"`), `debounceMs`, `rateLimit`
-  `{ tokens, refillIntervalMs, keyBy? }` or `passiveSample` `{ every, keyBy? }`;
+  `{ tokens, refillIntervalMs, keyBy? }`, `passiveSample` `{ every, keyBy? }` or
+  `judge` `{ debounceMs, maxWaitMs?, instructions? }` (with an agent-framework
+  that has the reply judge, see below);
   plus optional `passthrough` / `resets`. It's validated like the file (an
   invalid rule is an error and nothing is written), applied immediately, and
   saved to `gate.json`. New rules append; `insertBefore` / `insertAfter:
@@ -249,8 +298,9 @@ wake?" decision. Heavy logic belongs in your turn once you're up, not here.
 ## Debugging
 
 - `gate_status` — the live picture: `configPath`; per-policy `matchCount` /
-  `lastMatchTimestamp` plus debounce (`pendingCount`), rate-limit (`deniedCount`)
-  and sampler (`fireCount`) state; `errors` (a `gate.json` that failed to load);
+  `lastMatchTimestamp` plus debounce (`pendingCount`), rate-limit (`deniedCount`),
+  sampler (`fireCount`) and, with the reply judge, judge (`judgeState`: verdict
+  counts, the newest verdict and its reason, what's held for the judge) state; `errors` (a `gate.json` that failed to load);
   `shadowWarnings`; `script` (your `gate.js`: `active`, `runs`, `errors`,
   `timeouts`, `lastError`); `totalEvaluations`; `defaultDecisions` — events that
   fell through to `default`, as triggered/skipped totals and `byEventType`; and a
