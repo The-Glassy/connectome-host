@@ -11,7 +11,9 @@
   nothing, and, when the store is busy, to try again once what it names has
   finished. A `/redo` whose branch no longer exists drops that step and says
   so.
-- The README now says `/newtopic` waits only for the main agent's turn. It
-  said the commands that move the head "are refused while a turn is in
-  flight", which read as any agent's turn; `/newtopic` waited only for the
-  main agent's turn in 0.15.0 too, and its behaviour is unchanged.
+- The README now says `/newtopic` is refused only while the main agent is
+  mid-turn. It said the commands that move the head "are refused while a turn
+  is in flight", which read as any agent's turn; `/newtopic` was refused only
+  for the main agent's turn in 0.15.0 too, and still is. Its refusal now ends
+  "Wait for the turn to end, or stop it, then retry." where it ended "Stop the
+  generation first, then retry."
