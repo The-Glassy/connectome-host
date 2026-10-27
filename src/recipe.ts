@@ -1505,10 +1505,6 @@ export const DEFAULT_RECIPE: Recipe = {
     wake: true,
     workspace: true,
   },
-  // agent-framework's code_execution: scripts that call the agent's own tools,
-  // run in a QuickJS isolate with nothing else in reach. Recommended for every
-  // resident (docs/AGENT-ONBOARDING.md, "Code execution").
-  codeExecution: { enabled: true },
 };
 
 const ENV_REFERENCE = String.raw`\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}`;

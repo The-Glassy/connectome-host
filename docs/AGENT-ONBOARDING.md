@@ -395,8 +395,9 @@ agent-framework 0.24 and later. Releases before that ran Python and took other k
 current hosts refuse them with a message saying what replaced each. Every limit has a default (`yieldMs`, `maxYieldMs`,
 `scriptLifetimeMs`, `maxRunningScripts`, `maxScriptChildren`, `toolCallTimeoutMs`,
 `wakeMinIntervalMs`, `maxWakesPerScript`, `memoryMaxBytes`), so `{ "enabled": true }` is the
-whole setting; `"enabled": false` turns it off. Turning it on for a running resident adds one
-tool, so its first turn after the restart is one full cache write.
+whole setting. It is off unless the recipe turns it on: the host's built-in default recipe
+leaves it off, so an agent started with no recipe has none. Turning it on for a running
+resident adds one tool, so its first turn after the restart is one full cache write.
 
 **Memory defaults.** Current host code fills an omitted/partial `strategy` with:
 autobiographical + `adaptiveResolution: true` + `foldingStrategy: "kv-unified"` with the
@@ -409,7 +410,8 @@ recipe's budget: if you lower the budget at runtime on a recipe without its own 
 `tailTokens` with it, or compiles fail once the history fills the tail. A resident whose store was built under
 `kv-stable` must pin `"foldingStrategy": "kv-stable"` before it moves to such a host, or
 the upgrade switches its solver. The host's built-in default recipe (`bun src/index.ts`
-with no recipe) is just these defaults with an empty system prompt and code execution on. Keep the skeleton's
+with no recipe) is just these defaults with an empty system prompt; it leaves code execution
+off (turn it on deliberately in the recipe, below). Keep the skeleton's
 explicit values anyway: older host checkouts default folding to `kv-stable` or
 `flat-profile`, the budget to 100k, the tail to 30k and summary voice to the literal
 `'Claude'` (the stranger's-voice hazard), reject `kv-unified` without a complete block, and

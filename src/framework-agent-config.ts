@@ -38,8 +38,7 @@ export type FrameworkAgentConfig = AgentConfig & {
 
 /**
  * agent-framework's `codeExecution` option as `AgentFramework.create` takes it:
- * the recipe's block when it has one (the built-in default recipe does), and
- * nothing otherwise, so an agent-framework without the option reads nothing it
+ * the recipe's block when it has one, and nothing otherwise, so an agent-framework without the option reads nothing it
  * doesn't know.
  */
 export function codeExecutionOption(recipe: Recipe): { codeExecution?: NonNullable<Recipe['codeExecution']> } {

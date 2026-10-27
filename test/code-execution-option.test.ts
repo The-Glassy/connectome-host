@@ -13,7 +13,7 @@ const MODEL = 'claude-opus-4-6';
 // Boots the framework from a recipe the way src/index.ts does for these
 // options: the agent config, and code execution through codeExecutionOption.
 async function toolNames(recipe: Recipe): Promise<string[]> {
-  const dir = mkdtempSync(join(tmpdir(), 'default-recipe-code-execution-'));
+  const dir = mkdtempSync(join(tmpdir(), 'code-execution-option-'));
   let framework: AgentFramework | undefined;
   try {
     const strategy = buildFrameworkStrategy(recipe, MODEL, 'UTC');
@@ -31,21 +31,24 @@ async function toolNames(recipe: Recipe): Promise<string[]> {
   }
 }
 
-describe('DEFAULT_RECIPE code execution', () => {
-  test('the built-in default recipe offers the code_execution tool', async () => {
-    const recipe = validateRecipe(structuredClone(DEFAULT_RECIPE));
+function withCodeExecution(codeExecution: Recipe['codeExecution']): Recipe {
+  return validateRecipe({ ...structuredClone(DEFAULT_RECIPE), codeExecution });
+}
+
+describe('codeExecutionOption', () => {
+  test('a recipe with codeExecution.enabled true offers the code_execution tool', async () => {
+    const recipe = withCodeExecution({ enabled: true });
     expect(codeExecutionOption(recipe)).toEqual({ codeExecution: { enabled: true } });
     expect(await toolNames(recipe)).toContain('code_execution');
   });
 
-  test('the documented opt-out, codeExecution.enabled false, offers no code_execution tool', async () => {
-    const recipe = validateRecipe({ ...structuredClone(DEFAULT_RECIPE), codeExecution: { enabled: false } });
-    expect(await toolNames(recipe)).not.toContain('code_execution');
+  test('codeExecution.enabled false offers no code_execution tool', async () => {
+    expect(await toolNames(withCodeExecution({ enabled: false }))).not.toContain('code_execution');
   });
 
-  test('a recipe without codeExecution still has no code_execution tool', async () => {
-    const { codeExecution: _omitted, ...rest } = structuredClone(DEFAULT_RECIPE);
-    const recipe = validateRecipe(rest as Recipe);
+  test('the built-in default recipe leaves code execution off', async () => {
+    const recipe = validateRecipe(structuredClone(DEFAULT_RECIPE));
+    expect(recipe.codeExecution).toBeUndefined();
     expect(codeExecutionOption(recipe)).toEqual({});
     expect(await toolNames(recipe)).not.toContain('code_execution');
   });
