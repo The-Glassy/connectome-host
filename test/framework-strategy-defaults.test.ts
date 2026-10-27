@@ -203,6 +203,13 @@ describe('standard-recipe memory defaults', () => {
       'America/Los_Angeles',
     );
     expect(configView(omitted).recoverLiteralThinkingWrappedCompression).toBeUndefined();
+
+    for (const bad of ['false', 1, 'no', null]) {
+      expect(() => recipe({
+        name: 'Mira',
+        strategy: { type: 'autobiographical', recoverLiteralThinkingWrappedCompression: bad as never },
+      })).toThrow('recoverLiteralThinkingWrappedCompression must be a boolean');
+    }
   });
 
   test('explicit recipe values override the defaults', () => {
