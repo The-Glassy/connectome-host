@@ -8,7 +8,10 @@
   The evacuator's recipe and saved state are `0600` after every write,
   even in a directory that was already there. To keep such a reader
   working, run it as the agent's user or as root, or give its group
-  access yourself once the directories are made (`chgrp` and
+  access to the directories yourself once they're made (`chgrp` and
   `chmod g+rX`): a directory's mode, once it's there, stays as it is.
-  Unchanged: every data directory made before this version, and what a
-  reader running as the agent's user or as root can read.
+  Group access doesn't reach the files kept for their owner alone, the
+  evacuator's recipe and state and the host's saved recipe, which each
+  write leaves `0600`: a reader that needs them runs as the agent's user
+  or as root. Unchanged: every data directory made before this version,
+  and what a reader running as the agent's user or as root can read.

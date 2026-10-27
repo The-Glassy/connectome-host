@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { SessionManager } from '../src/session-manager.js';
 import { saveState, writeRecipeOut } from '../scripts/evacuator.js';
 
@@ -27,6 +28,7 @@ function underUmask022(fn: () => void): void {
 }
 
 const modeOf = (path: string): number => lstatSync(path).mode & 0o777;
+const EVACUATOR = fileURLToPath(new URL('../scripts/evacuator.ts', import.meta.url));
 
 describe('a data directory a script makes before any host runs', () => {
   test("SessionManager's first session makes the data directory and its sessions directory for their owner alone", () => {
@@ -54,7 +56,7 @@ describe('a data directory a script makes before any host runs', () => {
     expect(modeOf(data)).toBe(0o700);
   });
 
-  test("the evacuator's recipe file and saved state are readable by their owner alone after every write", () => {
+  test("the evacuator's recipe file and saved state are readable by their owner alone after every write, each written as a new file", () => {
     const data = freshDataDir();
     const out = join(data, 'evacuated-recipe.json');
     const state = join(data, 'evacuator-state.json');
@@ -66,13 +68,74 @@ describe('a data directory a script makes before any host runs', () => {
     expect(modeOf(state)).toBe(0o600);
     chmodSync(out, 0o644);
     chmodSync(state, 0o644);
-    writeFileSync(`${state}.tmp`, 'left by a crash\n', { mode: 0o644 });
-    underUmask022(() => {
-      writeRecipeOut(out, { agent: { name: 'Claude' } });
-      saveState(data, { model: 'claude-opus-4-1' });
-    });
+    const beside = `${state}.tmp`;
+    writeFileSync(beside, 'a file beside it\n');
+    const openedBefore = [openSync(out, 'r'), openSync(state, 'r')];
+    try {
+      underUmask022(() => {
+        writeRecipeOut(out, { agent: { name: 'Rewritten' } });
+        saveState(data, { model: 'claude-rewritten' });
+      });
+      expect(modeOf(out)).toBe(0o600);
+      expect(modeOf(state)).toBe(0o600);
+      expect(readFileSync(out, 'utf-8')).toContain('Rewritten');
+      expect(readFileSync(state, 'utf-8')).toContain('claude-rewritten');
+      const [recipeBefore, stateBefore] = openedBefore.map((fd) => readFileSync(fd, 'utf-8'));
+      expect(recipeBefore).toContain('Claude');
+      expect(recipeBefore).not.toContain('Rewritten');
+      expect(stateBefore).toContain('claude-opus-4-1');
+      expect(stateBefore).not.toContain('claude-rewritten');
+      expect(readFileSync(beside, 'utf-8')).toBe('a file beside it\n');
+      expect(readdirSync(data).sort()).toEqual(['evacuated-recipe.json', 'evacuator-state.json', 'evacuator-state.json.tmp']);
+    } finally {
+      for (const fd of openedBefore) closeSync(fd);
+    }
+  });
+
+  test("a link at the evacuator's recipe path is replaced by the new file, and what it pointed at is left as it was", () => {
+    const data = freshDataDir();
+    mkdirSync(data);
+    const shared = join(dirname(data), 'shared.json');
+    writeFileSync(shared, 'shared\n');
+    chmodSync(shared, 0o644);
+    const out = join(data, 'evacuated-recipe.json');
+    symlinkSync(shared, out);
+    underUmask022(() => writeRecipeOut(out, { agent: { name: 'Claude' } }));
+    expect(lstatSync(out).isFile()).toBe(true);
     expect(modeOf(out)).toBe(0o600);
-    expect(modeOf(state)).toBe(0o600);
+    expect(JSON.parse(readFileSync(out, 'utf-8'))).toEqual({ agent: { name: 'Claude' } });
+    expect(readFileSync(shared, 'utf-8')).toBe('shared\n');
+    expect(modeOf(shared)).toBe(0o644);
+  });
+
+  test("a recipe write that fails leaves nothing beside the evacuator's recipe path", () => {
+    const data = freshDataDir();
+    const out = join(data, 'evacuated-recipe.json');
+    mkdirSync(out, { recursive: true });
+    expect(() => underUmask022(() => writeRecipeOut(out, { agent: { name: 'Claude' } }))).toThrow();
+    expect(readdirSync(data)).toEqual(['evacuated-recipe.json']);
+    expect(readdirSync(out)).toEqual([]);
+  });
+
+  test('the copy the evacuator opens in an editor is readable by its owner alone, and removed when the editor fails', () => {
+    const root = dirname(freshDataDir());
+    const tmp = join(root, 'tmp');
+    mkdirSync(tmp);
+    const editor = join(root, 'editor.sh');
+    const modeFile = join(root, 'mode');
+    const pathFile = join(root, 'path');
+    writeFileSync(editor, `#!/bin/sh\nprintf '%s' "$1" > '${pathFile}'\nTARGET="$1" bun -e 'const fs = require("node:fs"); fs.writeFileSync("${modeFile}", (fs.statSync(process.env.TARGET).mode & 0o7777).toString(8))'\nexit 1\n`, { mode: 0o755 });
+    let child: ReturnType<typeof spawnSync> | undefined;
+    underUmask022(() => {
+      child = spawnSync('bun', ['-e', `import { editInline } from ${JSON.stringify(EVACUATOR)}; editInline('the memories');`], {
+        env: { ...process.env, EDITOR: editor, TMPDIR: tmp },
+        encoding: 'utf-8',
+        timeout: 50_000,
+      });
+    });
+    expect(child?.status).toBe(1);
+    expect(readFileSync(modeFile, 'utf-8')).toBe('600');
+    expect(existsSync(readFileSync(pathFile, 'utf-8'))).toBe(false);
   });
 
   test("a legacy store's move into sessions makes the sessions directory for its owner alone", () => {

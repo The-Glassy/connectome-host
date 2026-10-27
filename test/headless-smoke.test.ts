@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, lstatSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, lstatSync, chmodSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { type Socket } from 'node:net';
 import { join, resolve, dirname } from 'node:path';
@@ -179,7 +179,7 @@ describe('headless daemon: its data directory', () => {
 
   test("a host whose data directory can't be made stops, naming it", async () => {
     const dir = mkdtempSync(join(tmpdir(), 'fkm-headless-datadir-'));
-    const dataDir = join(dir, 'data');
+    const dataDir = join(realpathSync(dir), 'data');
     let child: ChildProcess | undefined;
     try {
       writeFileSync(dataDir, 'a file where the data directory goes\n');
@@ -187,7 +187,7 @@ describe('headless daemon: its data directory', () => {
       writeFileSync(recipe, JSON.stringify(MINIMAL_RECIPE), 'utf-8');
       child = spawn('bun', [INDEX_PATH, recipe, '--headless', '--socket-path', join(dir, 'ipc.sock')], {
         cwd: dir,
-        env: { ...process.env, ANTHROPIC_API_KEY: 'sk-test-headless-datadir', DATA_DIR: dataDir },
+        env: { ...process.env, ANTHROPIC_API_KEY: 'sk-test-headless-datadir', DATA_DIR: 'data' },
         stdio: ['ignore', 'ignore', 'pipe'],
       });
       let stderr = '';
