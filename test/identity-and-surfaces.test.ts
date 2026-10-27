@@ -1694,11 +1694,14 @@ describe('identity request: fromFile reads only what the mount allows', () => {
 
   it('refuses a path no mount holds, and one leading out of its mount, each with its own reason', async () => {
     const { bodies, upload, workspace } = await mounted();
-    const unmounted = (await upload('nope/grid.png')).error ?? '';
-    expect(unmounted).toStartWith('Nothing was sent to "orrery": ');
-    const reason = unmounted.slice('Nothing was sent to "orrery": '.length);
-    expect(reason).toContain('nope');
-    expect(reason).toContain('files');
+    const unmounted = await workspace.readFileFromDisk('nope/grid.png').then(
+      () => { throw new Error('agent-framework read a path no mount holds'); },
+      (err: WorkspaceReadError) => err,
+    );
+    expect(unmounted.code).toBe('unknown_mount');
+    expect((await upload('nope/grid.png')).error).toBe(
+      `Nothing was sent to "orrery": ${unmounted.message.trim().replace(/\.+$/, '')}.`,
+    );
     const climb = await workspace.readFileFromDisk('files/../outside/host-secret.txt').then(
       () => { throw new Error('agent-framework read a path that climbs out of its mount'); },
       (err: WorkspaceReadError) => err,

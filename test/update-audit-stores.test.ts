@@ -1796,6 +1796,8 @@ describe("which fleet children an audit follows, and how", () => {
       PARENT_AT_IMPORT,
       "import { spawn } from 'node:child_process';",
       "import { existsSync, writeFileSync } from 'node:fs';",
+      // Spawned without detached, the helper stays in the audit's own process
+      // group.
       "const helper = spawn('sleep', ['60'], { stdio: 'ignore' });",
       `writeFileSync(${JSON.stringify(helperPid)}, String(helper.pid));`,
       'helper.unref();',

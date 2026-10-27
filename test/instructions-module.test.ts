@@ -163,16 +163,22 @@ describe('InstructionsModule', () => {
   });
 
   test('an unknown mount fails open with one warning and one alert', async () => {
-    const mod = await moduleOver(workspaceOver('instructions'), { path: 'nonexistent/AGENTS.md' });
+    const workspace = workspaceOver('instructions');
+    const mod = await moduleOver(workspace, { path: 'nonexistent/AGENTS.md' });
 
     expect(await mod.gatherContext('a')).toEqual([]);
     expect(await mod.gatherContext('a')).toEqual([]);
     expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(alerts).toHaveLength(1);
-    expect(alerts[0]!.message).toStartWith('no instructions injected: ');
-    const reason = alerts[0]!.message.slice('no instructions injected: '.length);
-    expect(reason).toContain('nonexistent');
-    expect(reason).toContain('instructions');
+    const refused = await workspace.readFileFromDisk('nonexistent/AGENTS.md').then(
+      () => { throw new Error('agent-framework read a path no mount holds'); },
+      (err: WorkspaceReadError) => err,
+    );
+    expect(refused.code).toBe('unknown_mount');
+    expect(alerts).toEqual([{
+      kind: 'instructions-unavailable',
+      agent: 'resident',
+      message: `no instructions injected: ${refused.message}`,
+    }]);
   });
 
   test('no workspace wired fails open, and says so', async () => {
