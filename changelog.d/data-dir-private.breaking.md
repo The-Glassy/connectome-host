@@ -10,7 +10,13 @@
   working, run it as the agent's user or as root, or give its group
   access to the directories yourself once they're made (`chgrp` and
   `chmod g+rX`): a directory's mode, once it's there, stays as it is.
-  Group access doesn't reach the files kept for their owner alone, the
+  A Go back that restores the copy (`/update back restore`, or
+  `start.js --go-back` without `--keep-data`), or the next start after
+  an updated release ends before its commit, puts what's inside each
+  directory an update copies (`docs/DEPLOYMENTS.md` lists them) back as
+  new copies, each with its mode but in the group a new file or
+  directory there gets, so run the `chgrp` again after one. Group
+  access doesn't reach the files kept for their owner alone, the
   evacuator's recipe and state and the host's saved recipe, which each
   write leaves `0600`: a reader that needs them runs as the agent's user
   or as root. Unchanged: every data directory made before this version,
