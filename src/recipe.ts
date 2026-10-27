@@ -156,13 +156,19 @@ export interface RecipeStrategy {
    *  speculative compression queue (default 1); demand still overrides. */
   l1HoldbackChunks?: number;
   // Self-voice / compression framing. The host defaults summaryParticipant to
-  // `agent.name`, so self-recollections speak as the agent itself. Set
+  // the agent's name (`agent.name`, or the name it runs under when that's
+  // unset), so self-recollections speak as the agent itself. Set
   // explicitly only to voice summaries as someone else — a mismatched
   // participant surfaces in the compiled prompt as another voice speaking in
   // first person about the agent.
   summaryParticipant?: string;
   summarySystemPrompt?: string;
   summaryUserPrompt?: string;
+  /** The `Context Manager` turn before a summary in the compiled context,
+   *  under adaptive resolution (the default) or `positionedRecallPairs:
+   *  false`. The host defaults it to a sentence saying that a summary
+   *  follows, standing in for earlier conversation, tool calls and results
+   *  included, and that the exact text it replaces isn't shown. */
   summaryContextLabel?: string;
   /** As-of perspective pin: chunks wholly below this message sequence are
    *  compressed as inherited/witnessed record, not first-person memory.
