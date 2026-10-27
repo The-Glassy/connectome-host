@@ -839,8 +839,10 @@ headless socket.
 | `/fleet [list\|status\|view\|peek\|stop\|restart]` | Fleet children (see [`docs/fleet-protocol.md`](docs/fleet-protocol.md)) |
 | `/update [install\|restart [wait\|now\|resume\|<version>]\|back [(keep\|restore) [<version>]]]` | Whether a newer release is out and what it costs; on an install set up to update itself, install it, restart onto it, or go back. A version, as the Web UI sends it, makes Restart or Go back refuse unless that's still the release it would act on ("Updating an install" in [`docs/DEPLOYMENTS.md`](docs/DEPLOYMENTS.md)) |
 
-Commands that move the head (`/undo`, `/redo`, `/checkout`, `/restore`,
-`/branchto`, `/newtopic`) are refused while a turn is in flight.
+Commands that move the head are refused while a turn is in flight: `/undo`,
+`/redo`, `/checkout`, `/restore` and `/branchto` while any agent sharing the
+store is mid-turn, the subconscious included, and `/newtopic` while the main
+agent is.
 
 ## TUI controls
 

@@ -166,7 +166,7 @@ describe('while another agent is mid-turn, a branch move moves nothing', () => {
   }
 });
 
-function stubWorld(answer: (name: string, move: () => void) => Promise<void>) {
+function stubWorld(answer: (name: string, move: () => void) => Promise<void>, options: { deleteFails?: boolean } = {}) {
   const branches = new Map<string, Array<{ id: string; participant: string; content: unknown[] }>>([
     ['main', [{ id: 'u1', participant: 'user', content: [] }, { id: 'a1', participant: 'agent', content: [] }]],
   ]);
@@ -187,7 +187,14 @@ function stubWorld(answer: (name: string, move: () => void) => Promise<void>) {
       getAgent: () => undefined,
       getAllAgents: () => [{ name: 'a', state: { status: 'idle' }, getContextManager: () => cm }],
       getAllModules: () => [],
-      getStore: () => ({ currentBranch: () => cm.currentBranch(), listBranches, deleteBranch: (name: string) => { branches.delete(name); } }),
+      getStore: () => ({
+        currentBranch: () => cm.currentBranch(),
+        listBranches,
+        deleteBranch: (name: string) => {
+          if (options.deleteFails) throw new Error('the branch is locked');
+          branches.delete(name);
+        },
+      }),
       switchBranch: (name: string) => answer(name, () => {
         if (!branches.has(name)) throw new Error(`No such branch: ${name}`);
         current = name;
@@ -209,7 +216,8 @@ function stubWorld(answer: (name: string, move: () => void) => Promise<void>) {
     checkpoints: [...app.branchState.checkpoints.entries()],
   });
   const add = (id: string, participant = 'user') => { branches.get(current)!.push({ id, participant, content: [] }); };
-  return { app, run, records, add, branch: () => current, deleteBranch: (name: string) => { branches.delete(name); } };
+  const moveTo = (name: string) => { current = name; };
+  return { app, run, records, add, moveTo, branch: () => current, deleteBranch: (name: string) => { branches.delete(name); } };
 }
 
 const busy = () => new OperatorActionError('agent-busy', 'Cannot switch branch while b is idle+turn-alive — every agent sharing the store must be idle (quiesce the host first)');
@@ -288,18 +296,30 @@ describe('the framework\'s answer to a move decides what the session records', (
     expect(w.app.branchState.checkpoints.get('cp')).toBe(saved);
   });
 
-  test('a refusal is never taken for a move, though another command has moved the store to the same branch meanwhile', async () => {
-    let refuse = false;
-    const w = stubWorld(async (_name, move) => {
-      move();
-      if (refuse) throw busy();
+  test('a refusal is never taken for a move, though a switch already holding the store has moved it to the same branch', async () => {
+    let holder: ((name: string) => void) | undefined;
+    const w = stubWorld(async (name, move) => {
+      if (!holder) return move();
+      holder(name);
+      throw busy();
     });
     await w.run('/undo');
-    refuse = true;
+    holder = (name) => w.moveTo(name);
     const outcome = await w.run('/redo');
+    expect(w.branch()).toBe('main');
     expect(outcome.said).toContain('This command moved nothing. Try again once what it names has finished.');
     expect(outcome.branchChanged).toBe(false);
     expect(w.app.branchState.redoStack).toEqual([{ branchName: 'main' }]);
+  });
+
+  test('a branch made for a refused move that can\'t be removed is named as staying', async () => {
+    const w = stubWorld(async () => { throw busy(); }, { deleteFails: true });
+    const outcome = await w.run('/undo');
+    const made = w.records().branches.find((name) => name.startsWith('undo-'));
+    expect(made).toBeDefined();
+    expect(outcome.said).toContain(`The branch "${made}" made for it stays: removing it failed (the branch is locked).`);
+    expect(outcome.said).toContain('This command moved nothing. Try again once what it names has finished.');
+    expect(w.branch()).toBe('main');
   });
 
   test('a /redo whose branch no longer exists drops that step and says so', async () => {
@@ -344,6 +364,24 @@ describe('a refusal offers stopping only for the turn an operator can stop', () 
     expect(said).toContain('(b: streaming)');
     expect(said).toContain('Wait for the turn to end, then retry.');
     expect(said).not.toContain('stop');
+  });
+
+  test('/newtopic waits for the main agent only: another agent mid-turn doesn\'t refuse it', () => {
+    const newtopicWith = (statuses: Record<string, string>) => {
+      const agents = Object.entries(statuses).map(([name, status]) => ({ name, state: { status }, getContextManager: () => null }));
+      const app = {
+        agentName: 'a',
+        framework: {
+          getAgent: (name: string) => agents.find((agent) => agent.name === name),
+          getAllAgents: () => agents,
+        },
+      };
+      return handleCommand('/newtopic', app as never).lines.map((line) => line.text).join('\n');
+    };
+    const otherBusy = newtopicWith({ a: 'idle', b: 'streaming' });
+    expect(otherBusy).not.toContain('refused');
+    expect(otherBusy).toContain('No context manager.');
+    expect(newtopicWith({ a: 'streaming', b: 'idle' })).toContain('/newtopic refused: a turn is in flight (a: streaming).');
   });
 
   test('the main agent and another mid-turn: wait for both, and only the main agent\'s can be stopped', () => {
