@@ -3,4 +3,4 @@
   - Its state defaults to `{dataDir}/heartbeat.json`, the install's, so every session reads the same schedule and reminders, as heartbeat-mcpl's did, and a new session doesn't import the old files again.
   - A recipe that turns it on and names `mcpServers.heartbeat` is refused at load, naming both fixes. A heartbeat-mcpl from `mcpl-servers.json` or the agent's overlay is recognized by its id, a heartbeat tool prefix, or its command. It's left out with a startup line, rather than stopping the host.
   - Takes effect with an agent-framework that has the heartbeat. On today's it's passed through and ignored, and a startup line says the agent has no heartbeat.
-  - docs/ATTENTION-AND-GATING.md, docs/AGENT-ONBOARDING.md and docs/DEPLOYMENTS.md say how to move a resident over.
+  - docs/ATTENTION-AND-GATING.md, docs/AGENT-ONBOARDING.md and docs/DEPLOYMENTS.md say how to move a resident over. A resident's existing wake rules for `source: "heartbeat"` keep applying, since agent-framework's ticks reach the gate as heartbeat-mcpl's pushes did.

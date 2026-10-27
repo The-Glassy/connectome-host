@@ -315,8 +315,8 @@ can't name both. To move a resident off the server, replace its `mcpServers.hear
 with `"heartbeat": { "importFrom": { "configPath": "<its HEARTBEAT_CONFIG_FILE>",
 "remindersPath": "<its HEARTBEAT_REMINDERS_FILE>" } }` under `modules`: the first
 start brings its schedule and reminders along and leaves the old files as they
-are. Its wake rule for `source: "heartbeat"` push events then matches nothing
-and can go.
+are. Its wake rules for `source: "heartbeat"` push events keep applying: the
+framework's ticks and reminders reach the gate as that server's pushes did.
 
 These are the values the long-running production residents converge on for a
 ≥500k-window model (300k budget / 100k recent tail / 32k reply). For a **200k-window**
