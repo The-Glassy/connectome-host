@@ -52,7 +52,7 @@ import { SettingsModule } from './modules/settings-module.js';
 import { AgentFramework, WorkspaceModule, resolveTimeZone, HistoryModule, type Module } from '@animalabs/agent-framework';
 import { resolve, join, basename } from 'node:path';
 import { appendFile, mkdir, stat, rename } from 'node:fs/promises';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { SubagentModule } from './modules/subagent-module.js';
 import { historyModuleOptions, assertSemanticSearchRegistered } from './history-semantic.js';
 import { LessonsModule } from './modules/lessons-module.js';
@@ -84,6 +84,7 @@ import { currentForStart, releaseHere, type ReleaseHere } from './update/host.js
 import { childrenFilePath, trialPlaces } from './update/contract.js';
 import { hostUpdate, hostVersionOf } from './update/update.js';
 import { armTrialLog } from './update/trial-log.js';
+import { PRIVATE_DIR_MODE } from './update/data-swap.js';
 import { HOST_PACKAGE_JSON } from './bun-floor-check.js';
 import { switchSessionSteps } from './session-switch.js';
 import { resolveAgentName } from './agent-name.js';
@@ -101,9 +102,11 @@ import {
   parseRecipeArg,
   deprecatedConversationsNotices,
   resolveProvider,
+  recipeModel,
+  runningFit,
 } from './recipe.js';
 import { createBranchState, resetBranchState, handleExport, type BranchState } from './commands.js';
-import { buildFrameworkAgentConfig, membraneCachingOverride, recipeModel, autoContinueSupportWarning } from './framework-agent-config.js';
+import { buildFrameworkAgentConfig, membraneCachingOverride, autoContinueSupportWarning } from './framework-agent-config.js';
 import { buildFrameworkStrategy, buildConversationsConfig } from './framework-strategy.js';
 import { AUDIT_STORES_FLAG, auditStoresFromEntry, checkActiveStore, placesOnTrial } from './update/audit-stores.js';
 import { buildWorkspaceMounts } from './workspace-mounts.js';
@@ -202,7 +205,7 @@ async function resolveRecipe(): Promise<Recipe> {
     );
     console.error(err instanceof SavedRecipeDirectoryError
       ? SAVED_RECIPE_DIRECTORY_LINE
-      : 'Fix what it names (the file, or a variable missing from the environment), start with a recipe file to replace it, or start with --no-recipe to clear it.');
+      : 'Fix what it names (the file, a variable missing from the environment, a number the recipe sets, or MODEL in the environment), start with a recipe file to replace it, or start with --no-recipe to clear it.');
     process.exit(1);
   }
 
@@ -797,8 +800,18 @@ async function main() {
   await waitToBeListed();
   installHere = releaseHere();
   if (installHere !== null) armTrialLog(installHere);
+  try {
+    // mkdirSync's mode applies only to the directories it creates.
+    mkdirSync(config.dataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
+  } catch (err) {
+    console.error(`The host can't make its data directory ${resolve(config.dataDir)}, so it stops: ${err instanceof Error ? err.message : String(err)}`);
+    console.error('Set DATA_DIR to a path where this user has or can make a directory, or fix what the error names.');
+    process.exit(1);
+  }
   const recipe = await resolveRecipe();
   const provider = resolveProvider(recipe);
+  const fit = runningFit(recipe, config.model);
+  if (!fit.checked) console.log(fit.line);
 
   if (provider === 'openrouter' && !config.openrouterApiKey) {
     console.error('Missing OPENROUTER_API_KEY for recipe provider "openrouter".');

@@ -5,7 +5,7 @@ import { DEFAULT_CONFIG_PATH } from '../src/mcpl-config.js';
 
 interface StubMessage { id: string; participant: string; content: unknown[] }
 
-function makeStubWorld(agentStatus: string | undefined = 'idle') {
+function makeStubWorld(agentStatus: string | null = 'idle') {
   const messagesByBranch = new Map<string, StubMessage[]>([['main', []]]);
   let currentName = 'main';
   let msgCounter = 0;
@@ -29,7 +29,7 @@ function makeStubWorld(agentStatus: string | undefined = 'idle') {
 
   const agent = {
     name: 'stub-agent',
-    ...(agentStatus !== undefined ? { state: { status: agentStatus } } : {}),
+    ...(agentStatus !== null ? { state: { status: agentStatus } } : {}),
     getContextManager: () => cm,
   };
 
@@ -44,6 +44,8 @@ function makeStubWorld(agentStatus: string | undefined = 'idle') {
       getAgent: () => undefined,
       getAllAgents: () => [agent],
       getAllModules: () => [],
+      getStore: () => ({ currentBranch: () => cm.currentBranch() }),
+      switchBranch: (name: string) => cm.switchBranch(name),
     },
     sessionManager: {
       listSessions: () => sessions,
@@ -141,7 +143,7 @@ describe('in-flight guard on head-moving commands', () => {
   });
 
   test('agents without state (stubs) are treated as idle', () => {
-    const { app, addMessage, text } = makeStubWorld(undefined);
+    const { app, addMessage, text } = makeStubWorld(null);
     addMessage(); addMessage('agent');
     const r = handleCommand('/undo', app);
     expect(text(r)).toContain('Undoing');

@@ -21,13 +21,17 @@ import { validateToolClassTable, validateToolLifecycle } from './tool-lifecycle-
 import { isLoopbackOrTailnetHost } from './history-semantic.js';
 import { REASONING_EFFORTS, type ReasoningEffort } from './modules/settings-module.js';
 import { DEFAULT_INSTRUCTIONS_PATH } from './modules/instructions-module.js';
+import { recipeFit, type RecipeFit } from './recipe-fit.js';
 
 export interface RecipeStrategy {
   /** Built-in strategy name, or a custom type registered by a
    *  `kind: "strategy"` extension (see `Recipe.extensions`). */
   type: 'autobiographical' | 'passthrough' | 'frontdesk' | (string & {});
   headWindowTokens?: number;
-  /** Verbatim tail. When unset, 40% of the compile budget (120k of 300k). */
+  /** Verbatim tail. When unset, 40% of the compile budget (120k of a 300k
+   *  budget), or 40% of the budget less agent.maxTokens where the head and
+   *  that tail wouldn't fit beside agent.maxTokens with overBudgetGraceRatio's
+   *  grace. */
   recentWindowTokens?: number;
   compressionModel?: string;
   /** Cap compression `max_tokens` at the compression model's OUTPUT ceiling.
@@ -282,18 +286,28 @@ export interface RecipeAgent {
   /** Agent Framework exact-name tool allowlist. Omitted preserves its 'all' default.
    * This configures tool visibility; dispatch enforcement belongs to the framework. */
   allowedTools?: 'all' | string[];
+  /** The reply's max_tokens; 16,384 when unset. On a model the host knows a
+   *  window for (on Anthropic's API, recipe-fit.ts), a load that resolves
+   *  the system prompt refuses one over the model's maximum output. */
   maxTokens?: number;
   /**
    * Per-agent stream token budget — the accumulated-input ceiling at which the
    * framework breaks the stream and lets the strategy compress. Mirrors the
    * runtime `/budget` command. When unset: contextBudgetTokens + 20k if the
-   * budget is unset too (320k), else 150k — a recipe that sets its own budget
-   * may be on a 200k-window model.
+   * budget is left out too; else 150k, a null budget included. It counts the provider's input tokens,
+   * which with prompt caching on are only those after the last cache marker.
    */
   maxStreamTokens?: number;
-  /** Per-agent context compile budget (input tokens). When unset, 300k —
-   *  sized for 1M-window models; set it lower on a smaller window
-   *  (budget + maxTokens must fit). */
+  /** Per-agent context compile budget (input tokens), which holds
+   *  maxTokens for the reply. When unset: on a model the host knows a window
+   *  for (on Anthropic's API, recipe-fit.ts), with a maxTokens that is unset
+   *  or a positive number, the smaller of 300k and the window less the system
+   *  prompt and 32k for the tools; otherwise 300k. Where the host knows the
+   *  window, a load that resolves the system prompt refuses a budget that
+   *  leaves too little room for the head and the verbatim tail once
+   *  maxTokens is kept for the reply, or one whose prompt (the budget less
+   *  maxTokens, or the head and tail where they come to more, plus the
+   *  system prompt) is over the window. */
   contextBudgetTokens?: number;
   /** Prompt-cache TTL ('5m' | '1h') forwarded to the provider. Defaults to
    *  '1h'; set '5m' explicitly for high-frequency, sub-5-minute workloads.
@@ -373,9 +387,8 @@ export interface RecipeAgent {
   clock?: ClockConfig | false;
   /**
    * Extra Anthropic beta flags sent as the `anthropic-beta` header on every
-   * request (e.g. `["context-1m-2025-08-07"]` for the 1M context window on
-   * models where it is opt-in, like claude-sonnet-4-5). Merged with any
-   * transport-required betas (OAuth). Anthropic provider only.
+   * request. Merged with any transport-required betas (OAuth). Anthropic
+   * provider only.
    */
   anthropicBetas?: string[];
   strategy?: RecipeStrategy;
@@ -940,7 +953,8 @@ export interface RecipeModules {
    * agent-framework keeps none of its own files there: a recipe whose other
    * mounts are each read-only, have an include, or are configured direct
    * keeps no over-cap tool result, saved payload or fetched reference in a
-   * file. No mount of the recipe's own is named `_config`.
+   * file. No mount of the recipe's own is named `_config`, and no two of
+   * them share a name, compared exactly.
    */
   workspace?: boolean | { mounts: RecipeWorkspaceMount[]; configMount?: boolean };
   /**
@@ -1493,6 +1507,13 @@ export function resolveProvider(recipe: Recipe): RecipeProvider {
   return recipe.agent.provider ?? 'anthropic';
 }
 
+/** The model a recipe's agent runs: `envModel`, the environment's `MODEL`,
+ *  when it's set, else the recipe's own, else its provider's default. */
+export function recipeModel(recipe: Recipe, envModel: string | undefined): string {
+  return envModel || recipe.agent.model ||
+    (recipe.agent.provider === 'openai-codex' ? 'gpt-5.4' : 'claude-opus-4-6');
+}
+
 export const DEFAULT_RECIPE: Recipe = {
   name: 'Agent',
   description: 'General-purpose assistant with tool access',
@@ -1616,7 +1637,7 @@ export async function loadRecipeDetailed(source: string, options: { fetchSystemP
   const recipe = validateRecipe(raw);
   resolveChildRecipePaths(recipe, sourceBase);
   resolveExtensionPaths(recipe, sourceBase);
-  const resolved = options.fetchSystemPrompt === false ? recipe : await resolveSystemPrompt(recipe);
+  const resolved = options.fetchSystemPrompt === false ? recipe : refuseUnfit(await resolveSystemPrompt(recipe));
   copyResolvedPathsIntoRaw(persistable, resolved);
   return { recipe: resolved, persistable };
 }
@@ -1688,6 +1709,23 @@ async function resolveSystemPrompt(recipe: Recipe): Promise<Recipe> {
       agent: { ...recipe.agent, systemPrompt: await res.text() },
     };
   }
+  return recipe;
+}
+
+export function runningFit(recipe: Recipe, envModel: string | undefined): RecipeFit {
+  const fit = recipeFit(recipe, recipeModel(recipe, envModel));
+  const own = recipeModel(recipe, undefined);
+  if (!envModel || envModel === own || !fit.checked || fit.fits) return fit;
+  const replaced = recipe.agent.model ? 'agent.model' : `its default, ${own}`;
+  return {
+    ...fit,
+    refusal: `${fit.refusal} ${envModel} is MODEL in the environment, which the host runs in place of ${replaced}.`,
+  };
+}
+
+function refuseUnfit(recipe: Recipe): Recipe {
+  const fit = runningFit(recipe, process.env.MODEL || undefined);
+  if (fit.checked && !fit.fits) throw new Error(fit.refusal);
   return recipe;
 }
 
@@ -2741,6 +2779,7 @@ export function validateRecipe(raw: unknown): Recipe {
       if (!Array.isArray(ws.mounts) || ws.mounts.length === 0) {
         throw new Error('workspace.mounts must be a non-empty array');
       }
+      const firstIndexByName = new Map<string, number>();
       for (let i = 0; i < ws.mounts.length; i++) {
         const m = ws.mounts[i] as Record<string, unknown>;
         const where = `workspace.mounts[${i}]`;
@@ -2759,6 +2798,12 @@ export function validateRecipe(raw: unknown): Recipe {
           const mustBe = MOUNT_KEY_CHECKS[key](m[key]);
           if (mustBe) throw new Error(`${where}.${key} must be ${mustBe}`);
         }
+        const name = m.name as string;
+        const first = firstIndexByName.get(name);
+        if (first !== undefined) {
+          throw new Error(`${where} is named ${JSON.stringify(name)}, as workspace.mounts[${first}] is: a workspace takes each mount name once, since its tools and the instructions find a mount by its name. Give one of them another name.`);
+        }
+        firstIndexByName.set(name, i);
         if (m.backend === 'direct' && m.mode === undefined) {
           throw new Error(`${where} is direct, so it must say its mode: add "mode": "read-only", or "read-write" for one the agent writes on disk directly, with no undo`);
         }
@@ -3327,13 +3372,14 @@ export async function loadSavedRecipe(dataDir: string, options: { fetchSystemPro
   }
 
   if (!(SAVED_RECIPE_UNRESOLVED_KEY in raw)) {
-    return validateRecipe(raw);
+    const legacy = validateRecipe(raw);
+    return options.fetchSystemPrompt === false ? legacy : refuseUnfit(legacy);
   }
 
   const { [SAVED_RECIPE_UNRESOLVED_KEY]: _marker, ...unresolved } = raw as Record<string, unknown>;
   const substituted = substituteEnvVars(unresolved, path);
   const recipe = validateRecipe(substituted);
-  return options.fetchSystemPrompt === false ? recipe : resolveSystemPrompt(recipe);
+  return options.fetchSystemPrompt === false ? recipe : refuseUnfit(await resolveSystemPrompt(recipe));
 }
 
 /**

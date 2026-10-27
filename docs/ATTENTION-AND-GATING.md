@@ -142,9 +142,26 @@ Two optional per-rule fields:
 Ordering matters: put your "always" rules (DMs, mentions) **above** broad
 defer/debounce rules, since the first match wins. A matching rule *consumes* the
 event even when it decides not to wake — a non-`passthrough` sampler placed above
-your mention rule silently eats mentions. `wake_add_rule` and `gate_status`
-report `shadowWarnings` for rules an earlier rule provably makes unreachable; the
-check is conservative, so no warning isn't proof of safety.
+your mention rule silently eats mentions. `wake_add_rule` and `gate_status` note,
+under `shadowWarnings`, any rule an earlier one keeps from applying. The check is
+conservative, so no note isn't proof of safety.
+
+From the agent-framework release after 0.28.0 (agent-framework#859), each note
+also says what to do, and which of three kinds it is:
+
+- **never applies**: the earlier rule matches every event the later rule would.
+- **applies only to some**: the earlier rule takes some of the event types the
+  later rule is for (the later rule's scope names them, or its source sends them).
+- **may not matter**: the later rule names no event types, and the earlier rule
+  takes a type the later rule's source may never send. Nothing to do unless the
+  later rule is meant for that type; giving the later rule a `scope` clears the note.
+
+From that release, event types a rule's source never sends are also left out: an
+MCPL server's events are only its pushes and channel messages, so a rule like
+`{ source: "world" }` for a server with the id `world` isn't told about a
+`cli-input` rule that takes every `external-message`. Before it, such a rule is told
+the earlier rule makes it "unreachable" for `external-message`; that note needs no
+action.
 
 ## Changing your rules
 
@@ -161,8 +178,8 @@ check is conservative, so no warning isn't proof of safety.
   Reusing a name replaces that rule in place — or moves it, if you also give a
   placement. The result has a before/after **probe table** (which rule wins, and
   whether you'd wake, for a DM, a mention, a reply, ambient human and bot
-  chatter, and a heartbeat) and any `shadowWarnings`. Read them before ending the
-  turn.
+  chatter, and a heartbeat) and any `shadowWarnings`, the notes above: worth a
+  look before ending the turn.
 - **`wake_remove_rule`** `{ name }` — removes a rule (a pending debounce batch is
   delivered first) and says whether anything was removed.
 - **`channel-mode--set_channel_mode`** `{ channelId, mode, debounceMs? }` — present
