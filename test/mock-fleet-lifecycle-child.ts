@@ -5,6 +5,7 @@ import {
 } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { join } from 'node:path';
+import { finished } from 'node:stream';
 import { waitToBeListed } from '../src/fleet-begin.js';
 
 const options = JSON.parse(readFileSync(process.argv[2]!, 'utf8')) as {
@@ -26,6 +27,8 @@ const options = JSON.parse(readFileSync(process.argv[2]!, 'utf8')) as {
   begun?: string;
   closeStdinAtGate?: boolean;
   stdinErrorAtGate?: boolean;
+  chunks?: string;
+  stdinDone?: string;
 };
 if (options.closeStdinAtGate) {
   closeSync(0);
@@ -35,9 +38,18 @@ if (options.closeStdinAtGate) {
 }
 if (options.atGate !== undefined) writeFileSync(options.atGate, '');
 const listed = waitToBeListed();
+if (options.chunks !== undefined) {
+  const chunks = options.chunks;
+  process.stdin.on('data', (chunk: Buffer) => setImmediate(() => appendFileSync(chunks, `${chunk.length}\n`)));
+}
 if (options.stdinErrorAtGate) process.stdin.emit('error', new Error('a pipe that failed'));
 await listed;
 if (options.begun !== undefined) writeFileSync(options.begun, '');
+if (options.stdinDone !== undefined) {
+  const stdinDone = options.stdinDone;
+  process.stdin.resume();
+  finished(process.stdin, () => setImmediate(() => writeFileSync(stdinDone, '')));
+}
 const dataDir = process.env.DATA_DIR!;
 const socketPath = join(dataDir, 'ipc.sock');
 const pidPath = join(dataDir, 'headless.pid');
