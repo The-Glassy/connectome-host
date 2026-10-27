@@ -154,7 +154,7 @@ describe('what piped mode prints', () => {
     turns.onTrace({ type: 'inference:failed', agentName: 'spawn-c', error: 'overloaded' });
     expect(out).toEqual([
       'out:\n', 'out:Partial answer', 'out:\n', 'err:(turn ended: Stream aborted: timeout)',
-      'out:\n', 'out:Another', 'out:\n', 'err:Error: bad request',
+      'out:\n', 'out:Another', 'out:\n', 'err:Error: bad request', 'err:Turn ended after 1 attempt.',
       'out:\n', 'out:Half', 'out:\n', 'err:Error: overloaded',
     ]);
   });

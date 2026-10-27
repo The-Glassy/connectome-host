@@ -9,6 +9,7 @@ import type {
   ToolResult,
 } from '@animalabs/agent-framework';
 import { unknownToolResult } from './unknown-tool.js';
+import { hostNoteMetadata } from '../speaker.js';
 import { formatZonedDateTime, resolveTimeZone } from '@animalabs/agent-framework';
 
 interface TimeState {
@@ -51,7 +52,7 @@ export class TimeModule implements Module {
     const text =
       `The local time at the start of this session is ${now.local}.`;
 
-    ctx.addMessage('user', [{ type: 'text', text }]);
+    ctx.addMessage('user', [{ type: 'text', text }], hostNoteMetadata('session-start'));
     ctx.setState<TimeState>({ ...state, sessionStartAnnounced: true });
   }
 

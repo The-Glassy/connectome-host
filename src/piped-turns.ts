@@ -8,7 +8,8 @@
  * agent was created with: a sync subagent streams inside the primary's
  * turn, and its end isn't the end of the line's turn. The wait ends at one
  * of the primary's TURN_SETTLED_TRACES. At `inference:failed` it prints
- * the error and keeps waiting, since the framework may retry the turn, or
+ * the error, unless it repeats the error the turn's last failure printed,
+ * and keeps waiting, since the framework may retry the turn, or
  * hold it and run it again, and either answers the line. The wait's cap
  * still bounds it: a turn held longer than the cap lets the next line go
  * in, with a line on stderr saying so, and that turn's answer prints if it
@@ -19,6 +20,7 @@
  */
 
 import { STREAM_END_TRACES, TURN_SETTLED_TRACES, traceError } from './state/turn-trace.js';
+import { createTurnFailures, turnEndedLine } from './state/turn-failures.js';
 
 export interface PipedOutput {
   write(text: string): void;
@@ -29,13 +31,22 @@ export interface PipedOutput {
 export interface PipedTurns {
   onTrace(event: { type: string; [key: string]: unknown }): void;
   waitForTurn(capMs?: number): Promise<void>;
+  /** The host follows another framework, whose turns owe nothing to the
+   *  failures counted so far, and a line waiting on the old one's turn is
+   *  released. */
+  switched(): void;
 }
 
 /** The longest a line waits for its turn. */
 export const PIPED_TURN_CAP_MS = 120_000;
 
-export function createPipedTurns(primaryAgentName: string, out: PipedOutput): PipedTurns {
+export function createPipedTurns(
+  primaryAgentName: string,
+  out: PipedOutput,
+  hint: (errorType: string | undefined) => string | undefined = () => undefined,
+): PipedTurns {
   const streams = new Map<string, 'open' | 'failed'>();
+  let failures = createTurnFailures();
   let settle: (() => void) | null = null;
 
   function onTrace(event: { type: string; [key: string]: unknown }): void {
@@ -43,6 +54,7 @@ export function createPipedTurns(primaryAgentName: string, out: PipedOutput): Pi
     switch (event.type) {
       case 'inference:started':
         if (agent !== undefined) streams.set(agent, 'open');
+        failures.onTrace(event);
         out.write('\n');
         return;
       case 'inference:tokens':
@@ -63,11 +75,12 @@ export function createPipedTurns(primaryAgentName: string, out: PipedOutput): Pi
     if (agent === undefined || !STREAM_END_TRACES.has(event.type)) return;
     const state = streams.get(agent);
     if (state === undefined) return;
+    const step = failures.onTrace(event);
     const primary = agent === primaryAgentName;
     if (state === 'open') {
       if (event.type === 'inference:failed') {
         out.write('\n');
-        out.error(`Error: ${traceError(event)}`);
+        if (step?.show === 'line') out.error(`Error: ${step.text}`);
       } else if (event.type === 'inference:exhausted') {
         out.write('\n');
         out.error(primary ? `(turn ended: ${traceError(event)})` : `Error: ${traceError(event)}`);
@@ -78,6 +91,8 @@ export function createPipedTurns(primaryAgentName: string, out: PipedOutput): Pi
         out.write('\n');
       }
     }
+    const ended = primary && step?.show === 'ended' ? turnEndedLine(step, hint(step.errorType)) : undefined;
+    if (ended) out.error(ended);
     if (!TURN_SETTLED_TRACES.has(event.type)) {
       streams.set(agent, 'failed');
       return;
@@ -105,7 +120,15 @@ export function createPipedTurns(primaryAgentName: string, out: PipedOutput): Pi
     });
   }
 
-  return { onTrace, waitForTurn };
+  function switched(): void {
+    streams.clear();
+    failures = createTurnFailures();
+    const done = settle;
+    settle = null;
+    done?.();
+  }
+
+  return { onTrace, waitForTurn, switched };
 }
 
 export interface TraceSource {

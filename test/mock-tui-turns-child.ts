@@ -75,6 +75,7 @@ let endSwitch!: (outcome: 'switched' | 'failed') => void;
 const app = {
   membrane: {},
   recipe: { name: 'tui-turns-test', agent: { name: 'agent' } },
+  credentials: { provider: 'anthropic', snapshot: () => ({ kind: 'ok' }) },
   branchState: { undoStack: [], redoStack: [], checkpoints: new Map() },
   sessionManager: {
     getActiveSession: () => active,
@@ -285,6 +286,37 @@ async function play(): Promise<void> {
     await pressed(() => mockInput.pressArrow('down'), 'Down');
     await pressed(() => mockInput.pressEnter(), 'Enter');
     await step('fleet');
+  } else if (scenario === 'repeated-failures') {
+    const sub = 'spawn-web-1700000000000';
+    for (let i = 0; i < 3; i++) {
+      first.send('inference:started');
+      first.send('inference:failed', { error: 'zz connection refused' });
+    }
+    await step('three failures');
+    first.send('inference:started');
+    first.send('inference:failed', { error: 'zz credential rejected' });
+    await step('other words');
+    first.send('inference:exhausted', { error: 'zz credential rejected', errorType: 'auth' });
+    await step('gave up');
+    for (let i = 0; i < 2; i++) {
+      first.send('inference:started', { agentName: sub });
+      first.send('inference:started');
+      first.send('inference:failed', { agentName: sub, error: 'zz subagent failure' });
+      first.send('inference:failed', { error: 'zz root again' });
+    }
+    await step('subagent twice');
+    first.send('inference:started');
+    first.send('inference:exhausted', { error: 'zz stream aborted' });
+    await step('aborted retry');
+    first.send('inference:started');
+    first.send('inference:failed', { error: 'zz before the switch' });
+    await command('/session switch other');
+    await until(async () => (await frame()).includes('switching'), 'the switch to start');
+    endSwitch('switched');
+    await until(async () => (await frame()).includes('Session: other'), 'the switch to end');
+    second.send('inference:started');
+    second.send('inference:failed', { error: 'zz before the switch' });
+    await step('after the switch');
   } else if (scenario === 'subagent-exhausted') {
     const agentName = 'spawn-web-1700000000000';
     subagents.activeSubagents.set('spawn-web', {

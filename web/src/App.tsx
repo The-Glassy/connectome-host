@@ -74,6 +74,7 @@ interface Message {
   id: string;
   storeId?: string;
   participant: 'user' | 'assistant' | 'system' | 'tool' | 'command' | 'trigger';
+  speaker?: string;
   text: string;
   blocks?: UiBlock[];
   index?: number;
@@ -99,6 +100,7 @@ function entryToMessage(e: WelcomeMessageEntry): Message {
     id: e.id ?? nextMessageId(),
     ...(e.id ? { storeId: e.id } : {}),
     participant: e.participant,
+    ...(e.speaker !== undefined ? { speaker: e.speaker } : {}),
     text: e.text,
     blocks: (e.blocks ?? []) as UiBlock[],
     index: e.index,
@@ -1902,7 +1904,7 @@ function MessageView(props: {
   if (props.msg.participant === 'user') {
     return (
       <div class="msg-enter">
-        <div class="text-xs text-neutral-500 mb-1">you<TimeChip ts={props.msg.timestamp} /></div>
+        <div class="text-xs text-neutral-500 mb-1">{props.msg.speaker ?? 'you'}<TimeChip ts={props.msg.timestamp} /></div>
         <div class="font-mono text-sm whitespace-pre-wrap text-neutral-200">{props.msg.text}</div>
         <MediaChips blocks={props.msg.blocks} />
       </div>

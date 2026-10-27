@@ -20,6 +20,7 @@ import { unknownToolResult } from './unknown-tool.js';
 import { workspaceReadFields } from '../workspace-read-result.js';
 import { storedInjectionMarkOf } from '@animalabs/agent-framework';
 import { storedInjectionLabel } from '../stored-injection.js';
+import { speakerOf } from '../speaker.js';
 import type { ServerWebSocket } from 'bun';
 import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
@@ -3032,6 +3033,7 @@ export function toWireEntry(
     blocks,
     text: textParts.join('\n'),
   };
+  if (participant === 'user') entry.speaker = speakerOf(msg.participant, msg.metadata).label;
   if (msg.id) entry.id = msg.id;
   const ts = msg.timestamp instanceof Date ? msg.timestamp.getTime() : msg.timestamp;
   if (ts) entry.timestamp = ts;

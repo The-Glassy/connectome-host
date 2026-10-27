@@ -22,6 +22,8 @@ import { FleetTreeAggregator } from './state/fleet-tree-aggregator.js';
 import type { AgentNode } from './state/agent-tree-reducer.js';
 import { emptyUsage, foldUsageSample, type UsageCounts, type UsageSample } from './state/stream-usage.js';
 import { STREAM_END_TRACES, TURN_RUNNING_TRACES, traceError } from './state/turn-trace.js';
+import { createFailureLines, createTurnFailures, turnEndedLine, type FailureStep } from './state/turn-failures.js';
+import { failureHint } from './failure-hint.js';
 import { TurnInterrupts, interruptSubagents } from './state/turn-interrupt.js';
 import { switchFollowing, traceFollower } from './piped-turns.js';
 import { type FleetModule } from './modules/fleet-module.js';
@@ -35,6 +37,7 @@ import { hostUpdate } from './update/update.js';
 import { effectiveContextBudgetTokens } from './framework-agent-config.js';
 import { storedInjectionMarkOf } from '@animalabs/agent-framework';
 import { storedInjectionLabel } from './stored-injection.js';
+import { speakerOf, type Speaker } from './speaker.js';
 
 export function fmtTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
@@ -79,6 +82,14 @@ export function sliceViewport(len: number, cursor: number, avail: number): { sta
 
 function headerMessage(message: string): string {
   return message.length > 70 ? `${message.slice(0, 67).replace(/[\uD800-\uDBFF]$/, '')}…` : message;
+}
+
+export function historyUserLine(
+  msg: { participant: string; metadata?: unknown },
+  text: string,
+): { text: string; speaker: Speaker['kind'] } {
+  const speaker = speakerOf(msg.participant, msg.metadata);
+  return { text: `${speaker.kind === 'you' ? 'You' : speaker.label}: ${text}`, speaker: speaker.kind };
 }
 
 export function historyInjectionLine(
@@ -402,6 +413,9 @@ export async function runTui(app: AppContext): Promise<void> {
   type SubagentPhase = 'sending' | 'streaming' | 'invoking' | 'executing' | 'done' | 'failed';
   const subagentPhase = new Map<string, SubagentPhase>();
   const subagentFailureShown = new Set<string>();
+  let turnFailures = createTurnFailures();
+  const failedTurnHint = failureHint(app.recipe, process.env, app.credentials);
+  const failureLines = createFailureLines();
   const PHASE_COLOR: Record<SubagentPhase, string> = {
     sending: YELLOW,
     streaming: CYAN,
@@ -589,18 +603,27 @@ export async function runTui(app: AppContext): Promise<void> {
     }
   }
 
-  function addLine(text: string, color: string = WHITE) {
-    if (stopping) return;
-    scrollBox.add(new TextRenderable(renderer, {
+  function addLine(text: string, color: string = WHITE): TextRenderable | undefined {
+    if (stopping) return undefined;
+    const line = new TextRenderable(renderer, {
       id: `msg-${++messageCounter}`,
       content: text,
       fg: color,
-    }));
+    });
+    scrollBox.add(line);
     pruneScrollback();
+    return line;
   }
 
   function addEvent(text: string, color: string = WHITE) {
     addLine(`${hhmm()} ${text}`, color);
+  }
+
+  function showFailure(agent: string, label: string, step: Exclude<FailureStep, { show: 'ended' }>, color: string): void {
+    failureLines.show(agent, `${hhmm()} ${label}`, step, (text) => {
+      const line = addLine(text, color);
+      return line && { setText: (next: string) => { line.content = next; }, get isDestroyed() { return line.isDestroyed; } };
+    });
   }
 
   function getAgentBudget(name: string): number | undefined {
@@ -743,7 +766,8 @@ export async function runTui(app: AppContext): Promise<void> {
       for (const block of msg.content) {
         if (block.type === 'text' && (block as { text: string }).text.trim()) {
           if (msg.participant === 'user') {
-            addLine(`You: ${(block as { text: string }).text}`, GREEN);
+            const line = historyUserLine(msg, (block as { text: string }).text);
+            addLine(line.text, line.speaker === 'you' ? GREEN : line.speaker === 'host' ? DIM_GRAY : CYAN);
           } else {
             addLine((block as { text: string }).text, WHITE);
           }
@@ -1561,6 +1585,10 @@ export async function runTui(app: AppContext): Promise<void> {
       rootTurnShowing = step.showing;
       rootEnd = step.end;
     }
+    const failure = turnFailures.onTrace(event as { type: string; agentName?: unknown });
+    if (agent === rootAgentName && failure && failure.show !== 'ended' && rootEnd?.line) {
+      rootEnd = { status: rootEnd.status, background: rootEnd.background };
+    }
 
     switch (event.type) {
       case 'inference:started': {
@@ -1661,7 +1689,8 @@ export async function runTui(app: AppContext): Promise<void> {
             subagentPhase.set(short, 'failed');
             subagentFailureShown.add(agent);
           }
-          addEvent(`[${agent}] Error: ${traceError(event)}`, DIM_GRAY);
+          if (agent && failure && failure.show !== 'ended') showFailure(agent, `[${agent}] `, failure, DIM_GRAY);
+          else addEvent(`[${agent}] Error: ${traceError(event)}`, DIM_GRAY);
         }
         break;
       }
@@ -1811,6 +1840,13 @@ export async function runTui(app: AppContext): Promise<void> {
     }
     if (rootEnd) showRootTurnEnd(rootEnd);
     else if (agent === rootAgentName && STREAM_END_TRACES.has(event.type as string)) updateStatus();
+    if (agent === rootAgentName && failure) {
+      if (failure.show !== 'ended') showFailure(agent, '', failure, RED);
+      else {
+        const ended = turnEndedLine(failure, failedTurnHint(failure.errorType));
+        if (ended) addEvent(ended, RED);
+      }
+    }
   }
 
   const rootTraces = traceFollower(onTrace as (e: unknown) => void);
@@ -2336,6 +2372,8 @@ export async function runTui(app: AppContext): Promise<void> {
         updateStatus();
         interrupts.reset();
         rootTurnShowing = false;
+        turnFailures = createTurnFailures();
+        failureLines.clear();
 
         const sessionId = result.switchToSessionId;
         const follower = {

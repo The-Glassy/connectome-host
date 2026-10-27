@@ -134,6 +134,10 @@ export interface WelcomeMessageEntry {
    *  the first shard's index. */
   index: number;
   participant: 'user' | 'assistant' | 'system' | 'tool';
+  /** Who a `user` entry reads as: `you` only for what came in as the host's
+   *  own input, else the host by kind, a channel message's author with its
+   *  channel, a push's author or else its server, or `user`. */
+  speaker?: string;
   /** Ordered content blocks — the full internal life of the message. */
   blocks: MessageBlock[];
   /** Flattened text content (text blocks only). */
