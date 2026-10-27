@@ -244,7 +244,8 @@ scripts resolve the libs. A stock install's `node_modules` already holds them, s
 symlinks there:
 
 ```bash
-mkdir -p ~/<agent>-cm/{recipes,data,files,notes,scripts,logs}
+mkdir -p ~/<agent>-cm/{recipes,files,notes,scripts,logs}
+mkdir -p -m 700 ~/<agent>-cm/data   # the agent's history and call logs: its owner's alone, as a host makes a new one
 ```
 
 Local-checkout route only:
@@ -649,7 +650,8 @@ Two `systemd --user` units in `~/.config/systemd/user/`:
 
 Set explicit `PATH` in the units (login-shell PATH isn't loaded for services).
 
-Add a **backups cron** (snapshot `data/` every ~15 min) and a lightweight **watchdog** cron
+Add a **backups cron** (snapshot `data/` every ~15 min, run as the agent's user or root, since
+`data/` is readable by its owner alone) and a lightweight **watchdog** cron
 (detect "messages arriving but no reply for N min" → restart, with a cooldown so it can't
 restart-loop). These caught real incidents.
 

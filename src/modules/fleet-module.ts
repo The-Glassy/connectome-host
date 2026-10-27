@@ -29,6 +29,7 @@ import { parseCommand } from '../command-name.js';
 import { AGENT_OVERLAY_FILE_ENV, AGENT_OVERLAY_FILE_NAME, CHILD_AGENT_OVERLAY_FILE_NAME, seedChildAgentOverlay } from '../mcpl-config.js';
 import { unknownToolResult } from './unknown-tool.js';
 import { INSTALL_ROOT_ENV, isChildEntry, readRecord, writeJsonAtomic, type ChildrenFile } from '../update/contract.js';
+import { PRIVATE_DIR_MODE } from '../update/data-swap.js';
 import { FLEET_BEGIN_ENV } from '../fleet-begin.js';
 
 const HOST_FORCED_TELEMETRY_EVENTS: readonly string[] = ['usage:updated'];
@@ -1334,7 +1335,7 @@ export class FleetModule implements Module {
     }
 
     try {
-      mkdirSync(dataDir, { recursive: true });
+      mkdirSync(dataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
     } catch (err) {
       return {
         success: false, isError: true,
