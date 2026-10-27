@@ -269,8 +269,8 @@ ln -sfn ../../../connectome-local/context-manager/node_modules/@animalabs/chroni
     "systemPrompt": "",                     // empty, or a few sentences at most — see below
     "thinking": { "enabled": true, "type": "adaptive", "display": "summarized" },
     "maxTokens": 32000,                     // response cap
-    "maxStreamTokens": 320000,              // recompile trigger; keep < model window
-    "contextBudgetTokens": 300000,          // SEE §11.1 — MUST fit under (window - maxTokens)
+    "maxStreamTokens": 320000,              // recompile trigger on uncached input; see §11.1
+    "contextBudgetTokens": 300000,          // SEE §11.1 — with the system prompt and tools, keep it under the window
     "cacheTtl": "1h",                       // prompt-cache TTL; defaults to '1h', set '5m' explicitly for rapid sub-5m loops
     "strategy": {
       "type": "autobiographical",
@@ -374,9 +374,11 @@ churn in the field.
 autobiographical + `adaptiveResolution: true` + `foldingStrategy: "kv-unified"` with the
 host's standard `kvUnified` block (§5b) + same-model compression (`compressionModel` falls
 back to `agent.model`) + `summaryParticipant` = `agent.name`. Omitted sizes: a
-`contextBudgetTokens` of 300k (for 1M-window models — set your own on a smaller window,
-§11.1), a `recentWindowTokens` of 40% of the budget (120k at 300k), and a `maxStreamTokens`
-of 320k when the budget is also omitted, else 150k. That tail is worked out once, from the
+`contextBudgetTokens` of 300k, or, on Anthropic's API for a model the host knows a window for, with a `maxTokens`
+that is unset or a positive number, the smaller of 300k and the window less the system prompt and 32k for the tools (§11.1); a `recentWindowTokens`
+of 40% of the budget (120k at 300k), or 40% of the budget less `maxTokens` where the head and
+40% of the budget wouldn't fit beside `maxTokens` with context-manager's over-budget grace; and a `maxStreamTokens` of the
+budget plus 20k when the budget is also omitted, else 150k. That tail is worked out once, from the
 recipe's budget: if you lower the budget at runtime on a recipe without its own tail, lower
 `tailTokens` with it, or compiles fail once the history fills the tail. A resident whose store was built under
 `kv-stable` must pin `"foldingStrategy": "kv-stable"` before it moves to such a host, or
@@ -683,12 +685,24 @@ Snapshot a clean baseline once it's verified.
 ## 11. CRITICAL gotchas (read before deploying)
 
 **11.1 — `contextBudgetTokens` must fit the model window.** The autobiographical strategy
-fills context up to `contextBudgetTokens`, which defaults to 300k when the recipe omits it —
-right for 1M-window models, fatal on a 200k one. If that plus the response (`maxTokens`) exceeds the
-model's context window, **every reply silently 400s** — the agent appears to "think but not
-speak" (compression calls, with small contexts, still succeed; full replies don't). Rule:
-`contextBudgetTokens + maxTokens + overhead  <  model window`. For a 200k-window model with a
-16k response cap, keep the budget around 160–178k. As a conversation **grows**, the equilibrium
+fills context up to `contextBudgetTokens` less `maxTokens`, which it keeps for the reply, and the
+system prompt and the tools' definitions come on top. If that prompt is over the model's context
+window, **every reply 400s** ("prompt is too long") once the conversation fills the budget — the
+agent appears to "think but not speak" (compression calls, with small contexts, still succeed;
+full replies don't). The hard limit: `contextBudgetTokens − maxTokens + system prompt + tools  <
+model window`, where the head and the verbatim tail count in place of `contextBudgetTokens − maxTokens`
+if they come to more, as they can within `overBudgetGraceRatio`. The working rule leaves the reply its room too: `contextBudgetTokens + system
+prompt + tools  ≤  model window`, for a compile that keeps to the budget less `maxTokens` (the head and the
+verbatim tail can pass that by up to the grace). A long turn's tool results add to the prompt
+between compiles, so at a full compile a budget over the working rule leaves a turn less room
+before the API refuses its prompt. `maxStreamTokens` counts uncached input only, so with prompt caching on it doesn't
+bound a turn. On Anthropic's API the host checks part of this for you, on a model it knows a
+window for and a recipe whose numbers it can read: a recipe that sets no budget gets one that keeps the working
+rule, leaving 32k for the tools, and a load that resolves
+the system prompt refuses a budget whose prompt, without the tools, would pass the window, a
+budget that leaves too little room for the head and the verbatim tail once `maxTokens` is kept
+for the reply, or a `maxTokens` over the model's maximum output, naming the numbers and the changes it found that would let it load. On any other provider, or for a model it knows no window for, it prints one line at
+start saying the fit wasn't checked, and the rules are yours to keep. As a conversation **grows**, the equilibrium
 context creeps up — watch the makeup view and trim budget / `recentWindowTokens` before it
 crosses the line. (This was the opus4 outage; diagnosing it is *why* the makeup view exists.)
 
