@@ -161,7 +161,7 @@ export function handleCommand(command: string, app: AppContext): CommandResult {
           { text: '  /restore [name]        Restore to checkpoint (no name: list checkpoints)', style: 'system' },
           { text: '  /branches              List Chronicle branches and checkpoints', style: 'system' },
           { text: '  /checkout <name>       Switch to branch', style: 'system' },
-          { text: '  /history [n]           Show state transitions (last n)', style: 'system' },
+          { text: '  /history [n]           Show the last n messages (20 by default)', style: 'system' },
           { text: '  /find <text>           Search messages for text', style: 'system' },
           { text: '  /branchto <msgId>      Branch from a specific message', style: 'system' },
           { text: '  /mcp list              List MCPL servers', style: 'system' },

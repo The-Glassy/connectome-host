@@ -825,7 +825,7 @@ headless socket.
 | `/branches` | List Chronicle branches and checkpoints |
 | `/checkout <name>` | Switch to branch |
 | `/branchto <msgId>` | Branch from a specific message |
-| `/history [n]` | Show recent state transitions |
+| `/history [n]` | Show the last n messages (20 by default) |
 | `/find <text>` | Search messages for text |
 | `/mcp list` | List servers in `mcpl-servers.json` |
 | `/mcp add <id> <cmd> [args...]` | Add or overwrite a registry server (keeps its env) |
