@@ -23,7 +23,7 @@ import { join, resolve, isAbsolute } from 'node:path';
 import { uptime } from 'node:os';
 import { type IncomingCommand, type WireEvent, type PanelResponseEvent, type UpdateResponseEvent, matchesSubscription } from './fleet-types.js';
 import type { SwitchRequest } from '../update/quiesce.js';
-import { loadRecipe } from '../recipe.js';
+import { loadRecipeDetailed } from '../recipe.js';
 import { REDUCER_REQUIRED_EVENTS } from '../state/agent-tree-reducer.js';
 import { parseCommand } from '../command-name.js';
 import { AGENT_OVERLAY_FILE_ENV, AGENT_OVERLAY_FILE_NAME, CHILD_AGENT_OVERLAY_FILE_NAME, seedChildAgentOverlay } from '../mcpl-config.js';
@@ -1192,7 +1192,7 @@ export class FleetModule implements Module {
       : resolve(process.cwd(), input.recipe);
 
     try {
-      const childRecipe = await loadRecipe(recipePath);
+      const childRecipe = (await loadRecipeDetailed(recipePath, { fetchSystemPrompt: false })).recipe;
       const fleetField = childRecipe.modules?.fleet;
       const declaresFleet = fleetField === true ||
         (typeof fleetField === 'object' && fleetField !== null);
