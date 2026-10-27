@@ -33,6 +33,12 @@ export interface RecipeStrategy {
    *  Required for pre-4.x models (Claude 3 Opus caps at 4096) — without it the
    *  summarizer's 16k floor is rejected and the agent never folds. */
   compressionMaxTokens?: number;
+  /**
+   * Opt-in compatibility for a non-reasoning model that authors the complete
+   * compression result inside one closed literal `<thinking>…</thinking>`
+   * text wrapper. Recovers only that exact whole-response shape as prose.
+   */
+  recoverLiteralThinkingWrappedCompression?: boolean;
   maxMessageTokens?: number;
   /** Maximum live image count, newest-first (default 6). Zero means up to
    * context-manager's image ceiling, 500, and a larger value is held to it. */
@@ -933,7 +939,8 @@ export interface RecipeModules {
    * agent-framework keeps none of its own files there: a recipe whose other
    * mounts are each read-only, have an include, or are configured direct
    * keeps no over-cap tool result, saved payload or fetched reference in a
-   * file. No mount of the recipe's own is named `_config`.
+   * file. No mount of the recipe's own is named `_config`, and no two of
+   * them share a name, compared exactly.
    */
   workspace?: boolean | { mounts: RecipeWorkspaceMount[]; configMount?: boolean };
   /**
@@ -2493,6 +2500,7 @@ export function validateRecipe(raw: unknown): Recipe {
       'compressionMergeSourceOnlyFallback',
       'compressionSplitFallback',
       'compressionSplitPlaceholder',
+      'recoverLiteralThinkingWrappedCompression',
     ] as const) {
       if (strategy[key] !== undefined && typeof strategy[key] !== 'boolean') {
         throw new Error(`Recipe agent.strategy.${key} must be a boolean.`);
@@ -2745,6 +2753,7 @@ export function validateRecipe(raw: unknown): Recipe {
       if (!Array.isArray(ws.mounts) || ws.mounts.length === 0) {
         throw new Error('workspace.mounts must be a non-empty array');
       }
+      const firstIndexByName = new Map<string, number>();
       for (let i = 0; i < ws.mounts.length; i++) {
         const m = ws.mounts[i] as Record<string, unknown>;
         const where = `workspace.mounts[${i}]`;
@@ -2763,6 +2772,12 @@ export function validateRecipe(raw: unknown): Recipe {
           const mustBe = MOUNT_KEY_CHECKS[key](m[key]);
           if (mustBe) throw new Error(`${where}.${key} must be ${mustBe}`);
         }
+        const name = m.name as string;
+        const first = firstIndexByName.get(name);
+        if (first !== undefined) {
+          throw new Error(`${where} is named ${JSON.stringify(name)}, as workspace.mounts[${first}] is: a workspace takes each mount name once, since its tools and the instructions find a mount by its name. Give one of them another name.`);
+        }
+        firstIndexByName.set(name, i);
         if (m.backend === 'direct' && m.mode === undefined) {
           throw new Error(`${where} is direct, so it must say its mode: add "mode": "read-only", or "read-write" for one the agent writes on disk directly, with no undo`);
         }

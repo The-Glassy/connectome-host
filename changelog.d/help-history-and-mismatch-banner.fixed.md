@@ -1,2 +1,0 @@
-- `/help` and the README say `/history [n]` shows the last n messages, 20 by default, which is what it shows, rather than "state transitions".
-- The Web UI's protocol-mismatch banner tells every install what to do, the least disruptive step first: reload the page; if the banner stays and the host runs from a clone, rebuild the SPA and reload; if it still stays, restart the host and reload. Before, its whole sentence began "In a clone,", so it read as advice for a clone alone.
