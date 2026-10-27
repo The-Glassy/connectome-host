@@ -2741,6 +2741,7 @@ export function validateRecipe(raw: unknown): Recipe {
       if (!Array.isArray(ws.mounts) || ws.mounts.length === 0) {
         throw new Error('workspace.mounts must be a non-empty array');
       }
+      const firstIndexByName = new Map<string, number>();
       for (let i = 0; i < ws.mounts.length; i++) {
         const m = ws.mounts[i] as Record<string, unknown>;
         const where = `workspace.mounts[${i}]`;
@@ -2759,6 +2760,12 @@ export function validateRecipe(raw: unknown): Recipe {
           const mustBe = MOUNT_KEY_CHECKS[key](m[key]);
           if (mustBe) throw new Error(`${where}.${key} must be ${mustBe}`);
         }
+        const name = m.name as string;
+        const first = firstIndexByName.get(name);
+        if (first !== undefined) {
+          throw new Error(`workspace.mounts[${i}] is named ${JSON.stringify(name)}, as workspace.mounts[${first}] is: a workspace takes each mount name once, since its tools and the instructions find a mount by its name. Give one of them another name.`);
+        }
+        firstIndexByName.set(name, i);
         if (m.backend === 'direct' && m.mode === undefined) {
           throw new Error(`${where} is direct, so it must say its mode: add "mode": "read-only", or "read-write" for one the agent writes on disk directly, with no undo`);
         }
