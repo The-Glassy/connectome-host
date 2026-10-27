@@ -796,8 +796,14 @@ async function main() {
   await waitToBeListed();
   installHere = releaseHere();
   if (installHere !== null) armTrialLog(installHere);
-  // mkdirSync's mode applies only to the directories it creates.
-  mkdirSync(config.dataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
+  try {
+    // mkdirSync's mode applies only to the directories it creates.
+    mkdirSync(config.dataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
+  } catch (err) {
+    console.error(`The host can't make its data directory ${config.dataDir}, so it stops: ${err instanceof Error ? err.message : String(err)}`);
+    console.error('Set DATA_DIR to a path where this user has or can make a directory, or fix what the error names.');
+    process.exit(1);
+  }
   const recipe = await resolveRecipe();
   const provider = resolveProvider(recipe);
 

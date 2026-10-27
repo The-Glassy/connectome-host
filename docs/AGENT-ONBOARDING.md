@@ -245,7 +245,7 @@ symlinks there:
 
 ```bash
 mkdir -p ~/<agent>-cm/{recipes,files,notes,scripts,logs}
-mkdir -m 700 ~/<agent>-cm/data   # the agent's history and call logs: its owner's alone, as a host makes a new one
+mkdir -p -m 700 ~/<agent>-cm/data   # the agent's history and call logs: its owner's alone, as a host makes a new one
 ```
 
 Local-checkout route only:

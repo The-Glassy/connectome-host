@@ -177,6 +177,33 @@ describe('headless daemon: its data directory', () => {
     }
   }, 60_000);
 
+  test("a host whose data directory can't be made stops, naming it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'fkm-headless-datadir-'));
+    const dataDir = join(dir, 'data');
+    let child: ChildProcess | undefined;
+    try {
+      writeFileSync(dataDir, 'a file where the data directory goes\n');
+      const recipe = join(dir, 'recipe.json');
+      writeFileSync(recipe, JSON.stringify(MINIMAL_RECIPE), 'utf-8');
+      child = spawn('bun', [INDEX_PATH, recipe, '--headless', '--socket-path', join(dir, 'ipc.sock')], {
+        cwd: dir,
+        env: { ...process.env, ANTHROPIC_API_KEY: 'sk-test-headless-datadir', DATA_DIR: dataDir },
+        stdio: ['ignore', 'ignore', 'pipe'],
+      });
+      let stderr = '';
+      child.stderr!.on('data', (chunk) => { stderr += chunk; });
+      const exited = child;
+      const code = await new Promise<number | null>((resolveExit) => exited.once('close', (c) => resolveExit(c)));
+      expect(code).toBe(1);
+      expect(stderr).toContain(`The host can't make its data directory ${dataDir}, so it stops:`);
+      expect(stderr).toContain('Set DATA_DIR to a path where this user has or can make a directory');
+      expect(stderr).not.toContain('Fatal error');
+    } finally {
+      if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   async function startUntilItsSocketFails(dir: string, dataDir: string): Promise<void> {
     let child: ChildProcess | undefined;
     const umask = process.umask(0o022);

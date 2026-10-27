@@ -218,7 +218,7 @@ function loadState(dataDir: string): State {
 
 export function writeRecipeOut(out: string, recipe: Record<string, unknown>): void {
   mkdirSync(dirname(out), { recursive: true, mode: PRIVATE_DIR_MODE });
-  writeFileSync(out, JSON.stringify(recipe, null, 2) + '\n');
+  writeFileSync(out, JSON.stringify(recipe, null, 2) + '\n', { mode: 0o600 });
 }
 
 /** rename(2) replaces atomically only within one filesystem, so the temp file

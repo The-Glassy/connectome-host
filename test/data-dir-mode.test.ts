@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { lstatSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { SessionManager } from '../src/session-manager.js';
@@ -54,13 +54,22 @@ describe('a data directory a script makes before any host runs', () => {
     expect(modeOf(data)).toBe(0o700);
   });
 
+  test("the evacuator's recipe file is created readable by its owner alone, and one already there keeps its mode", () => {
+    const out = join(freshDataDir(), 'evacuated-recipe.json');
+    underUmask022(() => writeRecipeOut(out, { agent: { name: 'Claude' } }));
+    expect(modeOf(out)).toBe(0o600);
+    chmodSync(out, 0o644);
+    underUmask022(() => writeRecipeOut(out, { agent: { name: 'Claude' } }));
+    expect(modeOf(out)).toBe(0o644);
+  });
+
   test("the Codex importer makes its instance directory and the rollout's copy's directory for their owner alone", () => {
     const out = freshDataDir();
     const rollout = join(dirname(out), 'rollout-test.jsonl');
     writeFileSync(rollout, JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user', content: 'hello' } }) + '\n');
     let run: ReturnType<typeof spawnSync> | undefined;
     underUmask022(() => {
-      run = spawnSync('bun', [join(import.meta.dir, '..', 'scripts', 'import-codex-rollout.ts'), rollout, '--out', out], { encoding: 'utf-8' });
+      run = spawnSync('bun', [join(import.meta.dir, '..', 'scripts', 'import-codex-rollout.ts'), rollout, '--out', out], { encoding: 'utf-8', timeout: 50_000 });
     });
     if (run!.status !== 0) throw new Error(`the import exited ${run!.status}: ${run!.stderr}`);
     expect(modeOf(out)).toBe(0o700);
