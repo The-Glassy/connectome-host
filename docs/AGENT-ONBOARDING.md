@@ -381,13 +381,18 @@ the answer, not the haystack. A script that runs long yields and keeps going; th
 wait on it, stop it, or leave it running past its turn, and a script can wake the agent with
 `wake_agent(payload)` (it is also woken if the script fails or reaches its lifetime). Each
 script starts fresh and reaches nothing but the agent's tools — no network, files, timers or
-packages — so it adds no authority: anything a script does, the agent could already do one
-call at a time.
+packages — so by design it adds no authority: anything a script does, the agent could already
+do one call at a time. That holds as far as the engine holds. The script runs in QuickJS's
+WebAssembly sandbox inside a child process of the host, as the host's user, with no
+operating-system sandbox around it: agent-framework claims no containment beyond its engine and
+its glue (the security note on `RecipeCodeExecution` in `src/recipe.ts`). A resident that already
+has a shell tool can already do far more than a script can; on one without, weigh that before
+turning it on.
 
 There is nothing to install: the engine (QuickJS, in a child process) ships with
 agent-framework 0.24 and later. Releases before that ran Python and took other keys
-(`pythonPath`, `idleReclaimMs`, `env`, `scriptTimeoutMs` …), which current hosts refuse with a
-message saying what replaced each. Every limit has a default (`yieldMs`, `maxYieldMs`,
+(`pythonPath`, `idleReclaimMs`, `env`, `scriptTimeoutMs` …); in a block with `"enabled": true`,
+current hosts refuse them with a message saying what replaced each. Every limit has a default (`yieldMs`, `maxYieldMs`,
 `scriptLifetimeMs`, `maxRunningScripts`, `maxScriptChildren`, `toolCallTimeoutMs`,
 `wakeMinIntervalMs`, `maxWakesPerScript`, `memoryMaxBytes`), so `{ "enabled": true }` is the
 whole setting; `"enabled": false` turns it off. Turning it on for a running resident adds one

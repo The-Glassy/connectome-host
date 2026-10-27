@@ -37,12 +37,6 @@ export type FrameworkAgentConfig = AgentConfig & {
 };
 
 /**
- * Prompt caching went GA on Bedrock in April 2025 for 3.5 Haiku, 3.7 Sonnet,
- * and Claude 4+, but not for 3.5 Sonnet (either version): 1022 ("3.6") was
- * in the Dec 2024 preview and was dropped at GA, and Bedrock refuses it with
- * an account-level "your request did not allow prompt caching".
- */
-/**
  * agent-framework's `codeExecution` option as `AgentFramework.create` takes it:
  * the recipe's block when it has one (the built-in default recipe does), and
  * nothing otherwise, so an agent-framework without the option reads nothing it
@@ -52,6 +46,12 @@ export function codeExecutionOption(recipe: Recipe): { codeExecution?: NonNullab
   return recipe.codeExecution ? { codeExecution: recipe.codeExecution } : {};
 }
 
+/**
+ * Prompt caching went GA on Bedrock in April 2025 for 3.5 Haiku, 3.7 Sonnet,
+ * and Claude 4+, but not for 3.5 Sonnet (either version): 1022 ("3.6") was
+ * in the Dec 2024 preview and was dropped at GA, and Bedrock refuses it with
+ * an account-level "your request did not allow prompt caching".
+ */
 export function bedrockModelSupportsPromptCaching(model: string): boolean {
   const id = model.toLowerCase();
   if (!id.includes('claude')) return false;
