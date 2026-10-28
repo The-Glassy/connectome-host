@@ -8,7 +8,7 @@
  *   bun src/index.ts --no-tui                  # Readline mode on a terminal
  *   echo "hi" | bun src/index.ts <recipe>      # Batch mode (any non-TTY stdin): run lines, stop at EOF
  *   bun src/index.ts --headless                # Daemon mode: JSONL over Unix socket at $DATA_DIR/ipc.sock
- *   bun src/index.ts --headless --exit-when-idle   # One-shot: exit when agents go idle after first inference
+ *   bun src/index.ts --headless --exit-when-idle   # One-shot: exit when, after the first inference or text, agents are idle with nothing in flight
  *
  * Environment variables:
  *   ANTHROPIC_API_KEY   - Recipe provider "anthropic" needs this or one of
@@ -155,6 +155,8 @@ interface AppContext {
   credentials: CredentialMonitor | null;
   subscriptionUnmetered: boolean;
   stopping?: boolean;
+  switching?: boolean;
+  onFrameworkReplaced?: () => void;
 
   switchSession(id: string): Promise<void>;
 }
@@ -1109,6 +1111,7 @@ async function main() {
         },
         install: async (next) => {
           this.framework = next;
+          this.onFrameworkReplaced?.();
           await startFramework(next, null);
           this.userMessageCount = 0;
           resetBranchState(this.branchState);
