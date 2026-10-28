@@ -2018,7 +2018,7 @@ export class FleetModule implements Module {
 
   private recordEvent(child: FleetChild, event: WireEvent): void {
     child.lastEventAt = Date.now();
-    if (event.type === 'inference:started') {
+    if (event.type === 'inference:started' && (event as { replay?: unknown }).replay !== true) {
       child.idleSinceWork = false;
     } else if (event.type === 'lifecycle') {
       const { phase, idle, texts } = event as { phase?: string; idle?: unknown; texts?: unknown };
