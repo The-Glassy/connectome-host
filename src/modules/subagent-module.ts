@@ -1886,7 +1886,7 @@ export class SubagentModule implements Module {
       : `${stop.by ? `stopped by ${stop.by}` : 'cancelled by user'}${stop.reason ? `: ${stop.reason}` : ''}`;
     handle.reject(new SubagentTerminated(kind, partial, `Subagent "${displayName}" ${cause}`, { ...(stop.by ? { by: stop.by } : {}), ...(stop.reason ? { why: stop.reason } : {}) }));
     this.cancellationHandles.delete(displayName);
-    // A cancel ends the registry record as stopped, by whom and why, before
+    // A cancel ends the registry record as stopped, by whom, before
     // the run's own rejection could end it as failed (Dendrite): task work it
     // spawned is orphaned and offered for adoption there. The module's own
     // stop writes nothing: a run the host's stop cuts off is the framework's
