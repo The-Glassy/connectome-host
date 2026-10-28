@@ -1,5 +1,5 @@
 - **Agents on a model whose signed thinking binds** (Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 5.5,
-  and, as the host records them, the Mythos models and any Claude model its record doesn't name): the
+  and, as the host records them, the Mythos models and any later Claude model its record doesn't name): the
   host now records per model whether its thinking binds, whether it takes `block_binding`'s
   `drop_block` control, whether it thinks with no thinking config, and whether the provider's refusal of a longer prompt
   showed its context window, and passes agent-framework `thinkingBinding` from that record, and

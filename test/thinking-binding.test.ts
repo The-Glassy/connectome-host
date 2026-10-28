@@ -49,8 +49,19 @@ describe('modelThinking', () => {
   });
 
   test.each([
+    'claude-opus-4-1', 'claude-opus-4-1-20250805', 'claude-opus-4-1@20250805', 'us.anthropic.claude-opus-4-1-20250805-v1:0',
+    'claude-opus-4-0', 'claude-opus-4-20250514', 'anthropic.claude-opus-4-20250514-v1:0',
+    'claude-sonnet-4-0', 'claude-sonnet-4-20250514', 'claude-sonnet-4@20250514',
+    'claude-3-7-sonnet-20250219', 'claude-3-7-sonnet-latest', 'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022',
+    'claude-3-opus-20240229', 'claude-3-sonnet-20240229', 'claude-3-haiku-20240307', 'anthropic.claude-3-5-sonnet-20240620-v1:0',
+    'claude-2.1', 'claude-2.0', 'claude-instant-1.2', 'anthropic.claude-v2:1', 'anthropic.claude-instant-v1',
+  ])('records %s, from before Claude 4.5, as neither binding nor thinking unasked', (model) => {
+    expect(modelThinking(model)).toEqual(NEITHER);
+  });
+
+  test.each([
     'claude-opus-5-6', 'claude-opus-5-50', 'claude-fable-5-2', 'claude-fable-5-10', 'claude-sonnet-5-6', 'claude-haiku-5-6',
-    'claude-mythos-5-2', 'claude-opus-6', 'claude-opus-4-9', 'bedrock:claude-opus-5-6',
+    'claude-mythos-5-2', 'claude-opus-6', 'claude-opus-4-9', 'bedrock:claude-opus-5-6', 'claude-5-opus',
   ])('records %s, which it doesn\'t name, as binding without the control', (model) => {
     expect(modelThinking(model)).toEqual(UNREACHED);
   });
@@ -250,6 +261,13 @@ describe('thinkingBindingSettings and the agent config', () => {
   test('a model that doesn\'t bind gets neither', () => {
     for (const model of ['claude-opus-4-8', 'claude-opus-5', 'gpt-5.4']) {
       expect(thinkingBindingSettings(model, 'anthropic')).toEqual({});
+    }
+  });
+
+  test('a model from before Claude 4.5 gets no binding, no window and no fold line, as before', () => {
+    for (const model of ['claude-opus-4-1', 'claude-sonnet-4-20250514', 'claude-3-7-sonnet-20250219']) {
+      expect(thinkingBindingSettings(model, 'anthropic')).toEqual({});
+      expect(systemPromptFor('Be yourself.', model)).toBe('Be yourself.');
     }
   });
 

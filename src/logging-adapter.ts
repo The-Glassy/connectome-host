@@ -150,6 +150,11 @@ const MODEL_THINKING: ReadonlyArray<readonly [string, ModelThinking]> = [
   ['sonnet-4-6', NEITHER],
   ['sonnet-4-5', NEITHER],
   ['haiku-4-5', NEITHER],
+  ['opus-4-1', NEITHER],
+  ['opus-4-0', NEITHER],
+  ['opus-4', NEITHER],
+  ['sonnet-4-0', NEITHER],
+  ['sonnet-4', NEITHER],
 ];
 const MODEL_THINKING_PATTERNS = MODEL_THINKING.map(
   ([name, facts]) => [new RegExp(`claude-${name}(?!\\d|-\\d{1,2}(?!\\d))`), facts] as const,
@@ -158,6 +163,9 @@ const MODEL_THINKING_PATTERNS = MODEL_THINKING.map(
 export function modelThinking(model: string): ModelThinking {
   const id = model.toLowerCase().replace(/(\d)\.(\d)/g, '$1-$2');
   if (!/(^|[/.:])claude-/.test(id)) return NEITHER;
+  // Before Claude 4, Anthropic's ids named the version before the family
+  // (claude-3-5-sonnet, claude-2-1, Bedrock's claude-v2), or were Instant.
+  if (/(^|[/.:])claude-([1-3]|v[12]|instant)(?!\d)/.test(id)) return NEITHER;
   return MODEL_THINKING_PATTERNS.find(([pattern]) => pattern.test(id))?.[1] ?? UNREACHED;
 }
 
