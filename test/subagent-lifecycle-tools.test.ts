@@ -698,6 +698,22 @@ describe('a resume that ends before its run starts', () => {
     } finally { await h.cleanup(); }
   }, 30_000);
 
+  test("a resume of a run whose route is a live agent's awaiting call says its result goes to that agent, and it does", async () => {
+    const h = await harness({ responseGenerator: () => 'the resumed answer' }, {}, [bob]);
+    try {
+      const delivered = mailTo(h);
+      const internals = h.framework as unknown as Internals;
+      internals.registry.register(workerSpec('spawn-t-bob-1', { spawnedBy: 'parent', resultTo: { to: 'bob', as: 'tool-result' }, metadata: { subagent: 't-bob', task: 'again', launch: { kind: 'spawn', model: 'mock', systemPrompt: 'p', maxTokens: 64, allowedTools: 'all', strategy: {} } } }));
+      internals.registry.end('spawn-t-bob-1', 'failed', 'test');
+      const resumed = await h.call('resume', { name: 't-bob' });
+      expect(resumed.success).toBe(true);
+      expect((resumed.data as { resultTo: string; note: string }).resultTo).toBe('bob');
+      expect((resumed.data as { note: string }).note).toContain('its result goes to bob');
+      await h.until(() => delivered.some((m) => m.from === 'spawn-t-bob-1'), 'the result reaches bob');
+      expect(delivered.filter((m) => m.from === 'spawn-t-bob-1').map((m) => m.to)).toEqual(['bob']);
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
   test("a resume whose context fails to reopen tells its record's route that it failed, from the record's agent", async () => {
     const h = await harness({}, {}, [bob]);
     try {

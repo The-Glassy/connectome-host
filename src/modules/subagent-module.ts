@@ -2992,7 +2992,8 @@ export class SubagentModule implements Module {
     // framework's rule), so an async record started with a message route to
     // someone else who is still running reports to them, not the resumer.
     const route = record.relationships.resultTo;
-    const elsewhere = route?.as === 'message' && route.to !== parentAgentName && fw.getAgentRecord(route.to)?.ended === undefined && fw.getAgentRecord(route.to) ? route.to : null;
+    const recipient = route && route.to !== parentAgentName ? fw.getAgentRecord(route.to) : null;
+    const elsewhere = recipient && recipient.ended === undefined ? recipient.name : null;
     const promise = this.runResumed(name, record, launch, parentAgentName);
     this.asyncHandles.set(name, { name, type: launch.kind, promise, parentAgentName });
     promise
