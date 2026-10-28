@@ -7,6 +7,8 @@
  * which here sees nothing. A `/puppet` command makes the framework emit one
  * live trace through the handed-over sink.
  */
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { runHeadless } from '../src/headless.js';
 import type { AppContext } from '../src/index.js';
 
@@ -16,9 +18,11 @@ const boot = [
   { type: 'dendrite:agent-ended', agentName: 'fixture.reader-7', reason: 'host-restart', timestamp: 1_700_000_000_003 },
 ];
 
+const restored = { type: 'dendrite:agent-ended', agentName: 'fixture.reader-9', kind: 'task-fork', incarnation: 1, reason: 'host-restart', timestamp: 1_700_000_000_020 };
+
 let live: ((event: Record<string, unknown>) => void) | null = null;
 
-await runHeadless({
+const app: Record<string, unknown> & { framework: unknown; onFrameworkReplaced?: () => void } = {
   recipe: { name: 'boot-replay-test', agent: { name: 'fixture' } },
   agentName: 'fixture',
   framework: {
@@ -37,4 +41,20 @@ await runHeadless({
       return 2;
     },
   },
-} as unknown as AppContext);
+};
+
+const switching = setInterval(() => {
+  if (!existsSync(join(process.env.DATA_DIR!, 'switch'))) return;
+  clearInterval(switching);
+  app.framework = {
+    getAllAgents: () => [{ name: 'fixture', state: { status: 'idle' } }],
+    onTrace: (listener: (event: Record<string, unknown>) => void, options?: { replay?: boolean }) => {
+      if (options?.replay) listener(restored);
+      return () => {};
+    },
+    stop: async () => {},
+  };
+  app.onFrameworkReplaced?.();
+}, 20);
+
+await runHeadless(app as unknown as AppContext);

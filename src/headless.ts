@@ -232,7 +232,7 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
     emit(event);
   };
   let traced = app.framework;
-  const forwarding = traceFollower(forwardTrace);
+  const forwarding = traceFollower(forwardTrace, { replay: true });
   // The hold stays subscribed to the boot framework, so its traces stop
   // here once a session switch replaces that framework.
   const bootFramework = traced;
