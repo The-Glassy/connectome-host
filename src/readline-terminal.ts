@@ -1,7 +1,7 @@
 import { createWriteStream } from 'node:fs';
 import { join } from 'node:path';
 import { format } from 'node:util';
-import { sessionMarker } from './bug-report.js';
+import { sessionMarker } from './session-marker.js';
 
 export const READLINE_LOG = 'readline-error.log';
 const LOG_CLOSE_LIMIT_MS = 2_000;
