@@ -496,6 +496,10 @@ describe('the lifecycle tools keep the module\'s rules', () => {
       const early = await h.call('resume', { name: 'slow-3' });
       expect(early.success).toBe(false);
       expect(early.error).toContain('is still running');
+      const strangerEarly = await h.callAs('bob', 'resume', { name: 'slow-3' });
+      expect(strangerEarly.success).toBe(false);
+      expect(strangerEarly.error).toContain("'slow-3' is not in your tree");
+      expect(strangerEarly.error).not.toContain('still running');
       // Not pinned here: resume's name-in-use check (a record ended while its
       // async handle is still finishing). The mock closes that window too
       // fast to hold a call in it.

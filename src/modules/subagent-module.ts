@@ -2967,8 +2967,8 @@ export class SubagentModule implements Module {
     if (!fw) return { success: false, isError: true, error: 'Nothing was resumed: the subagent module has no framework yet.' };
     const { record, display: name } = this.lookUp(input.name);
     if (!record) return { success: false, isError: true, error: `Nothing was resumed: no subagent named '${input.name}' is known.` };
-    if (!record.ended) return { success: false, isError: true, error: `Nothing was resumed: '${input.name}' is still running.` };
     if (!this.inReach(caller, record)) return this.outOfReach('resumed', input.name, startedBy(record));
+    if (!record.ended) return { success: false, isError: true, error: `Nothing was resumed: '${input.name}' is still running.` };
     const unresumable = resumeRefusal(input.name, record.ended);
     if (unresumable) return { success: false, isError: true, error: unresumable };
     const inUse = this.nameInUse(name);
