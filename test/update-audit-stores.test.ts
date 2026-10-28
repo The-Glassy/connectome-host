@@ -18,7 +18,7 @@ import { loadExtensions } from '../src/extensions.js';
 import { DEFAULT_RECIPE, loadSavedRecipe, saveRecipe, validateRecipe } from '../src/recipe.js';
 import { SessionManager } from '../src/session-manager.js';
 import { startFramework } from '../src/start-framework.js';
-import { auditStores, fleetChildRepair, subconsciousView, type AuditOptions } from '../src/update/audit-stores.js';
+import { auditStores, childAuditLimitMs, fleetChildRepair, subconsciousView, type AuditOptions } from '../src/update/audit-stores.js';
 import { AUDIT_POINTER, loadRepairAlert, loadRepairLines, type LoadRepairReport } from '../src/web/load-repair-alert.js';
 import * as contract from '../src/update/contract.js';
 import { makeRepairStore } from './load-repair-store.js';
@@ -1473,7 +1473,14 @@ describe("a fleet child's audit and what outlasts it", () => {
     expect(await waitForEnd(held, 10_000)).toBe(true);
   }, 60_000);
 
-  test("a child's audit has the minutes the audit's environment gives it, and 5 where it gives none it can use", async () => {
+  test("the minutes the audit's environment gives become a child audit's limit, at most a timer's longest, and 5 where they give none it can use", () => {
+    const limitFor = (minutes: string | undefined) => childAuditLimitMs(minutes === undefined ? {} : { CONNECTOME_FLEET_CHILD_AUDIT_MINUTES: minutes });
+    // A timer holds at most 2 ** 31 - 1 ms.
+    expect(['7.5', '0.5', '1e9', 'Infinity', '0', '-1', 'soon', '10m', undefined].map(limitFor))
+      .toEqual([7.5 * 60_000, 30_000, 2 ** 31 - 1, 2 ** 31 - 1, 5 * 60_000, 5 * 60_000, 5 * 60_000, 5 * 60_000, 5 * 60_000]);
+  });
+
+  test("a child's audit is armed with the limit its audit's environment gives, not its own entry's, the default included", async () => {
     const parent = await makeDataDir('parent', [{ namespace: 'agents/agent', crossed: false }]);
     const child = await makeDataDir('kid', [{ namespace: 'agents/agent', crossed: false }]);
     const timing = join(root, 'timing-strategy.ts');
@@ -1500,7 +1507,7 @@ describe("a fleet child's audit and what outlasts it", () => {
       return later(handler, ms, ...rest);
     }) as typeof setTimeout);
     try {
-      for (const minutes of ['7.5', '1e9', 'Infinity', '0', '-1', 'soon', undefined]) {
+      for (const minutes of [undefined, '7.5']) {
         if (minutes === undefined) delete process.env.CONNECTOME_FLEET_CHILD_AUDIT_MINUTES;
         else process.env.CONNECTOME_FLEET_CHILD_AUDIT_MINUTES = minutes;
         const result = await audit([parent.dir]);
@@ -1511,8 +1518,7 @@ describe("a fleet child's audit and what outlasts it", () => {
       if (before === undefined) delete process.env.CONNECTOME_FLEET_CHILD_AUDIT_MINUTES;
       else process.env.CONNECTOME_FLEET_CHILD_AUDIT_MINUTES = before;
     }
-    // A timer holds at most 2 ** 31 - 1 ms.
-    expect(limits).toEqual([7.5 * 60_000, 2 ** 31 - 1, 2 ** 31 - 1, 5 * 60_000, 5 * 60_000, 5 * 60_000, 5 * 60_000]);
+    expect(limits).toEqual([5 * 60_000, 7.5 * 60_000]);
     expect(longTimersArmedOutsideTheAudit).toBeGreaterThan(0);
   }, 90_000);
 
