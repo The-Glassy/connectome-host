@@ -212,7 +212,7 @@ export interface HostErrorShape {
 }
 
 export interface HostErrorSummary {
-  log: 'tui-error.log' | 'headless.log';
+  log: 'tui-error.log' | 'headless.log' | 'readline-error.log';
   readable: boolean;
   truncated: boolean;
   tags: Array<[string, number]>;
@@ -852,7 +852,10 @@ export function gatherBugReportFacts(opts: GatherOptions): BugReportFacts {
     });
     providerCalls = { ...summary, truncated, readable };
   }
-  const errorLogName = opts.mode === 'tui' ? 'tui-error.log' : opts.mode === 'headless' ? 'headless.log' : null;
+  const errorLogName = opts.mode === 'tui' ? 'tui-error.log'
+    : opts.mode === 'headless' ? 'headless.log'
+    : opts.mode === 'readline' ? 'readline-error.log'
+    : null;
   let hostErrors: HostErrorSummary | null = null;
   if (errorLogName) {
     const read = tailLines(join(opts.dataDir, errorLogName), LOG_WINDOW);
