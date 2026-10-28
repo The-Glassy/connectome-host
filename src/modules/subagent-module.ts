@@ -1340,7 +1340,7 @@ export class SubagentModule implements Module {
       {
         name: 'resume',
         description:
-          'Resume an ended subagent of yours from the context it left (a run a restart cut off, a time limit stopped, or that failed): a new incarnation under the same name, continuing on its own branch, with the tools it was launched with — never more than you have. Its result is delivered as a message when it ends, to you unless it was started with a route to someone else who is still running; the answer says which. Tools it ran before have had their effect.',
+          'Resume an ended subagent of yours from the context it left (a run a restart cut off, a time limit stopped, or that failed): a new incarnation under the same name, continuing on its own branch, with the tools it was launched with — never more than you have. A run that was stopped, that completed, or that ended any other way is not resumed; spawn or fork it again. Its result is delivered as a message when it ends, to you unless it was started with a route to someone else who is still running; the answer says which. Tools it ran before have had their effect.',
         inputSchema: {
           type: 'object',
           properties: { name: { type: 'string', description: 'The ended subagent to resume' } },
