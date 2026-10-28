@@ -2746,11 +2746,10 @@ export class SubagentModule implements Module {
     return all.find((r) => !r.ended) ?? all[0] ?? null;
   }
 
-  private displayNameOf(name: string): string {
-    const records = this.subagentRecords(true);
-    if (records.some((r) => (r.metadata as { subagent: string }).subagent === name)) return name;
-    const byAgent = records.find((r) => r.name === name);
-    return byAgent ? (byAgent.metadata as { subagent: string }).subagent : name;
+  private lookUp(name: string): { record: AgentRecord | null; display: string; byAgent: boolean } {
+    const byAgent = this.subagentRecords(true).find((r) => r.name === name);
+    if (byAgent) return { record: byAgent, display: (byAgent.metadata as { subagent: string }).subagent, byAgent: true };
+    return { record: this.recordNamed(name), display: name, byAgent: false };
   }
 
   private describeRecord(r: AgentRecord): Record<string, unknown> {
@@ -2856,19 +2855,19 @@ export class SubagentModule implements Module {
   private handleStop(input: { name: string; reason?: string }, caller?: string): ToolResult {
     const fw = this.framework;
     if (!fw) return { success: false, isError: true, error: 'Nothing was stopped: the subagent module has no framework yet.' };
-    const name = this.displayNameOf(input.name);
+    const { record: found, display: name, byAgent } = this.lookUp(input.name);
     const stop = { ...(caller ? { by: caller } : {}), ...(input.reason ? { reason: input.reason } : {}) };
     // A run this module drives is stopped through its own cancel (its
     // children first), which ends the registry record as the framework
     // tears the run down; any other live record under the name is stopped
     // in the registry directly.
-    if (this.cancellationHandles.has(name)) {
+    if (this.cancellationHandles.has(name) && !(byAgent && found?.ended)) {
       const reach = this.reachOfRun(caller, name);
       if (!reach.inReach) return this.outOfReach('stopped', input.name, reach.by);
       const stopped = this.stopTree(name, stop);
       return { success: true, data: { stopped: name, runs: stopped, note: 'Its run is cancelled; task work it spawned is orphaned and offered for adoption.' } };
     }
-    const record = this.recordNamed(name);
+    const record = found;
     if (!record) return { success: false, isError: true, error: `Nothing was stopped: no subagent named '${input.name}' is known.` };
     if (!this.inReach(caller, record)) return this.outOfReach('stopped', input.name, startedBy(record));
     if (record.ended) return { success: false, isError: true, error: `Nothing was stopped: '${input.name}' already ended (${record.ended.reason}).` };
@@ -2899,8 +2898,7 @@ export class SubagentModule implements Module {
     const fw = this.framework;
     if (!fw) return { success: false, isError: true, error: 'Nothing was adopted: the subagent module has no framework yet.' };
     if (!caller) return { success: false, isError: true, error: 'Nothing was adopted: an agent adopts, under its name.' };
-    const name = this.displayNameOf(input.name);
-    const record = this.recordNamed(name);
+    const { record, display: name } = this.lookUp(input.name);
     if (!record || record.ended) return { success: false, isError: true, error: `Nothing was adopted: no subagent named '${input.name}' is running.` };
     if (!record.orphaned) return { success: false, isError: true, error: `Nothing was adopted: '${input.name}' has its parent (${record.relationships.spawnedBy ?? 'none'}); only an orphan is adopted.` };
     // Offered to the caller: the framework's candidates (the nearest live
@@ -2932,8 +2930,7 @@ export class SubagentModule implements Module {
   private async handleResume(input: { name: string }, caller?: string): Promise<ToolResult> {
     const fw = this.framework;
     if (!fw) return { success: false, isError: true, error: 'Nothing was resumed: the subagent module has no framework yet.' };
-    const name = this.displayNameOf(input.name);
-    const record = this.recordNamed(name);
+    const { record, display: name } = this.lookUp(input.name);
     if (!record) return { success: false, isError: true, error: `Nothing was resumed: no subagent named '${input.name}' is known.` };
     if (!record.ended) return { success: false, isError: true, error: `Nothing was resumed: '${input.name}' is still running.` };
     if (!this.inReach(caller, record)) return this.outOfReach('resumed', input.name, startedBy(record));

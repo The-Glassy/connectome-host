@@ -350,6 +350,58 @@ describe('the lifecycle tools keep the module\'s rules', () => {
     } finally { await h.cleanup(); }
   }, 30_000);
 
+  test("a stop by an ended run's framework name stops nothing, not the live run that now holds its name", async () => {
+    const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, defaultResponse: 'x'.repeat(5_000) });
+    try {
+      const internals = h.framework as unknown as Registry;
+      internals.registry.register(workerSpec('spawn-x-old', { spawnedBy: 'parent', metadata: { subagent: 'x', task: 'an earlier x' } }));
+      h.framework.stopAgent('spawn-x-old', { by: 'test' });
+      const liveX = () => h.records().find((r) => (r.metadata as { subagent: string }).subagent === 'x' && !r.ended);
+      expect((await h.call('spawn', { name: 'x', systemPrompt: 'p', task: 'take your time' })).success).toBe(true);
+      await h.until(() => liveX() !== undefined, 'the new x runs');
+      const stopped = await h.call('stop', { name: 'spawn-x-old' });
+      expect(stopped.success).toBe(false);
+      expect(stopped.error).toContain("'spawn-x-old' already ended");
+      expect(liveX()).toBeDefined();
+      await h.call('stop', { name: 'x' });
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
+  test("a resume by an ended run's framework name resumes that run, not a newer one under its name", async () => {
+    const h = await harness();
+    try {
+      const internals = h.framework as unknown as Registry;
+      const launch = { kind: 'spawn', model: 'mock', systemPrompt: 'p', maxTokens: 64, allowedTools: 'all', strategy: {} };
+      internals.registry.register(workerSpec('spawn-y-old', { spawnedBy: 'parent', metadata: { subagent: 'y', task: 'the first y', launch } }));
+      internals.registry.end('spawn-y-old', 'failed', 'test');
+      await Bun.sleep(5);
+      internals.registry.register(workerSpec('spawn-y-new', { spawnedBy: 'parent', metadata: { subagent: 'y', task: 'the second y', launch } }));
+      internals.registry.end('spawn-y-new', 'failed', 'test');
+      const resumed = await h.call('resume', { name: 'spawn-y-old' });
+      expect(resumed.success).toBe(true);
+      expect((resumed.data as { agent: string }).agent).toBe('spawn-y-old');
+      await h.until(() => h.framework.getAgentRecord('spawn-y-old')!.incarnation === 2 && h.framework.getAgentRecord('spawn-y-old')!.ended !== undefined, 'the named run is resumed and ends');
+      expect(h.framework.getAgentRecord('spawn-y-new')!.incarnation).toBe(1);
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
+  test("an adopt by an ended run's framework name adopts nothing, not the live orphan that now holds its name", async () => {
+    const h = await harness();
+    try {
+      const internals = h.framework as unknown as Registry;
+      internals.registry.register(workerSpec('spawn-z-old', { spawnedBy: 'parent', metadata: { subagent: 'z', task: 'an earlier z' } }));
+      h.framework.stopAgent('spawn-z-old', { by: 'test' });
+      internals.registry.register(workerSpec('mid', { spawnedBy: 'parent', metadata: { subagent: 'mid', task: 'middle' } }));
+      internals.registry.register(workerSpec('spawn-z-new', { spawnedBy: 'mid', metadata: { subagent: 'z', task: 'the live z' } }));
+      h.framework.stopAgent('mid', { by: 'test' });
+      await h.until(() => h.framework.getAgentRecord('spawn-z-new')?.orphaned !== undefined, 'the live z is orphaned');
+      const adopted = await h.call('adopt', { name: 'spawn-z-old' });
+      expect(adopted.success).toBe(false);
+      expect(h.framework.getAgentRecord('spawn-z-new')!.orphaned).toBeDefined();
+      expect(h.framework.getAgentRecord('spawn-z-new')!.relationships.spawnedBy).toBe('mid');
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
   test("an adopted run is its adopter's: stopping the adopter stops it first, as one of its own", async () => {
     const h = await harness({
       streamChunkDelayMs: 20, streamChunkSize: 10,
