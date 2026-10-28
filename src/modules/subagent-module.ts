@@ -1330,7 +1330,7 @@ export class SubagentModule implements Module {
       {
         name: 'adopt',
         description: "Adopt an orphaned subagent (one whose spawner ended while it ran) that was offered to you — one from your own tree, or offered to you as the primary: you become its parent, its result comes to you, and results it already produced for the lost parent are delivered to you. " +
-          "An orphan that has since ended isn't restarted: adopting it delivers into your context, as messages under its name, what it holds for a recipient that has gone; list's held counts what it holds.",
+          "An orphan that has since ended isn't restarted: adopting it delivers into your context, as messages under its name, only what it holds for a recipient that has gone; list's held also counts what it holds for one that is running.",
         inputSchema: {
           type: 'object',
           properties: { name: { type: 'string', description: 'The orphaned subagent to adopt' } },
