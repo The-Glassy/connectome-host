@@ -158,7 +158,14 @@ const EVENT_HANDLERS: Record<string, EventHandler> = {
     const parent = (e.spawnedBy as string | undefined) ?? inherit?.from;
     const node = r._ensureNode(e.agentName);
     if (parent) node.parent = parent;
-    if (node.startedAt === undefined) node.startedAt = ts;
+    if (node.status !== 'running') {
+      node.status = 'running';
+      node.phase = 'idle';
+      delete node.completedAt;
+      node.startedAt = ts;
+    } else if (node.startedAt === undefined) {
+      node.startedAt = ts;
+    }
     node.lastEventAt = ts;
   },
 

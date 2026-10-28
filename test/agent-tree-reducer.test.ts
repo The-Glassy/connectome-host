@@ -97,6 +97,22 @@ describe('AgentTreeReducer', () => {
     expect(r.getNode('scout.reader-7')).toMatchObject({ kind: 'framework', status: 'cancelled', phase: 'cancelled' });
   });
 
+  test('an agent created again after its end, as a resume makes it, reads as a new run until its first inference', () => {
+    const r = new AgentTreeReducer();
+    r.applyEvent({
+      type: 'dendrite:agent-created', agentName: 'scout.worker-1', kind: 'worker', incarnation: 1,
+      lifetime: { kind: 'task', deadlineMs: 60_000 }, spawnedBy: 'scout', timestamp: ts(0),
+    });
+    r.applyEvent({ type: 'dendrite:agent-ended', agentName: 'scout.worker-1', kind: 'worker', incarnation: 1, reason: 'host-restart', timestamp: ts(1) });
+    r.applyEvent({
+      type: 'dendrite:agent-created', agentName: 'scout.worker-1', kind: 'worker', incarnation: 2,
+      lifetime: { kind: 'task', deadlineMs: 60_000 }, spawnedBy: 'scout', timestamp: ts(2),
+    });
+    const node = r.getNode('scout.worker-1')!;
+    expect({ status: node.status, phase: node.phase, startedAt: node.startedAt, completedAt: node.completedAt, parent: node.parent })
+      .toEqual({ status: 'running', phase: 'idle', startedAt: ts(2), completedAt: undefined, parent: 'scout' });
+  });
+
   test('an agent a stop cut off reads as cancelled, not running', () => {
     const r = new AgentTreeReducer();
     r.applyEvent({ type: 'inference:started', agentName: 'scout.worker-1', timestamp: ts(0) });
