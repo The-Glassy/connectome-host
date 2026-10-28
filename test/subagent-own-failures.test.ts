@@ -529,9 +529,14 @@ describe('the stop', () => {
 describe('concurrency slots', () => {
   test('a spawn waiting for a slot starts when the limit rises', async () => {
     const order: string[] = [];
+    let longReleased = false;
+    let endLong: (() => void) | undefined;
+    const releaseLong = (): void => { longReleased = true; endLong?.(); };
     const h = await harness({ maxConcurrent: 1, maxRetries: 0 }, (agent) => new Promise((resolve) => {
-      const ms = agent.name.startsWith('spawn-long-') ? 3000 : 50;
-      setTimeout(() => { order.push(agent.name.split('-')[1]!); resolve({ speech: 'ok', toolCallsCount: 0 }); }, ms);
+      const end = () => { order.push(agent.name.split('-')[1]!); resolve({ speech: 'ok', toolCallsCount: 0 }); };
+      if (!agent.name.startsWith('spawn-long-')) setTimeout(end, 50);
+      else if (longReleased) end();
+      else endLong = end;
     }));
     try {
       await h.subagent.handleToolCall(spawn('long'));
@@ -545,6 +550,7 @@ describe('concurrency slots', () => {
       const long = outcome(h, 'long');
       await short;
       expect(order).toEqual(['short']);
+      releaseLong();
       await long;
     } finally { await h.cleanup(); }
   }, 20_000);
