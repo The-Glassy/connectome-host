@@ -31,6 +31,8 @@ export function register(api, config) {
       let turns = 0;
       let tokens = 0;
       if (config.background) {
+        // agent-framework listens for SIGUSR2 too, and dumps a [diagnostics]
+        // line for each running framework through console.error.
         process.on('SIGUSR2', () => framework.pushEvent({
           type: 'external-message', source: 'cli', content: 'again', metadata: {}, triggerInference: true,
         }));
@@ -239,6 +241,8 @@ test('in readline mode, a reply streaming while the prompt waits keeps its text 
     await until(() => holdsInOrder(session.lines(), REPLY_WITH_ALERTS), 30_000, 'the second reply with its alerts', session.screen);
     session.type('/quit\r');
     expect(await session.exited).toBe(0);
+    expect(session.lines().join('\n')).not.toContain('[diagnostics]');
+    expect(readFileSync(join(session.dir, 'readline-error.log'), 'utf-8')).toContain('[diagnostics] ');
   } finally {
     await session.close();
   }

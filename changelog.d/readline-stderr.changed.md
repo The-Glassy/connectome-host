@@ -6,11 +6,12 @@
   log is created readable by its owner alone, and each line is written to it
   as it comes, so a crash loses none of what came before it.
   `[routeSpeech]`, `[routing]` and `[inference-failed]` lines go there too,
-  so an operator who watched or redirected readline mode's stderr for them
-  reads the log instead. What the person at the terminal needs still prints
-  there, on stderr as before, each on a line of its own, with the prompt
-  drawn again below it, keeping what was typed, if it was waiting: a turn's
-  failure and how it ended, a slash command's failure, an update notice, a
+  as does the `[diagnostics]` dump a `SIGUSR2` asks for, so an operator who
+  watched or redirected readline mode's stderr for them reads the log
+  instead. What the person at the terminal needs still prints there, on
+  stderr as before, each on a line of its own, with the prompt drawn again
+  below it, keeping what was typed, if it was waiting: a turn's failure and
+  how it ended, a slash command's failure, an update notice, a
   self-restart's failure to close the Web UI's server, the log's path at
   start when it opened, the credential state at start when it isn't ok, and
   ops alerts, worded as the TUI words them, which readline mode didn't show
