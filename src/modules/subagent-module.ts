@@ -2748,8 +2748,9 @@ export class SubagentModule implements Module {
   }
 
   private lookUp(name: string): { record: AgentRecord | null; display: string; byAgent: boolean } {
-    const byAgent = this.subagentRecords(true).find((r) => r.name === name);
-    if (byAgent) return { record: byAgent, display: (byAgent.metadata as { subagent: string }).subagent, byAgent: true };
+    const byAgent = this.framework?.getAgentRecord(name) ?? null;
+    const display = (byAgent?.metadata as { subagent?: unknown } | undefined)?.subagent;
+    if (byAgent && typeof display === 'string') return { record: byAgent, display, byAgent: true };
     return { record: this.recordNamed(name), display: name, byAgent: false };
   }
 
@@ -2862,7 +2863,9 @@ export class SubagentModule implements Module {
     // children first), which ends the registry record as the framework
     // tears the run down; any other live record under the name is stopped
     // in the registry directly.
-    if (this.cancellationHandles.has(name) && !(byAgent && found?.ended)) {
+    const handle = this.cancellationHandles.get(name);
+    const itsRun = !byAgent || !found?.ended || handle?.record === found?.name;
+    if (handle && itsRun) {
       const reach = this.reachOfRun(caller, name);
       if (!reach.inReach) return this.outOfReach('stopped', input.name, reach.by);
       const stopped = this.stopTree(name, stop);

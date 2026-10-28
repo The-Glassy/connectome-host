@@ -626,6 +626,22 @@ describe('a resume that ends before its run starts', () => {
     } finally { await h.cleanup(); }
   }, 30_000);
 
+  test('a resume waiting for a slot is stopped by its framework name as by its name', async () => {
+    const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, responseGenerator: (r) => (r.model === 'mock-slow' ? 'x'.repeat(1_200) : 'ok') }, { maxConcurrent: 1 });
+    try {
+      const busy = await h.call('spawn', { name: 'busy-2', systemPrompt: 'p', task: 'take your time', model: 'mock-slow' });
+      expect(busy.success).toBe(true);
+      await h.until(() => h.recordOf('busy-2') !== undefined && !h.recordOf('busy-2')!.ended, 'the slot is taken');
+      failedRecord(h, 'spawn-queued-2', 'queued-2');
+      expect((await h.call('resume', { name: 'queued-2' })).success).toBe(true);
+      await h.until(() => h.subagent.getConcurrencyStatus().queued === 1, 'the resume waits for the slot');
+      const stopped = await h.call('stop', { name: 'spawn-queued-2', reason: 'not now' });
+      expect(stopped.success).toBe(true);
+      await h.until(() => h.subagent.getConcurrencyStatus().queued === 0, 'the resume leaves the queue');
+      await h.call('stop', { name: 'busy-2' });
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
   test('a resume whose context fails to reopen is reported failed and leaves no run listed as running', async () => {
     const h = await harness();
     try {
@@ -832,6 +848,26 @@ describe('what a run that ends without a result says, and to whom', () => {
       expect(after.ended?.reason).toBe('completed');
       expect(after.incarnation).toBe(1);
       expect(heldFor(h, 'caller', "[Subagent 'held-2' returned]")).toEqual([]);
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
+  test('an orphan that ended is reached by its framework name however many runs have ended since', async () => {
+    const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, responseGenerator: (r) => (r.model === 'mock-slow' ? 'the old answer ' + 'x'.repeat(400) : 'ok') }, {}, [caller]);
+    try {
+      expect((await h.callAs('caller', 'spawn', { name: 'old-1', systemPrompt: 'p', task: 'take your time', model: 'mock-slow' })).success).toBe(true);
+      await h.until(() => h.recordOf('old-1') !== undefined && !h.recordOf('old-1')!.ended, 'the run is registered');
+      const run = h.recordOf('old-1')!.name;
+      h.framework.stopAgent('caller', { by: 'test' });
+      await h.until(() => heldFor(h, 'caller', "[Subagent 'old-1' returned]").length > 0, 'the result is held for the ended caller');
+      const internals = h.framework as unknown as { registry: { register(spec: ReturnType<typeof workerSpec>): unknown } };
+      for (let i = 0; i < 260; i++) {
+        internals.registry.register(workerSpec(`later-${i}`, { spawnedBy: 'parent', metadata: { subagent: `later-${i}`, task: 'later' } }));
+        h.framework.stopAgent(`later-${i}`, { by: 'test' });
+      }
+      expect(h.framework.listAgents({ includeEnded: true }).some((r) => r.name === run)).toBe(false);
+      const adopted = await h.call('adopt', { name: run });
+      expect(adopted.success).toBe(true);
+      expect((adopted.data as { collected: number }).collected).toBe(1);
     } finally { await h.cleanup(); }
   }, 30_000);
 
