@@ -127,6 +127,8 @@ describe('validateRecipe — subconscious schema', () => {
     }
     expect(() => validateRecipe(baseRecipe({ subconscious: { ...forks, forkIdleTimeoutMs: 1000, name: 'Reader' } })))
       .toThrow('Recipe subconscious.name is for reader "persistent", and this recipe\'s reader is "forks". Remove name, or set subconscious.reader to "persistent" and remove voice and forkIdleTimeoutMs, which only reader "forks" takes.');
+    expect(() => validateRecipe(baseRecipe({ subconscious: { ...forks, name: 'Reader', systemPrompt: 'p' } })))
+      .toThrow('Recipe subconscious.name and subconscious.systemPrompt are for reader "persistent", and this recipe\'s reader is "forks". Remove name and systemPrompt, or set subconscious.reader to "persistent" and remove voice, which only reader "forks" takes.');
     for (const [key, value] of [['strategyFactory', 'x'], ['framing', 'x']] as const) {
       expect(() => validateRecipe(baseRecipe({ subconscious: { ...forks, [key]: value } })))
         .toThrow(new RegExp(`unknown field "${key}".*for reader "forks"`));

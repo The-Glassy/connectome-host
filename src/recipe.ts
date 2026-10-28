@@ -3290,17 +3290,20 @@ export function validateRecipe(raw: unknown): Recipe {
     const forks = sub.reader === 'forks';
     const reader = forks ? 'forks' : 'persistent';
     const other = forks ? 'persistent' : 'forks';
-    const allowedSubconsciousKeys = new Set(forks
-      ? ['enabled', 'reader', 'model', 'voice', 'allowChannelSpeech', 'forkIdleTimeoutMs']
-      : ['enabled', 'reader', 'name', 'model', 'systemPrompt', 'allowChannelSpeech', 'reAnchorFraction']);
-    const readerOnlyKeys = { forks: ['voice', 'forkIdleTimeoutMs'], persistent: ['name', 'systemPrompt', 'reAnchorFraction'] };
-    const otherReadersKeys = new Set(readerOnlyKeys[other]);
+    const keysFor = {
+      forks: ['enabled', 'reader', 'model', 'voice', 'allowChannelSpeech', 'forkIdleTimeoutMs'],
+      persistent: ['enabled', 'reader', 'name', 'model', 'systemPrompt', 'allowChannelSpeech', 'reAnchorFraction'],
+    };
+    const allowedSubconsciousKeys = new Set(keysFor[reader]);
+    const onlyFor = (r: 'forks' | 'persistent') => keysFor[r].filter((key) => !keysFor[r === 'forks' ? 'persistent' : 'forks'].includes(key));
+    const otherReadersKeys = new Set(onlyFor(other));
     for (const key of Object.keys(sub)) {
-      if (!allowedSubconsciousKeys.has(key) && otherReadersKeys.has(key)) {
-        const alsoRemove = readerOnlyKeys[reader].filter((own) => Object.hasOwn(sub, own));
+      if (otherReadersKeys.has(key)) {
+        const misplaced = Object.keys(sub).filter((k) => otherReadersKeys.has(k));
+        const alsoRemove = onlyFor(reader).filter((own) => Object.hasOwn(sub, own));
         throw new Error(
-          `Recipe subconscious.${key} is for reader "${other}", and this recipe's reader is "${reader}". ` +
-          `Remove ${key}, or set subconscious.reader to "${other}"` +
+          `Recipe ${misplaced.map((k) => `subconscious.${k}`).join(' and ')} ${misplaced.length > 1 ? 'are' : 'is'} for reader "${other}", and this recipe's reader is "${reader}". ` +
+          `Remove ${misplaced.join(' and ')}, or set subconscious.reader to "${other}"` +
           `${alsoRemove.length > 0 ? ` and remove ${alsoRemove.join(' and ')}, which only reader "${reader}" takes` : ''}.`,
         );
       }
