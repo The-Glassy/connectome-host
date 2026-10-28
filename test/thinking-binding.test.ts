@@ -302,7 +302,7 @@ describe('the fold line and the recipe\'s formatter', () => {
 });
 
 describe('systemPromptFor', () => {
-  test('the line is #155\'s, word for word', () => {
+  test('the line, word for word', () => {
     expect(FOLD_REASONING_LINE).toBe(
       'When your context folds, the reasoning behind your earlier replies leaves it, though their words stay, ' +
       'so a reply of yours that shows no reasoning may still have had some.',

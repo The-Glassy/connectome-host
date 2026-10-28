@@ -43,8 +43,8 @@ export function thinkingBindingSettings(model: string, provider: string | undefi
   };
 }
 
-/** The system-text line anima-research/context-manager#155 gives an agent
- *  whose model binds. */
+/** The system-text line the host gives an agent whose model binds, since a
+ *  fold takes its earlier replies' reasoning (anima-research/context-manager#155). */
 export const FOLD_REASONING_LINE =
   'When your context folds, the reasoning behind your earlier replies leaves it, though their words stay, ' +
   'so a reply of yours that shows no reasoning may still have had some.';
