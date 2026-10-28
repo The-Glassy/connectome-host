@@ -1743,6 +1743,23 @@ export class SubagentModule implements Module {
     }
   }
 
+  private settleResumedParent(name: string, agentName: string, resumer: string): void {
+    const fw = this.framework;
+    const now = fw?.getAgentRecord(agentName);
+    if (!fw || !now || now.ended) return;
+    let parent = now.relationships.spawnedBy;
+    const resumerRecord = fw.getAgentRecord(resumer);
+    if (parent === undefined && resumer !== agentName && resumerRecord && resumerRecord.ended === undefined) {
+      try {
+        parent = fw.reparentAgent(agentName, resumer, { by: resumer }).relationships.spawnedBy;
+      } catch (err) {
+        console.error(`[subagent] ${name}: its spawner has ended, and making '${resumer}', who resumed it, its parent failed: ${err instanceof Error ? err.message : String(err)}; it runs with no parent`);
+      }
+    }
+    if (parent !== undefined) this.followParent(name, parent);
+    else this.unlinkParent(name);
+  }
+
   private followParent(name: string, parent: string): void {
     this.parentMap.set(name, parent);
     this.launcherShownOf.set(name, this.shownName(parent));
@@ -3072,10 +3089,11 @@ export class SubagentModule implements Module {
       this.runOfAttempt.set(record.name, name);
       try {
         run.started = true;
-        let { speech, toolCallsCount } = await Promise.race([
-          framework.runEphemeralToCompletion(agent, contextManager, this.watchdogsFor(undefined)),
-          cancel.promise,
-        ]);
+        const running = framework.runEphemeralToCompletion(agent, contextManager, this.watchdogsFor(undefined));
+        // agent-framework registers the resumed record before
+        // runEphemeralToCompletion's first await, so it is live here.
+        this.settleResumedParent(name, record.name, parentAgentName);
+        let { speech, toolCallsCount } = await Promise.race([running, cancel.promise]);
         const returned = this.returnedResults.get(name);
         if (returned) { speech = returned; this.returnedResults.delete(name); }
         else if (!speech.trim()) speech = this.extractLastAssistantText(contextManager);

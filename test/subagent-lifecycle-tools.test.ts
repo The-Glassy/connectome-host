@@ -867,6 +867,54 @@ describe("a resumed run's launch, and a registry stop of a live run", () => {
   }, 40_000);
 });
 
+describe("a resumed run's parent", () => {
+  type Internals = {
+    registry: { register(spec: ReturnType<typeof workerSpec>): unknown; end(name: string, reason: string, by?: string): unknown };
+  };
+  const slowLaunch = { kind: 'spawn', model: 'mock-slow', systemPrompt: 'p', maxTokens: 64, allowedTools: 'all', strategy: {} };
+  const slow = { streamChunkDelayMs: 20, streamChunkSize: 10, responseGenerator: (r: { model: string }) => (r.model === 'mock-slow' ? 'x'.repeat(3_000) : 'done quickly') };
+  const names = (listed: { data?: unknown }) => (listed.data as { subagents: Array<{ name: string }> }).subagents.map((s) => s.name);
+
+  test("a run resumed after its spawner ended becomes its resumer's: the resumer lists it and stops it", async () => {
+    const h = await harness(slow);
+    try {
+      const internals = h.framework as unknown as Internals;
+      internals.registry.register(workerSpec('spawn-mid-1', { spawnedBy: 'parent', metadata: { subagent: 'mid', task: 'mid' } }));
+      internals.registry.register(workerSpec('spawn-left-1', { spawnedBy: 'spawn-mid-1', metadata: { subagent: 'left', task: 'again', launch: slowLaunch } }));
+      internals.registry.end('spawn-left-1', 'failed', 'test');
+      internals.registry.end('spawn-mid-1', 'stopped', 'test');
+      expect((await h.call('resume', { name: 'left' })).success).toBe(true);
+      await h.until(() => h.recordOf('left') !== undefined && !h.recordOf('left')!.ended, 'the resumed run is registered');
+      expect(h.recordOf('left')!.relationships.spawnedBy).toBe('parent');
+      expect(names(await h.call('list', {}))).toContain('left');
+      expect((await h.call('stop', { name: 'left' })).success).toBe(true);
+      await h.until(() => h.recordOf('left')!.ended !== undefined, 'the resumed run ends');
+      expect(h.recordOf('left')!.ended!.reason).toBe('stopped');
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
+  test("a resumed run is stopped through its own parent, not through another launch's link left on its display name", async () => {
+    const h = await harness(slow, { maxConcurrent: 4 });
+    try {
+      for (const n of ['link-p', 'link-q']) expect((await h.call('spawn', { name: n, systemPrompt: 'p', task: 'hold', model: 'mock-slow' })).success).toBe(true);
+      await h.until(() => ['link-p', 'link-q'].every((n) => h.recordOf(n) !== undefined && !h.recordOf(n)!.ended), 'P and Q run');
+      const [p, q] = ['link-p', 'link-q'].map((n) => h.recordOf(n)!.name) as [string, string];
+      expect((await h.callAs(p, 'spawn', { name: 'x', systemPrompt: 'p', task: 'quick', sync: true })).success).toBe(true);
+      const internals = h.framework as unknown as Internals;
+      internals.registry.register(workerSpec('spawn-x-of-q', { spawnedBy: q, metadata: { subagent: 'x', task: 'again', launch: slowLaunch } }));
+      internals.registry.end('spawn-x-of-q', 'failed', 'test');
+      expect((await h.call('resume', { name: 'spawn-x-of-q' })).success).toBe(true);
+      await h.until(() => h.framework.getAgentRecord('spawn-x-of-q')!.ended === undefined, 'the resumed run is registered');
+
+      expect((await h.call('stop', { name: 'link-p' })).success).toBe(true);
+      expect(h.framework.getAgentRecord('spawn-x-of-q')!.ended).toBeUndefined();
+      expect((await h.call('stop', { name: 'link-q' })).success).toBe(true);
+      await h.until(() => h.framework.getAgentRecord('spawn-x-of-q')!.ended !== undefined || h.framework.getAgentRecord('spawn-x-of-q')!.orphaned !== undefined, "x is stopped, or left behind as Q's orphan");
+      expect(h.framework.getAgentRecord('spawn-x-of-q')!.ended?.reason).toBe('stopped');
+    } finally { await h.cleanup(); }
+  }, 40_000);
+});
+
 describe("the host's stop and a live run's record", () => {
   test("a run the host's stop cuts off keeps its record live for the next boot: the module's stop, which #454's loop runs for it, writes nothing", async () => {
     const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, defaultResponse: 'x'.repeat(1_200) });
