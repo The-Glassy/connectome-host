@@ -2512,8 +2512,10 @@ export class SubagentModule implements Module {
     const to = route?.to ?? parentAgentName;
     const toRecord: AgentRecord | null = fw ? fw.getAgentRecord(to) : null;
     const primaryLive = to === this.config.parentAgentName && toRecord !== null && toRecord.ended === undefined;
+    const launcherRecord: AgentRecord | null = launcher !== undefined && fw ? fw.getAgentRecord(launcher) : null;
+    const forEnded = launcherRecord?.ended !== undefined && to !== parentAgentName ? `, for '${launcherShown ?? launcher}', which has ended` : undefined;
     if (fw && record && !(outcome === 'failed' && primaryLive)) {
-      const content = [{ type: 'text' as const, text: `[Subagent '${name}' ${outcome}]\n\n${body}` }];
+      const content = [{ type: 'text' as const, text: `[Subagent '${name}' ${outcome}${forEnded ?? ''}]\n\n${body}` }];
       try {
         if (route?.as === 'message') {
           const delivered = fw.deliverAgentResult(record.name, content);
@@ -2531,7 +2533,7 @@ export class SubagentModule implements Module {
     }
     const wake = to === parentAgentName
       ? this.addForLauncher(launcher, launcherShown, name, outcome, body)
-      : this.addForLauncher(to, this.shownName(to), name, outcome, body);
+      : this.addForLauncher(to, this.shownName(to), name, outcome, body, forEnded);
     if (wake === null) return;
     ctx.pushEvent({ type: 'inference-request', agentName: wake, reason, source: 'subagent' });
   }
@@ -2543,7 +2545,7 @@ export class SubagentModule implements Module {
     );
   }
 
-  private addForLauncher(launcher: string | undefined, launcherShown: string | undefined, name: string, outcome: 'returned' | 'failed', body: string): string | null {
+  private addForLauncher(launcher: string | undefined, launcherShown: string | undefined, name: string, outcome: 'returned' | 'failed', body: string, forWhom?: string): string | null {
     const ctx = this.ctx!;
     const say = (forWhom: string, forAgent?: string): void => {
       const content = [{ type: 'text' as const, text: `[Subagent '${name}' ${outcome}${forWhom}]\n\n${body}` }];
@@ -2560,7 +2562,7 @@ export class SubagentModule implements Module {
     const listed = new Set(ctx.getAgents().map((agent) => agent.name));
     const shown = launcherShown ?? launcher;
     if (listed.has(launcher)) {
-      say(launcher === this.config.parentAgentName ? '' : `, for '${shown}'`, launcher);
+      say(forWhom ?? (launcher === this.config.parentAgentName ? '' : `, for '${shown}'`), launcher);
       return launcher;
     }
     // agent-framework lists an attempt's agent only while that attempt runs,
@@ -2577,6 +2579,31 @@ export class SubagentModule implements Module {
     }
     say(`, for '${shown}', which has ended`);
     return null;
+  }
+
+  private attemptEdges(run: RunProgress, launched: string | undefined, sync: boolean | undefined): { parent: string; resultTo: { to: string; as: 'tool-result' | 'message' } } | null {
+    if (launched === undefined) return null;
+    const fw = this.framework;
+    const firstRoute = { to: launched, as: sync ? 'tool-result' as const : 'message' as const };
+    if (!fw) return { parent: launched, resultTo: firstRoute };
+    const previous = run.agentName !== undefined ? fw.getAgentRecord(run.agentName) : null;
+    const seen = new Set<string>();
+    let parent: string | undefined;
+    for (let at: string | undefined = previous?.relationships.spawnedBy ?? launched; at !== undefined && !seen.has(at);) {
+      seen.add(at);
+      const record: AgentRecord | null = fw.getAgentRecord(at);
+      if (!record || !record.ended) { parent = at; break; }
+      at = record.orphaned?.formerParent.agent ?? record.relationships.spawnedBy;
+    }
+    if (parent === undefined) {
+      const primary = this.config.parentAgentName;
+      const record = primary !== undefined ? fw.getAgentRecord(primary) : null;
+      if (primary === undefined || !record || record.ended) return null;
+      parent = primary;
+    }
+    const route = previous?.relationships.resultTo;
+    if (route && route.to === parent) return { parent, resultTo: { ...route } };
+    return { parent, resultTo: parent === launched && !previous ? firstRoute : { to: parent, as: 'message' } };
   }
 
   private failedRun(name: string, kind: 'spawn' | 'fork', err: unknown, run: RunProgress): Error {
@@ -3127,9 +3154,9 @@ export class SubagentModule implements Module {
         // A spawn is a registered worker (Dendrite): its record names who
         // spawned it and where its result goes, so an ended caller's result
         // is held as mail rather than lost, and the tree shows the edge.
+        const edges = this.attemptEdges(run, launch.parentAgent?.name, input.sync);
         const { name: _specName, ...spec } = workerSpec(agentName, {
-          ...(launch.parentAgent ? { spawnedBy: launch.parentAgent.name } : {}),
-          ...(launch.parentAgent ? { resultTo: { to: launch.parentAgent.name, as: input.sync ? 'tool-result' as const : 'message' as const } } : {}),
+          ...(edges ? { spawnedBy: edges.parent, resultTo: edges.resultTo } : {}),
           ...(executionTimeoutMs !== undefined ? { deadlineMs: executionTimeoutMs } : {}),
           metadata: this.launchMetadata(launch, input, childDepth),
         });
@@ -3318,13 +3345,20 @@ export class SubagentModule implements Module {
         // the fork call, sibling fork calls removed. A shared branch would
         // need the fork to run the parent's strategy class; a subagent runs
         // its own, so the copy stays, and `deriveAgent` is for later.
-        const spec = parentAgent
-          ? (() => { const { name: _n, ...rest } = taskForkSpec(agentName, {
-              parent: parentAgent.name,
-              resultTo: { to: parentAgent.name, as: input.sync ? 'tool-result' as const : 'message' as const },
-              ...(executionTimeoutMs !== undefined ? { deadlineMs: executionTimeoutMs } : {}),
-              metadata: this.launchMetadata(launch, input, childDepth),
-            }); return rest; })()
+        const edges = this.attemptEdges(run, parentAgent?.name, input.sync);
+        const spec = parentAgent && edges
+          ? (() => {
+              const { name: _n, ...rest } = taskForkSpec(agentName, {
+                parent: parentAgent.name,
+                spawnedBy: edges.parent,
+                resultTo: edges.resultTo,
+                ...(executionTimeoutMs !== undefined ? { deadlineMs: executionTimeoutMs } : {}),
+                metadata: this.launchMetadata(launch, input, childDepth),
+              });
+              if (edges.parent === parentAgent.name) return rest;
+              const { inherit: _from, ...registrable } = rest;
+              return registrable;
+            })()
           : (() => { const { name: _n, ...rest } = workerSpec(agentName, {
               ...(executionTimeoutMs !== undefined ? { deadlineMs: executionTimeoutMs } : {}),
               metadata: this.launchMetadata(launch, input, childDepth),

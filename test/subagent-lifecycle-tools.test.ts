@@ -429,6 +429,94 @@ describe('the lifecycle tools keep the module\'s rules', () => {
   }, 30_000);
 });
 
+describe("a launch whose caller ends before it registers", () => {
+  const caller = { name: 'caller', model: 'mock', systemPrompt: 'caller prompt', maxTokens: 256 };
+  const reached = (h: Awaited<ReturnType<typeof harness>>, name: string) =>
+    h.parentMessages().find((m) => m.metadata?.kind === 'agent-result' && m.content.some((b) => b.text?.includes(`[Subagent '${name}' returned, for 'caller', which has ended]`)));
+
+  test("a launch queued for a slot, whose caller ended while it waited, runs under the caller's nearest live ancestor and returns to it", async () => {
+    const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, responseGenerator: (r) => (r.model === 'mock-slow' ? 'x'.repeat(600) : 'the queued answer') }, { maxConcurrent: 1 }, [caller]);
+    try {
+      const busy = await h.call('spawn', { name: 'busy-2', systemPrompt: 'p', task: 'take your time', model: 'mock-slow' });
+      expect(busy.success).toBe(true);
+      await h.until(() => h.recordOf('busy-2') !== undefined && !h.recordOf('busy-2')!.ended, 'the slot is taken');
+      const queued = await h.callAs('caller', 'spawn', { name: 'queued-2', systemPrompt: 'p', task: 'answer' });
+      expect(queued.success).toBe(true);
+      expect(h.subagent.getConcurrencyStatus().queued).toBe(1);
+      h.framework.stopAgent('caller', { by: 'test' });
+      await h.until(() => h.recordOf('queued-2')?.ended !== undefined, 'the queued run registers and ends', 20_000);
+      const run = h.recordOf('queued-2')!;
+      expect(run.ended!.reason).toBe('completed');
+      expect(run.relationships.spawnedBy).toBe('parent');
+      expect(run.relationships.resultTo).toEqual({ to: 'parent', as: 'message' });
+      await h.until(() => reached(h, 'queued-2') !== undefined, 'its result reaches the ancestor');
+      expect(reached(h, 'queued-2')!.content.map((b) => b.text ?? '').join('')).toContain('the queued answer');
+    } finally { await h.cleanup(); }
+  }, 40_000);
+
+  test("a fork queued for a slot, whose caller ended while it waited, runs under the caller's nearest live ancestor and returns to it", async () => {
+    const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, responseGenerator: (r) => (r.model === 'mock-slow' ? 'x'.repeat(600) : 'the forked answer') }, { maxConcurrent: 1 }, [caller]);
+    try {
+      expect((await h.call('spawn', { name: 'busy-4', systemPrompt: 'p', task: 'take your time', model: 'mock-slow' })).success).toBe(true);
+      await h.until(() => h.recordOf('busy-4') !== undefined && !h.recordOf('busy-4')!.ended, 'the slot is taken');
+      const cm = h.framework.getAgent('caller')!.getContextManager();
+      cm.addMessage('user', [{ type: 'text', text: 'please look into it' }]);
+      cm.addMessage('caller', [{ type: 'tool_use', id: 'toolu_qf', name: 'subagent--fork', input: { name: 'queued-fork', task: 'look' } }] as never);
+      expect((await h.callAs('caller', 'fork', { name: 'queued-fork', task: 'look' }, 'toolu_qf')).success).toBe(true);
+      expect(h.subagent.getConcurrencyStatus().queued).toBe(1);
+      h.framework.stopAgent('caller', { by: 'test' });
+      await h.until(() => reached(h, 'queued-fork') !== undefined, 'its result reaches the ancestor', 20_000);
+      expect(reached(h, 'queued-fork')!.content.map((b) => b.text ?? '').join('')).toContain('the forked answer');
+      expect(h.recordOf('queued-fork')!.relationships.spawnedBy).toBe('parent');
+    } finally { await h.cleanup(); }
+  }, 40_000);
+
+  test("a queued launch whose caller ended and which then fails tells the primary whose run it was", async () => {
+    const h = await harness({
+      streamChunkDelayMs: 20, streamChunkSize: 10,
+      responseGenerator: (r) => {
+        if (r.model === 'mock-slow') return 'x'.repeat(600);
+        if (r.model === 'mock-refused') throw new Error('the request was refused');
+        return 'ok';
+      },
+    }, { maxConcurrent: 1, maxRetries: 0 }, [caller]);
+    try {
+      expect((await h.call('spawn', { name: 'busy-3', systemPrompt: 'p', task: 'take your time', model: 'mock-slow' })).success).toBe(true);
+      await h.until(() => h.recordOf('busy-3') !== undefined && !h.recordOf('busy-3')!.ended, 'the slot is taken');
+      expect((await h.callAs('caller', 'spawn', { name: 'queued-3', systemPrompt: 'p', task: 'answer', model: 'mock-refused' })).success).toBe(true);
+      expect(h.subagent.getConcurrencyStatus().queued).toBe(1);
+      h.framework.stopAgent('caller', { by: 'test' });
+      const told = () => h.parentMessages().find((m) => m.content.some((b) => b.text?.includes("[Subagent 'queued-3' failed, for 'caller', which has ended]")));
+      await h.until(() => told() !== undefined, 'the failure reaches the primary', 20_000);
+      expect(told()!.content.map((b) => b.text ?? '').join('')).toContain('the request was refused');
+      expect(h.recordOf('queued-3')!.relationships.spawnedBy).toBe('parent');
+    } finally { await h.cleanup(); }
+  }, 40_000);
+
+  test("a retry after the caller ended registers under the caller's nearest live ancestor and returns to it", async () => {
+    let calls = 0;
+    let atFirst: (() => void) | undefined;
+    const h = await harness({
+      responseGenerator: (r) => {
+        if (r.model !== 'mock-flaky') return 'ok';
+        calls++;
+        if (calls === 1) { atFirst?.(); throw new Error('the provider is overloaded'); }
+        return 'the second try';
+      },
+    }, { maxRetries: 1 }, [caller]);
+    try {
+      atFirst = () => { h.framework.stopAgent('caller', { by: 'test' }); };
+      const accepted = await h.callAs('caller', 'spawn', { name: 'retried-1', systemPrompt: 'p', task: 'answer', model: 'mock-flaky' });
+      expect(accepted.success).toBe(true);
+      await h.until(() => reached(h, 'retried-1') !== undefined, 'the retry returns to the ancestor', 25_000);
+      const retry = h.framework.getAgentRecord(reached(h, 'retried-1')!.participant)!;
+      expect((retry.metadata as { subagent: string }).subagent).toBe('retried-1');
+      expect(retry.relationships.spawnedBy).toBe('parent');
+      expect(reached(h, 'retried-1')!.content.map((b) => b.text ?? '').join('')).toContain('the second try');
+    } finally { await h.cleanup(); }
+  }, 40_000);
+});
+
 describe('a resume that ends before its run starts', () => {
   type Internals = {
     registry: { register(spec: ReturnType<typeof workerSpec>): unknown; end(name: string, reason: string, by?: string): unknown };
@@ -627,8 +715,8 @@ describe('what a run that ends without a result says, and to whom', () => {
       await h.until(() => h.recordOf('moved-1')?.orphaned !== undefined, 'the run is orphaned');
       const adopted = await h.call('adopt', { name: 'moved-1' });
       expect(adopted.success).toBe(true);
-      await h.until(() => h.parentMessages().some((m) => m.content.some((b) => b.text?.includes("[Subagent 'moved-1' returned]"))), 'the result reaches the adopter', 20_000);
-      expect(h.parentMessages().find((m) => m.content.some((b) => b.text?.includes("[Subagent 'moved-1' returned]")))!.participant).toBe(run.name);
+      await h.until(() => h.parentMessages().some((m) => m.content.some((b) => b.text?.includes("[Subagent 'moved-1' returned, for 'caller', which has ended]"))), 'the result reaches the adopter, saying whose run it was', 20_000);
+      expect(h.parentMessages().find((m) => m.content.some((b) => b.text?.includes("[Subagent 'moved-1' returned, for 'caller', which has ended]")))!.participant).toBe(run.name);
       expect(h.framework.listHeldMail({ to: 'caller' }).some((m) => JSON.stringify(m.content).includes("[Subagent 'moved-1'"))).toBe(false);
     } finally { await h.cleanup(); }
   }, 30_000);
