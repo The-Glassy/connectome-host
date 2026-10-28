@@ -12,7 +12,9 @@
   launch (`metadata`). An async result returns by that route — attributed
   mail under the subagent's own name, held for a caller that has ended until
   it is adopted, never lost — where before it was a line in the primary's
-  context whatever became of the caller; a failure now follows the same path.
+  context whatever became of the caller; a failure now follows the same path,
+  except one whose route is the live primary, which is still told to it as a
+  line in its context.
   The launch refusal and the concurrency, retry, cancel and time-limit rules
   are unchanged; what a stream is told at its start is the recipe's
   `modules.subagents.orientation` (`full`, the default, or `none`).
