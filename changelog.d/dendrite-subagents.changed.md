@@ -23,9 +23,11 @@
   are unchanged; what a stream is told at its start is the recipe's
   `modules.subagents.orientation` (`full`, the default, or `none`).
 - Five tools over the registry: `subagent--list` (the launches within the
-  caller's reach, running, ended or orphaned, with spawner, task and route),
-  `subagent--stop` (a run cancelled children-first, task work it spawned
-  orphaned and offered for adoption), `subagent--message` (a message in a
+  caller's reach, running, ended or orphaned, with spawner, task and route,
+  and how many of a run's results and messages are held for a recipient that
+  can't take them), `subagent--stop` (a run cancelled children-first, task
+  work it spawned orphaned and offered for adoption, its stopped result
+  saying who stopped it and why), `subagent--message` (a message in a
   running subagent's context under the sender's name, waking it),
   `subagent--adopt` (an orphan's new parent, its result following; an orphan
   that has since ended isn't restarted, and adopting it delivers what it
