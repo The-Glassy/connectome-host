@@ -936,6 +936,24 @@ function withoutRawXml<T extends { rawXml?: string }>(block: T): T {
   return copy;
 }
 
+function resumeRefusal(name: string, ended: { reason: string; by?: string }): string | null {
+  switch (ended.reason) {
+    case 'host-restart':
+    case 'deadline':
+    case 'failed':
+      return null;
+    case 'stopped':
+      return `Nothing was resumed: '${name}' was stopped${ended.by ? ` by ${ended.by}` : ''}, and a resume would undo that stop. ` +
+        'Spawn or fork it again if its work is still wanted.';
+    case 'completed':
+      return `Nothing was resumed: '${name}' completed and returned its result. ` +
+        'A resume continues a run that a restart cut off, a time limit stopped, or that failed; spawn or fork it again for more work.';
+    default:
+      return `Nothing was resumed: '${name}' ended (${ended.reason}), and only a run that a restart cut off, a time limit stopped, ` +
+        'or that failed is resumed. Spawn or fork it again instead.';
+  }
+}
+
 function giveBackWhenCreated(creating: Promise<{ cleanup: () => void }>, name: string): void {
   creating.then(
     (created) => {
@@ -2880,6 +2898,8 @@ export class SubagentModule implements Module {
     if (!record) return { success: false, isError: true, error: `Nothing was resumed: no subagent named '${input.name}' is known.` };
     if (!record.ended) return { success: false, isError: true, error: `Nothing was resumed: '${input.name}' is still running.` };
     if (!this.inReach(caller, record)) return this.outOfReach('resumed', input.name, startedBy(record));
+    const unresumable = resumeRefusal(input.name, record.ended);
+    if (unresumable) return { success: false, isError: true, error: unresumable };
     const inUse = this.nameInUse(name);
     if (inUse) return inUse;
     const launch = (record.metadata as { launch?: ResumableLaunch } | undefined)?.launch;

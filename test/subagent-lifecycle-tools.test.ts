@@ -154,13 +154,14 @@ describe('subagents are Dendrite agents', () => {
     } finally { await h.cleanup(); }
   }, 30_000);
 
-  test('resume runs an ended subagent again from the context it left, under the same name, and delivers its result as a message', async () => {
-    const h = await harness({ responseGenerator: (r) => (JSON.stringify(r.messages).includes('all done') ? 'resumed and finished' : 'all done') });
+  test('resume runs a failed subagent again from the context it left, under the same name, and delivers its result as a message', async () => {
+    let calls = 0;
+    const h = await harness({ responseGenerator: () => { calls++; if (calls === 1) throw new Error('the provider is unavailable'); return 'resumed and finished'; } });
     try {
       const first = await h.call('spawn', { name: 'again-1', systemPrompt: 'p', task: 'first pass', sync: true });
-      expect(first.success).toBe(true);
+      expect(first.success).toBe(false);
       const ended = h.recordOf('again-1')!;
-      expect(ended.ended?.reason).toBe('completed');
+      expect(ended.ended?.reason).toBe('failed');
       const resumed = await h.call('resume', { name: 'again-1' });
       expect(resumed.success).toBe(true);
       expect((resumed.data as { incarnation: number }).incarnation).toBe(2);
@@ -205,7 +206,7 @@ describe('subagents are Dendrite agents', () => {
  */
 describe('the lifecycle tools keep the module\'s rules', () => {
   const bob = { name: 'bob', model: 'mock', systemPrompt: 'bob prompt', maxTokens: 256 };
-  type Registry = { registry: { register(spec: ReturnType<typeof workerSpec>): unknown } };
+  type Registry = { registry: { register(spec: ReturnType<typeof workerSpec>): unknown; end(name: string, reason: string, by?: string): unknown } };
   const names = (listed: { data?: unknown }) => (listed.data as { subagents: Array<{ name: string }> }).subagents.map((s) => s.name).sort();
 
   test("list, stop and message reach the caller's subtree: not another agent's subagent, not a sibling, not the caller's own parent", async () => {
@@ -387,12 +388,12 @@ describe('the lifecycle tools keep the module\'s rules', () => {
       // Give narrow a launch of its own that it could not have made.
       const internals = h.framework as unknown as Registry;
       internals.registry.register(workerSpec('spawn-all-1', { spawnedBy: 'narrow', metadata: { subagent: 'everything', task: 'all work', launch: { kind: 'spawn', model: 'mock', systemPrompt: 'p', maxTokens: 64, allowedTools: 'all', strategy: {} } } }));
-      h.framework.stopAgent('spawn-all-1', { by: 'test' });
+      internals.registry.end('spawn-all-1', 'failed', 'test');
       const all = await h.callAs('narrow', 'resume', { name: 'everything' });
       expect(all.success).toBe(false);
       expect(all.error).toContain('tools you do not have (all tools, where your own list is limited)');
       internals.registry.register(workerSpec('spawn-wide-1', { spawnedBy: 'narrow', metadata: { subagent: 'wide', task: 'wide work', launch: { kind: 'spawn', model: 'mock', systemPrompt: 'p', maxTokens: 64, allowedTools: ['subagent--resume', 'subagent--return', 'read_file'], strategy: {} } } }));
-      h.framework.stopAgent('spawn-wide-1', { by: 'test' });
+      internals.registry.end('spawn-wide-1', 'failed', 'test');
       const more = await h.callAs('narrow', 'resume', { name: 'wide' });
       expect(more.success).toBe(false);
       expect(more.error).toContain('tools you do not have (read_file)');
@@ -419,7 +420,7 @@ describe('the lifecycle tools keep the module\'s rules', () => {
     try {
       const internals = h.framework as unknown as Registry;
       internals.registry.register(workerSpec('spawn-job-1', { spawnedBy: 'parent', resultTo: { to: 'bob', as: 'message' }, metadata: { subagent: 'job', task: 'for bob', launch: { kind: 'spawn', model: 'mock', systemPrompt: 'p', maxTokens: 64, allowedTools: 'all', strategy: {} } } }));
-      h.framework.stopAgent('spawn-job-1', { by: 'test' });
+      internals.registry.end('spawn-job-1', 'failed', 'test');
       const resumed = await h.call('resume', { name: 'job' });
       expect(resumed.success).toBe(true);
       expect((resumed.data as { resultTo: string; note: string }).resultTo).toBe('bob');
@@ -438,6 +439,32 @@ describe('a resume that ends before its run starts', () => {
     internals.registry.end(agent, 'failed', 'test');
   };
   const said = (h: Awaited<ReturnType<typeof harness>>, text: string) => h.parentMessages().some((m) => m.content.some((b) => b.text?.includes(text)));
+
+  test('only a run a restart cut off, a time limit stopped, or that failed is resumed; a stop, a completion or any other end is refused with its reason', async () => {
+    const h = await harness();
+    try {
+      const internals = h.framework as unknown as Internals;
+      const endAs = (n: number, reason: string, by?: string) => {
+        internals.registry.register(workerSpec(`spawn-ends-${n}`, { spawnedBy: 'parent', metadata: { subagent: `ends-${n}`, task: 'again', launch: { kind: 'spawn', model: 'mock', systemPrompt: 'p', maxTokens: 64, allowedTools: 'all', strategy: {} } } }));
+        internals.registry.end(`spawn-ends-${n}`, reason, by);
+        return `ends-${n}`;
+      };
+      const stopped = await h.call('resume', { name: endAs(1, 'stopped', 'bob') });
+      expect(stopped.success).toBe(false);
+      expect(stopped.error).toContain("'ends-1' was stopped by bob, and a resume would undo that stop");
+      expect(stopped.error).toContain('Spawn or fork it again');
+      const completed = await h.call('resume', { name: endAs(2, 'completed') });
+      expect(completed.success).toBe(false);
+      expect(completed.error).toContain("'ends-2' completed and returned its result");
+      const other = await h.call('resume', { name: endAs(3, 'parent-ended') });
+      expect(other.success).toBe(false);
+      expect(other.error).toContain("'ends-3' ended (parent-ended)");
+      for (const [n, reason] of [[4, 'host-restart'], [5, 'deadline'], [6, 'failed']] as const) {
+        const resumed = await h.call('resume', { name: endAs(n, reason) });
+        expect(resumed.success).toBe(true);
+      }
+    } finally { await h.cleanup(); }
+  }, 30_000);
 
   test('a resume stopped while it waits for a slot ends as a stop, not a failure', async () => {
     const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, responseGenerator: (r) => (r.model === 'mock-slow' ? 'x'.repeat(1_200) : 'ok') }, { maxConcurrent: 1 });
