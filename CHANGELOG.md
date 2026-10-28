@@ -6,6 +6,72 @@ release time — see [CONTRIBUTING.md](CONTRIBUTING.md#changelog).
 
 ## Unreleased
 
+## 0.17.0 — 2026-10-28
+
+### Breaking
+
+- **Operators and residents, from agent-framework 0.29.0 (see its notes):**
+  `@animalabs/agent-framework` is now ^0.29.0 (was ^0.28.0); `package-lock.json`
+  and `bun.lock` move that package and nothing else. What changes for agents:
+  - A turn the heartbeat opens (a tick or a reminder, with no channel) keeps
+    its plain words as drafts instead of posting them to the channel that last
+    had a message; a `[routing]` line says so up front. To reach someone from
+    a heartbeat turn, send explicitly (a send tool or a `>>` destination).
+  - Rarely used host tools move out of the tool list into the built-in
+    `settings` toolset (`toolsets--open`, `toolsets--act`, `toolsets--look`,
+    `toolsets--close`); the `utils` tool is gone. MCPL servers can be shown in
+    full, as a tab, or as a closed tab (`presentation`, and
+    `toolsets--close {server, disconnect}`).
+  - MCPL RFC-014 tool hints are on by default for every server; `toolHints:
+    false` opts one out.
+
+- **Agents, and operators whose agents use them:** the MCPL administration tools (`mcpl-admin--mcpl_list`,
+  `--mcpl_deploy`, `--mcpl_restart`, `--mcpl_unload`) and the observer grant
+  tools (`observers--get`, `--grant`, `--revoke`) live in agent-framework's
+  built-in `settings` toolset (0.29.0), out of the tool list: open it with
+  `toolsets--open {"toolset": "settings"}` and call one with `toolsets--act`.
+  The framework's `utils` tool is gone, and every message, description and doc
+  of this host that named it now names the settings toolset: a call of a
+  module's tool it lacks lists the module's tools in the settings toolset and
+  how to reach them, identity's invitation note, and subagent `tools` lists
+  (a subagent that should use a settings-toolset tool lists `toolsets--open`,
+  `toolsets--act` and the tool's own name).
+
+### Added
+
+- **Operators:** a server's `presentation` in recipes and `mcpl-servers.json`
+  (`"full"`, the default, `"tab"` or `"closed-tab"`), passed through to
+  agent-framework's host toolsets (0.29.0): how agents are shown the server at
+  first. `"tab"` keeps it connected with none of its tools in the tool list
+  until an agent opens it (`toolsets--open {"server": "<id>"}`); `"closed-tab"`
+  leaves it disconnected until an agent opens it. Each agent can switch later,
+  and its choice is kept over this default. A recipe naming a
+  `mcpl-servers.json` server may override it. Any other value stops the load,
+  naming the key; in the agent's own overlay it's left out, named in a startup
+  line. An earlier agent-framework ignores it.
+- **Agents:** `mcpl-admin--mcpl_deploy` takes `presentation` (`"full"`,
+  `"tab"` or `"closed-tab"`), saved to the agent overlay and applied to the
+  server it connects; another value refuses the deploy, naming the values.
+
+### Changed
+
+- **Operators:** `modules.mcplAdmin.surface` and `modules.webui.observersSurface`
+  are no longer read (they chose between the tool list and `utils`); they're
+  still accepted, with a `[deprecated]` startup line, so older recipes load.
+- A subagent's orientation lists the tools its stream is shown as
+  agent-framework presents them (`AgentFramework.presentedTools`, from
+  0.29.0): tools in the built-in toolset and servers shown as tabs aren't
+  among them, as they aren't in its first request, so the orientation and the
+  first request agree.
+- Texts that point an agent at `agent_settings` outside the settings toolset
+  (a channel's auto-close notice, and the answers to an unknown reasoning or
+  idle-limit tool) give its route: `toolsets--open {"toolset": "settings"}`,
+  then `toolsets--act`.
+- `mcpl-admin--mcpl_list` shows a closed tab as `CLOSED TAB` (disconnected
+  until it's opened, or `mcpl_restart` connects it), and each server's
+  configured `presentation` (the agent's own overlay entry where it defines
+  the server, else the operator's definition, else `full`).
+
 ## 0.16.0 — 2026-10-28
 
 ### Breaking
