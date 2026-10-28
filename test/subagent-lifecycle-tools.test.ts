@@ -156,9 +156,15 @@ describe('subagents are Dendrite agents', () => {
 
   test('resume runs a failed subagent again from the context it left, under the same name, and delivers its result as a message', async () => {
     let calls = 0;
-    const h = await harness({ responseGenerator: () => { calls++; if (calls === 1) throw new Error('the provider is unavailable'); return 'resumed and finished'; } });
+    const h = await harness({
+      responseGenerator: (r) => {
+        calls++;
+        if (calls === 1) throw new Error('the provider is unavailable');
+        return JSON.stringify(r.messages).includes('first pass, 7 beans') ? 'resumed and finished' : 'I have no task';
+      },
+    });
     try {
-      const first = await h.call('spawn', { name: 'again-1', systemPrompt: 'p', task: 'first pass', sync: true });
+      const first = await h.call('spawn', { name: 'again-1', systemPrompt: 'p', task: 'first pass, 7 beans', sync: true });
       expect(first.success).toBe(false);
       const ended = h.recordOf('again-1')!;
       expect(ended.ended?.reason).toBe('failed');
