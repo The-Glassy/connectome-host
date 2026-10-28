@@ -523,6 +523,27 @@ describe("a launch whose caller ends before it registers", () => {
   const reached = (h: Awaited<ReturnType<typeof harness>>, name: string) =>
     h.parentMessages().find((m) => m.metadata?.kind === 'agent-result' && m.content.some((b) => b.text?.includes(`[Subagent '${name}' returned, for 'caller', which has ended]`)));
 
+  test("a run registered under a live subagent ancestor, its caller having ended, is that ancestor's child: stopping the ancestor stops it first", async () => {
+    const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, responseGenerator: (r) => (r.model === 'mock-slow' ? 'x'.repeat(3_000) : 'ok') }, { maxConcurrent: 2 });
+    try {
+      expect((await h.call('spawn', { name: 'anc-a', systemPrompt: 'p', task: 'hold', model: 'mock-slow' })).success).toBe(true);
+      await h.until(() => h.recordOf('anc-a') !== undefined && !h.recordOf('anc-a')!.ended, 'A runs');
+      const a = h.recordOf('anc-a')!.name;
+      expect((await h.callAs(a, 'spawn', { name: 'anc-b', systemPrompt: 'p', task: 'hold', model: 'mock-slow' })).success).toBe(true);
+      await h.until(() => h.recordOf('anc-b') !== undefined && !h.recordOf('anc-b')!.ended, 'B runs');
+      const b = h.recordOf('anc-b')!.name;
+      expect((await h.callAs(b, 'spawn', { name: 'anc-c', systemPrompt: 'p', task: 'hold', model: 'mock-slow' })).success).toBe(true);
+      expect(h.subagent.getConcurrencyStatus().queued).toBe(1);
+      h.framework.stopAgent(b, { by: 'test' });
+      await h.until(() => h.recordOf('anc-c') !== undefined && !h.recordOf('anc-c')!.ended, 'C registers and runs', 20_000);
+      expect(h.recordOf('anc-c')!.relationships.spawnedBy).toBe(a);
+
+      expect((await h.call('stop', { name: 'anc-a' })).success).toBe(true);
+      await h.until(() => h.recordOf('anc-c')!.ended !== undefined || h.recordOf('anc-c')!.orphaned !== undefined, "C is stopped, or left behind as A's orphan");
+      expect(h.recordOf('anc-c')!.ended?.reason).toBe('stopped');
+    } finally { await h.cleanup(); }
+  }, 40_000);
+
   test("a launch queued for a slot, whose caller ended while it waited, runs under the caller's nearest live ancestor and returns to it", async () => {
     const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, responseGenerator: (r) => (r.model === 'mock-slow' ? 'x'.repeat(600) : 'the queued answer') }, { maxConcurrent: 1 }, [caller]);
     try {

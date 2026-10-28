@@ -1743,6 +1743,12 @@ export class SubagentModule implements Module {
     }
   }
 
+  private followParent(name: string, parent: string): void {
+    this.parentMap.set(name, parent);
+    this.launcherShownOf.set(name, this.shownName(parent));
+    this.persistState();
+  }
+
   private unlinkParent(name: string): void {
     this.parentMap.delete(name);
     this.launcherShownOf.delete(name);
@@ -2946,11 +2952,7 @@ export class SubagentModule implements Module {
     }
     try {
       const adopted = fw.reparentAgent(record.name, caller, { by: caller });
-      if (this.cancellationHandles.has(name)) {
-        this.parentMap.set(name, caller);
-        this.launcherShownOf.set(name, this.shownName(caller));
-        this.persistState();
-      }
+      if (this.cancellationHandles.has(name)) this.followParent(name, caller);
       return { success: true, data: { adopted: input.name, agent: record.name, parent: caller, resultTo: adopted.relationships.resultTo ?? null } };
     } catch (err) {
       return { success: false, isError: true, error: `Nothing was adopted: ${err instanceof Error ? err.message : String(err)}` };
@@ -3182,6 +3184,7 @@ export class SubagentModule implements Module {
         // spawned it and where its result goes, so an ended caller's result
         // is held as mail rather than lost, and the tree shows the edge.
         const edges = this.attemptEdges(run, launch.parentAgent?.name, input.sync);
+        if (edges && edges.parent !== launch.parentAgent?.name) this.followParent(input.name, edges.parent);
         const { name: _specName, ...spec } = workerSpec(agentName, {
           ...(edges ? { spawnedBy: edges.parent, resultTo: edges.resultTo } : {}),
           ...(executionTimeoutMs !== undefined ? { deadlineMs: executionTimeoutMs } : {}),
@@ -3373,6 +3376,7 @@ export class SubagentModule implements Module {
         // need the fork to run the parent's strategy class; a subagent runs
         // its own, so the copy stays, and `deriveAgent` is for later.
         const edges = this.attemptEdges(run, parentAgent?.name, input.sync);
+        if (edges && edges.parent !== parentAgent?.name) this.followParent(input.name, edges.parent);
         const spec = parentAgent && edges
           ? (() => {
               const { name: _n, ...rest } = taskForkSpec(agentName, {
