@@ -2894,6 +2894,20 @@ export class SubagentModule implements Module {
     };
   }
 
+  /** A resumed run's config: what its launch recorded, with the thinking binding and summary voice a launch gets. */
+  private resumedAgentConfig(launch: ResumableLaunch, agentName: string) {
+    return {
+      model: launch.model,
+      systemPrompt: launch.systemPrompt,
+      maxTokens: launch.maxTokens,
+      maxStreamTokens: launch.maxStreamTokens,
+      ...(launch.proseRouting !== undefined ? { proseRouting: launch.proseRouting } : {}),
+      ...thinkingBindingSettings(launch.model, this.config.provider),
+      allowedTools: launch.allowedTools === 'all' ? 'all' as const : [...launch.allowedTools],
+      strategy: new KnowledgeStrategy({ ...launch.strategy, autoTickOnNewMessage: true, summaryParticipant: agentName }),
+    };
+  }
+
   /** Drive a resumed incarnation as this module drives any run: a slot, the live register, the watchdogs, the result. */
   private async runResumed(name: string, record: AgentRecord, launch: ResumableLaunch, parentAgentName: string): Promise<SubagentResult> {
     const framework = this.getFramework();
@@ -2914,15 +2928,7 @@ export class SubagentModule implements Module {
       this.slotOf.set(entry, slot);
       this.persistState();
       const created = await Promise.race([
-        framework.resumeAgent(record.name, {
-          model: launch.model,
-          systemPrompt: launch.systemPrompt,
-          maxTokens: launch.maxTokens,
-          maxStreamTokens: launch.maxStreamTokens,
-          ...(launch.proseRouting !== undefined ? { proseRouting: launch.proseRouting } : {}),
-          allowedTools: launch.allowedTools === 'all' ? 'all' : [...launch.allowedTools],
-          strategy: new KnowledgeStrategy({ ...launch.strategy, autoTickOnNewMessage: true }),
-        }),
+        framework.resumeAgent(record.name, this.resumedAgentConfig(launch, record.name)),
         cancel.promise,
       ]);
       const { agent, contextManager, cleanup } = created;

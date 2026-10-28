@@ -364,6 +364,7 @@ describe('subagents', () => {
     const inner = subagent as unknown as {
       resolveLaunch(kind: 'spawn' | 'fork', input: Record<string, unknown>, caller: string, depth: number): Launch;
       ephemeralAgentConfig(launch: Launch, name: string): Record<string, unknown>;
+      resumedAgentConfig(launch: Record<string, unknown>, name: string): Record<string, unknown>;
     };
     return { framework, inner };
   }
@@ -382,6 +383,54 @@ describe('subagents', () => {
       const plainConfig = inner.ephemeralAgentConfig(plain, 'old-1');
       expect(plainConfig.thinkingBinding).toBeUndefined();
       expect(plainConfig.physicalWindowTokens).toBeUndefined();
+    } finally {
+      await framework.stop();
+    }
+  });
+
+  test("a resumed run binds as its launch did, and its summaries are voiced as itself", async () => {
+    const { framework, inner } = await harness('claude-opus-4-8', 'parent');
+    try {
+      const launch = inner.resolveLaunch('spawn', { name: 'child', systemPrompt: 'Look it up.', task: 't' }, 'parent', 0);
+      const recorded = {
+        kind: 'spawn',
+        model: launch.model,
+        systemPrompt: launch.systemPrompt,
+        maxTokens: launch.maxTokens,
+        maxStreamTokens: launch.maxStreamTokens,
+        allowedTools: 'all',
+        strategy: launch.strategy,
+      };
+      const config = inner.resumedAgentConfig(recorded, 'child-1');
+      expect(config.thinkingBinding).toEqual({ binds: true, dropBlock: true });
+      expect(config.physicalWindowTokens).toBe(1_000_000);
+      const view = (strategy: unknown) => (strategy as { config?: Record<string, unknown> }).config ?? {};
+      expect(view(config.strategy).summaryParticipant).toBe('child-1');
+      expect(view(config.strategy).summaryParticipant).toBe(view(inner.ephemeralAgentConfig(launch, 'child-1').strategy).summaryParticipant);
+      const plain = inner.resumedAgentConfig({ ...recorded, model: 'claude-opus-4-8' }, 'old-1');
+      expect(plain.thinkingBinding).toBeUndefined();
+      expect(plain.physicalWindowTokens).toBeUndefined();
+    } finally {
+      await framework.stop();
+    }
+  });
+
+  test('a resumed run on Bedrock binds without the control and has no window, as its launch did', async () => {
+    const { framework, inner } = await harness('claude-opus-4-8', 'parent', 'bedrock');
+    try {
+      const launch = inner.resolveLaunch('spawn', { name: 'child', systemPrompt: 'Look it up.', task: 't' }, 'parent', 0);
+      const recorded = {
+        kind: 'spawn',
+        model: launch.model,
+        systemPrompt: launch.systemPrompt,
+        maxTokens: launch.maxTokens,
+        maxStreamTokens: launch.maxStreamTokens,
+        allowedTools: 'all',
+        strategy: launch.strategy,
+      };
+      const config = inner.resumedAgentConfig(recorded, 'child-1');
+      expect(config.thinkingBinding).toEqual({ binds: true, dropBlock: false });
+      expect(config.physicalWindowTokens).toBeUndefined();
     } finally {
       await framework.stop();
     }
