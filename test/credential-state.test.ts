@@ -288,7 +288,7 @@ describe('CredentialMonitor — actions', () => {
     expect(done.kind).toBe('ok');
   });
 
-  test('a refresh whose write to the file fails says so in its outcome', async () => {
+  test('a refresh whose write to the file fails answers with a state that says so', async () => {
     let monitor!: CredentialMonitor;
     ({ monitor } = harness({
       source: { canRefresh: () => true, refresh: async () => { monitor.observeWriteBack('/x/creds.json', 'EACCES: permission denied'); }, probe: async () => {} },
@@ -298,7 +298,6 @@ describe('CredentialMonitor — actions', () => {
     expect(s.kind).toBe('ok');
     expect(s.lastAction?.ok).toBe(true);
     expect(s.unsaved).toContain('/x/creds.json');
-    expect(s.lastAction?.message).toContain(`WARNING: ${s.unsaved}`);
   });
 
   test('a restart during a pending login is refused when the source cannot cancel; a later fresh login runs', async () => {
@@ -487,6 +486,14 @@ describe('CredentialMonitor — precedence', () => {
     monitor.dispose();
   });
 
+  test('a pending login still says the host can\'t refresh the credential, whatever the source could do otherwise', () => {
+    const { monitor } = harness({ source: { canRefresh: () => true, refresh: async () => {}, login: async () => {} } });
+    monitor.loginRequired({ verificationUrl: 'https://example.invalid/device', userCode: 'ABCD-1234' });
+    expect(monitor.snapshot().kind).toBe('auth-login-required');
+    expect(monitor.snapshot().rotatable).toBe(false);
+    monitor.dispose();
+  });
+
   test('a passed expiry on an idle host becomes auth-expired without waiting for a 401', () => {
     let t = 0;
     const { monitor, alerts } = harness({ now: () => t, expiryWarningMs: 10 * 60_000, source: { expiresAt: () => 5 * 60_000 } });
@@ -560,12 +567,11 @@ describe('CredentialMonitor — a credential not written to its file', () => {
     monitor.observeWriteBack('/x/creds.json', 'EACCES: permission denied');
     const still = await monitor.runAction('recheck');
     expect(writes).toBe(1);
-    expect(still.lastAction?.message).toContain('WARNING');
+    expect(still.unsaved).toBeDefined();
     writable = true;
     const fixed = await monitor.runAction('recheck');
     expect(writes).toBe(2);
     expect(fixed.unsaved).toBeUndefined();
-    expect(fixed.lastAction?.message).not.toContain('WARNING');
     expect(alerts.at(-1)!.kind).toBe('credential-unsaved-clear');
     await monitor.runAction('recheck');
     expect(writes).toBe(2);

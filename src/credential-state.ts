@@ -136,15 +136,18 @@ export class CredentialMonitor {
   }
 
   snapshot(): CredentialState {
-    const { expiresAt: _entered, ...state } = this.state;
-    const expiresAt = this.expiry();
     return {
-      ...state,
-      rotatable: this.source.canRefresh(),
-      ...(expiresAt !== undefined ? { expiresAt } : {}),
-      actions: [...state.actions],
+      ...this.current(),
+      actions: [...this.state.actions],
       ...(this.unsaved !== undefined ? { unsaved: this.unsaved } : {}),
     };
+  }
+
+  private current(): CredentialState {
+    if (this.state.kind !== 'ok') return this.state;
+    const { expiresAt: _entered, ...state } = this.state;
+    const expiresAt = this.expiry();
+    return { ...state, rotatable: this.source.canRefresh(), ...(expiresAt !== undefined ? { expiresAt } : {}) };
   }
 
   bearer(): string | undefined {
@@ -235,7 +238,7 @@ export class CredentialMonitor {
       return;
     }
     const why = error.trim() ? ` (${trim(error)})` : '';
-    this.unsaved = `${provider} credential couldn't be written to ${file}${why} — the file keeps the previous one, which a restart would load and which may no longer be accepted`;
+    this.unsaved = `${provider} credential couldn't be written to ${file}${why} — the credential in use isn't in that file, which is what a restart reads`;
     this.emit('credential-unsaved', this.unsaved, {
       provider,
       actions: [{ id: 'recheck', label: 'Re-check', hint: 'Writes the credential to its file again, then re-checks it.' }],
@@ -402,18 +405,17 @@ export class CredentialMonitor {
 
   private async settle(what: string, id: CredentialActionId): Promise<[boolean, string]> {
     this.armExpiryTimer();
-    const warn = this.unsaved !== undefined ? `; WARNING: ${this.unsaved}` : '';
     if (!this.source.probe) {
       if (id === 'recheck') {
         return [true, `${what}; nothing to verify for ${this.source.provider} (no probe) — state unchanged`];
       }
       if (this.state.kind.startsWith('auth-')) this.settleAfterAuth();
-      return [true, `${what}; not verified (no probe for ${this.source.provider}) — the next call will tell${warn}`];
+      return [true, `${what}; not verified (no probe for ${this.source.provider}) — the next call will tell`];
     }
     try {
       await this.source.probe();
       if (this.state.kind.startsWith('auth-')) this.settleAfterAuth();
-      return [true, `${what}; credential verified${warn}`];
+      return [true, `${what}; credential verified`];
     } catch (err) {
       if (isAuthFailure(err)) {
         const reason = err instanceof Error ? err.message : String(err);
@@ -426,7 +428,7 @@ export class CredentialMonitor {
         return [false, `${what}, but the provider still rejects the credential`];
       }
       const reason = err instanceof Error ? err.message : String(err);
-      return [true, `${what}; verification inconclusive (${trim(reason)})${warn}`];
+      return [true, `${what}; verification inconclusive (${trim(reason)})`];
     }
   }
 

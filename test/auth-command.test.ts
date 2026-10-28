@@ -77,6 +77,24 @@ describe('/auth', () => {
     monitor.dispose();
   });
 
+  test('an action whose write to the file fails says so once in its answer, and an answer after a write that succeeds doesn\'t', async () => {
+    let writable = false;
+    let monitor!: CredentialMonitor;
+    const write = () => monitor.observeWriteBack('/x/creds.json', writable ? undefined : 'EACCES: permission denied');
+    monitor = new CredentialMonitor({
+      source: { provider: 'anthropic', canRefresh: () => true, refresh: async () => { write(); }, writeBack: write, probe: async () => {} },
+      alert: () => {},
+    });
+    const answer = async (line: string) => (await handleCommand(line, app(monitor)).asyncWork!).lines.map((l) => l.text).join('\n');
+    const refreshed = await answer('/auth refresh');
+    const unsaved = monitor.snapshot().unsaved!;
+    expect(unsaved).toContain('/x/creds.json');
+    expect(refreshed.split(unsaved).length - 1).toBe(1);
+    writable = true;
+    expect(await answer('/auth recheck')).not.toContain('WARNING');
+    monitor.dispose();
+  });
+
   test('rejects unknown subcommands and a bare token', () => {
     const monitor = { snapshot: () => state(), runAction: async () => state() };
     expect(handleCommand('/auth rotate', app(monitor)).lines[0]?.text).toMatch(/^Usage: \/auth/);
