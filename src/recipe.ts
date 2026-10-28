@@ -3288,18 +3288,20 @@ export function validateRecipe(raw: unknown): Recipe {
       throw new Error('Recipe subconscious.reader must be "persistent" or "forks".');
     }
     const forks = sub.reader === 'forks';
+    const reader = forks ? 'forks' : 'persistent';
+    const other = forks ? 'persistent' : 'forks';
     const allowedSubconsciousKeys = new Set(forks
       ? ['enabled', 'reader', 'model', 'voice', 'allowChannelSpeech', 'forkIdleTimeoutMs']
       : ['enabled', 'reader', 'name', 'model', 'systemPrompt', 'allowChannelSpeech', 'reAnchorFraction']);
-    const otherReadersKeys = new Set(forks
-      ? ['name', 'systemPrompt', 'reAnchorFraction']
-      : ['voice', 'forkIdleTimeoutMs']);
+    const readerOnlyKeys = { forks: ['voice', 'forkIdleTimeoutMs'], persistent: ['name', 'systemPrompt', 'reAnchorFraction'] };
+    const otherReadersKeys = new Set(readerOnlyKeys[other]);
     for (const key of Object.keys(sub)) {
       if (!allowedSubconsciousKeys.has(key) && otherReadersKeys.has(key)) {
-        const other = forks ? 'persistent' : 'forks';
+        const alsoRemove = readerOnlyKeys[reader].filter((own) => Object.hasOwn(sub, own));
         throw new Error(
-          `Recipe subconscious.${key} is for reader "${other}", and this recipe's reader is "${forks ? 'forks' : 'persistent'}". ` +
-          `Set subconscious.reader to "${other}", or remove ${key}.`,
+          `Recipe subconscious.${key} is for reader "${other}", and this recipe's reader is "${reader}". ` +
+          `Remove ${key}, or set subconscious.reader to "${other}"` +
+          `${alsoRemove.length > 0 ? ` and remove ${alsoRemove.join(' and ')}, which only reader "${reader}" takes` : ''}.`,
         );
       }
       if (!allowedSubconsciousKeys.has(key)) {
