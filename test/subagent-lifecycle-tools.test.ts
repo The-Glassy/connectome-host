@@ -544,6 +544,34 @@ describe("a launch whose caller ends before it registers", () => {
     } finally { await h.cleanup(); }
   }, 40_000);
 
+  test("a sync spawn queued for a slot, whose caller ended while it waited, returns to the ancestor it ran under, not to the ended caller's call", async () => {
+    const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, responseGenerator: (r) => (r.model === 'mock-slow' ? 'x'.repeat(600) : 'the sync answer') }, { maxConcurrent: 1 }, [caller]);
+    try {
+      expect((await h.call('spawn', { name: 'busy-s', systemPrompt: 'p', task: 'take your time', model: 'mock-slow' })).success).toBe(true);
+      await h.until(() => h.recordOf('busy-s') !== undefined && !h.recordOf('busy-s')!.ended, 'the slot is taken');
+      const pending = h.callAs('caller', 'spawn', { name: 'sync-q', systemPrompt: 'p', task: 'answer', sync: true });
+      await h.until(() => h.subagent.getConcurrencyStatus().queued === 1, 'the sync spawn waits for the slot');
+      h.framework.stopAgent('caller', { by: 'test' });
+      await pending;
+      await h.until(() => reached(h, 'sync-q') !== undefined, 'its result reaches the ancestor', 20_000);
+      expect(reached(h, 'sync-q')!.content.map((b) => b.text ?? '').join('')).toContain('the sync answer');
+    } finally { await h.cleanup(); }
+  }, 40_000);
+
+  test("a sync spawn whose caller ends while it runs holds its result for that caller, as an async one does", async () => {
+    const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, responseGenerator: (r) => (r.model === 'mock-slow' ? 'the held sync answer ' + 'x'.repeat(400) : 'ok') }, {}, [caller]);
+    try {
+      const pending = h.callAs('caller', 'spawn', { name: 'sync-h', systemPrompt: 'p', task: 'take your time', model: 'mock-slow', sync: true });
+      await h.until(() => h.recordOf('sync-h') !== undefined && !h.recordOf('sync-h')!.ended, 'the run is registered');
+      const run = h.recordOf('sync-h')!.name;
+      h.framework.stopAgent('caller', { by: 'test' });
+      await pending;
+      const held = () => h.framework.listHeldMail({ to: 'caller' }).filter((m) => JSON.stringify(m.content).includes("[Subagent 'sync-h' returned]"));
+      await h.until(() => held().length > 0, 'the result is held for the ended caller');
+      expect(held()[0]!.from.agent).toBe(run);
+    } finally { await h.cleanup(); }
+  }, 40_000);
+
   test("a launch queued for a slot, whose caller ended while it waited, runs under the caller's nearest live ancestor and returns to it", async () => {
     const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, responseGenerator: (r) => (r.model === 'mock-slow' ? 'x'.repeat(600) : 'the queued answer') }, { maxConcurrent: 1 }, [caller]);
     try {

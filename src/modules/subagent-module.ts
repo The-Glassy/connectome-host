@@ -2676,7 +2676,9 @@ export class SubagentModule implements Module {
       if (autoTimer) clearTimeout(autoTimer);
       this.detachableHandles.delete(name);
 
+      const callerEnded = launcher !== undefined && this.framework?.getAgentRecord(launcher)?.ended !== undefined;
       if (winner.kind === 'completed') {
+        if (callerEnded) this.deliverAsyncResult(name, winner.result, launcher, launcherShown);
         return {
           success: true,
           data: launchText ? { ...winner.result, launch: launchText } : winner.result,
@@ -2685,6 +2687,7 @@ export class SubagentModule implements Module {
 
       if (winner.kind === 'error') {
         const err = winner.error;
+        if (callerEnded) this.deliverAsyncError(name, err, launcher, launcherShown);
         return {
           success: false,
           isError: true,
