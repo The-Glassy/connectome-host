@@ -20,9 +20,11 @@ import { traceError } from '../state/turn-trace.js';
 import { shown } from './shown.js';
 import { unknownToolResult } from './unknown-tool.js';
 import { hostNoteMetadata } from '../speaker.js';
+import { hasFoldLine, systemPromptFor, thinkingBindingSettings } from '../framework-agent-config.js';
 
 export interface SubagentModuleConfig {
   provider?: string;
+  formatter?: 'native' | 'anthropic-xml';
   maxDepth?: number;
   currentDepth?: number;
   defaultModel?: string;
@@ -423,6 +425,7 @@ export interface SubagentLaunch {
   model: string;
   systemPrompt: string;
   systemPromptSource: 'parent' | 'override' | 'caller' | 'default';
+  systemPromptFoldLine?: 'added' | 'removed';
   maxTokens: number;
   maxStreamTokens: number;
   strategy: {
@@ -594,15 +597,20 @@ export function describeSubagentLaunch(launch: SubagentLaunch): string {
     settings.push({ name: 'provider connection', line: `- Provider: ${launch.provider ?? 'not stated by the host'}.` });
   }
 
+  const foldLine = launch.systemPromptFoldLine === 'added'
+    ? ", with the host's paragraph on folds added"
+    : launch.systemPromptFoldLine === 'removed'
+      ? ", with the host's paragraph on folds taken off"
+      : '';
   const promptText: Record<SubagentLaunch['systemPromptSource'], string> = {
-    parent: "- System prompt: the parent's.",
-    override: p ? '- System prompt: overridden for this fork.' : '- System prompt: set for this fork.',
-    caller: '- System prompt: supplied by the caller for this spawn.',
-    default: '- System prompt: the default research-assistant prompt.',
+    parent: `- System prompt: the parent's${foldLine}.`,
+    override: p ? `- System prompt: overridden for this fork${foldLine}.` : `- System prompt: set for this fork${foldLine}.`,
+    caller: `- System prompt: supplied by the caller for this spawn${foldLine}.`,
+    default: `- System prompt: the default research-assistant prompt${foldLine}.`,
   };
   settings.push({
     name: 'system prompt',
-    ...(fork && p ? { same: launch.systemPromptSource === 'parent' } : {}),
+    ...(fork && p ? { same: launch.systemPromptSource === 'parent' && launch.systemPromptFoldLine === undefined } : {}),
     line: promptText[launch.systemPromptSource],
   });
 
@@ -1195,7 +1203,7 @@ export class SubagentModule implements Module {
             tools: {
               type: 'array',
               items: { type: 'string' },
-              description: 'Tool names the subagent can use (default: inherit the caller\'s allowed tools). An explicit list can only narrow the caller\'s tools. To give the subagent a utility, list `utils` and the utility\'s own name (module--name). Note: subagent--return is always included automatically.',
+              description: 'Tool names the subagent can use (default: inherit the caller\'s allowed tools). An explicit list can only narrow the caller\'s tools. To give the subagent a tool from the built-in "settings" toolset, list toolsets--open, toolsets--act and the tool\'s own name (module--name). Note: subagent--return is always included automatically.',
             },
             sync: { type: 'boolean', description: 'If true, block until subagent completes (default: false)' },
             timeoutMs: { type: 'number', description: `Milliseconds. A sync task still running then moves to the background and delivers its result as a message when it ends (default ${this.maxExecutionMs}). An async task is stopped once it has run that long, counted from when it starts after any wait for a concurrency slot, retries included; async tasks have no limit by default, so set one only for a hard deadline.` },
@@ -2105,7 +2113,10 @@ export class SubagentModule implements Module {
     if (kind === 'spawn') {
       systemPrompt = (input as SpawnInput).systemPrompt;
       systemPromptSource = 'caller';
-    } else if (input.systemPrompt !== undefined && input.systemPrompt !== parentAgent?.systemPrompt) {
+    } else if (
+      input.systemPrompt !== undefined
+      && (!parentAgent || systemPromptFor(input.systemPrompt, model, this.config.formatter) !== systemPromptFor(parentAgent.systemPrompt, model, this.config.formatter))
+    ) {
       systemPrompt = input.systemPrompt;
       systemPromptSource = 'override';
     } else if (parentAgent) {
@@ -2115,6 +2126,8 @@ export class SubagentModule implements Module {
       systemPrompt = NO_PARENT_SYSTEM_PROMPT;
       systemPromptSource = 'default';
     }
+
+    const given = systemPromptFor(systemPrompt, model, this.config.formatter);
 
     const requestedTools = kind === 'spawn' ? (input as SpawnInput).tools : undefined;
     const allowed = this.filterToolNames(requestedTools, callerDepth, parentAgent);
@@ -2140,8 +2153,11 @@ export class SubagentModule implements Module {
       ...(kind === 'fork' && callToolUseId ? { forkPoint: callToolUseId } : {}),
       ...(this.config.provider !== undefined ? { provider: this.config.provider } : {}),
       model,
-      systemPrompt,
+      systemPrompt: given,
       systemPromptSource,
+      ...(hasFoldLine(given) !== hasFoldLine(systemPrompt)
+        ? { systemPromptFoldLine: hasFoldLine(given) ? 'added' as const : 'removed' as const }
+        : {}),
       maxTokens: this.resolveMaxTokens(input.maxTokens, callerAgentName),
       maxStreamTokens: SUBAGENT_STREAM_TOKENS,
       strategy: { ...SUBAGENT_STRATEGY, compressionModel: model },
@@ -2210,29 +2226,39 @@ export class SubagentModule implements Module {
       maxTokens: launch.maxTokens,
       ...(launch.proseRouting !== undefined ? { proseRouting: launch.proseRouting } : {}),
       maxStreamTokens: launch.maxStreamTokens,
+      ...thinkingBindingSettings(launch.model, launch.provider),
       strategy: new KnowledgeStrategy({
         headWindowTokens: launch.strategy.headWindowTokens,
         recentWindowTokens: launch.strategy.recentWindowTokens,
         compressionModel: launch.strategy.compressionModel,
         autoTickOnNewMessage: true,
         maxMessageTokens: launch.strategy.maxMessageTokens,
+        summaryParticipant: agentName,
       }),
       allowedTools: launch.tools.allowed === 'all' ? 'all' as const : [...launch.tools.allowed],
     };
   }
 
   /**
-   * agent-framework builds an agent's tool surface from the shared board
-   * filtered by its permissions, leaving out `utils` when they permit no
-   * utility, plus prose_help under explicit prose routing when they allow it
-   * (availableToolsForPresentation). It reads the board again when it
+   * agent-framework builds an agent's tool list from the shared board filtered
+   * by its permissions, less what its own toolsets present out of the list
+   * (the built-in "settings" toolset and servers shown as tabs, from 0.29.0;
+   * presentedTools), plus prose_help under explicit prose routing when they
+   * allow it (availableToolsForPresentation). It reads the board again when it
    * assembles the first request, and it lists an ephemeral agent only once its
    * run starts, so listToolClasses can't be asked yet.
    */
-  private streamSurface(agent: { canUseTool(name: string): boolean; proseRouting: ProseRouting }): string[] {
-    const names = this.getFramework().getAllTools()
-      .filter((t) => agent.canUseTool(t.name))
-      .map((t) => t.name);
+  private streamSurface(agent: { name?: string; canUseTool(name: string): boolean; proseRouting: ProseRouting }): string[] {
+    const framework = this.getFramework();
+    let tools = framework.getAllTools().filter((t) => agent.canUseTool(t.name));
+    const present = (framework as AgentFramework & {
+      presentedTools?: (agentName: string, tools: ToolDefinition[], canUseMeta?: boolean) => ToolDefinition[];
+    }).presentedTools;
+    if (typeof present === 'function' && agent.name) {
+      const canUseMeta = agent.canUseTool('toolsets--open') && agent.canUseTool('toolsets--act');
+      tools = present.call(framework, agent.name, tools, canUseMeta);
+    }
+    const names = tools.map((t) => t.name);
     if (agent.proseRouting === 'explicit' && agent.canUseTool('prose_help')) names.push('prose_help');
     return names;
   }
