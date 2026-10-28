@@ -2565,7 +2565,7 @@ export class SubagentModule implements Module {
   private noteHeld(name: string, outcome: 'returned' | 'failed', to: string): void {
     console.error(
       `[subagent] '${name}' ${outcome}, and its ${outcome === 'returned' ? 'result' : 'failure'} is held as mail for '${to}', ` +
-      `which has ended; subagent--list counts it on '${name}'.`,
+      `${this.framework?.getAgentRecord(to)?.ended !== undefined ? 'which has ended' : 'which this host isn\'t running now'}; subagent--list counts it on '${name}'.`,
     );
   }
 
