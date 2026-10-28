@@ -486,15 +486,20 @@ describe('CredentialMonitor — precedence', () => {
     monitor.dispose();
   });
 
-  test("a quota verdict shows the credential's own expiry, as it is when read", async () => {
+  test("a quota verdict shows the credential's own expiry, and whether the host can refresh it, as they are when read", async () => {
     let expiresAt = 3 * HOUR;
+    let refreshable = true;
     const meter = fakeMeter([[{ key: 'seven_day', label: 'weekly', utilization: 100, resetsAt: 2 * HOUR }]], () => 0);
-    const { monitor } = harness({ meter, now: () => 0, source: { expiresAt: () => expiresAt, canRefresh: () => true, refresh: async () => {} } });
+    const { monitor } = harness({ meter, now: () => 0, source: { expiresAt: () => expiresAt, canRefresh: () => refreshable, refresh: async () => {} } });
     await meter.refresh();
     expect(monitor.snapshot().kind).toBe('quota-spent');
     expect(monitor.snapshot().expiresAt).toBe(3 * HOUR);
+    expect(monitor.snapshot().rotatable).toBe(true);
     expiresAt = 5 * HOUR;
+    refreshable = false;
     expect(monitor.snapshot().expiresAt).toBe(5 * HOUR);
+    expect(monitor.snapshot().rotatable).toBe(false);
+    expect(monitor.snapshot().kind).toBe('quota-spent');
     meter.dispose();
     monitor.dispose();
   });

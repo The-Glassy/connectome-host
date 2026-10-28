@@ -66,7 +66,7 @@ describe('/auth', () => {
     expect(JSON.stringify([result.lines, done.lines])).not.toContain('secret');
   });
 
-  test('status says the credential isn\'t in its file while that stands, and how to write it again', () => {
+  test('status says the credential may not be in its file while that stands, and how to write it again', () => {
     const monitor = new CredentialMonitor({ source: { provider: 'anthropic', canRefresh: () => true }, alert: () => {} });
     monitor.observeWriteBack('/x/creds.json', 'EACCES: permission denied');
     const unsaved = handleCommand('/auth status', app(monitor)).lines.map((l) => l.text).join('\n');
@@ -91,7 +91,9 @@ describe('/auth', () => {
     expect(unsaved).toContain('/x/creds.json');
     expect(refreshed.split(unsaved).length - 1).toBe(1);
     writable = true;
-    expect(await answer('/auth recheck')).not.toContain(unsaved);
+    const recovered = await answer('/auth recheck');
+    expect(recovered).not.toContain(unsaved);
+    expect(recovered).not.toContain('WARNING');
     monitor.dispose();
   });
 

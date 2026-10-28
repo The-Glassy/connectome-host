@@ -33,7 +33,8 @@ export interface CredentialState {
   until?: number;
   /** Spent window labels (`weekly`, `5h`, …) for `quota-spent`. */
   windows?: string[];
-  /** The source can rotate the credential without operator input. */
+  /** The source can rotate the credential without operator input, which it
+   *  can't while a login is pending. */
   rotatable: boolean;
   /** Epoch ms of the credential's own expiry, when the source knows it. */
   expiresAt?: number;
