@@ -3,6 +3,7 @@ import type { Recipe } from './recipe.js';
 import { DEFAULT_RECIPE_CLOCK, resolveProvider } from './recipe.js';
 import { effectiveContextBudgetTokens, effectiveMaxTokens } from './recipe-fit.js';
 import { modelThinking } from './logging-adapter.js';
+import { getDefaultModelLimits } from './model-limits.js';
 
 type AgentConfig = Parameters<typeof AgentFramework.create>[0]['agents'][number];
 
@@ -32,8 +33,10 @@ export type FrameworkAgentConfig = AgentConfig & {
  * What anima-research/context-manager#155 has the host tell agent-framework
  * about an agent's model (logging-adapter.ts modelThinking), over `provider`
  * (recipe.ts resolveProvider): for a model whose thinking binds,
- * `thinkingBinding`, and `physicalWindowTokens` where the record has the
- * window. The control and the window are the Anthropic route's: on Bedrock
+ * `thinkingBinding`, and `physicalWindowTokens` where the record says the
+ * provider's refusal showed the model's window, at the size
+ * src/model-limits.ts holds. The control and the window are the Anthropic
+ * route's: on Bedrock
  * and the other routes nobody has tried the control or read a window, so
  * such an agent binds without the control, and has no window. A model that
  * doesn't bind gets neither, which is the framework's behaviour without them.
@@ -45,9 +48,10 @@ export function thinkingBindingSettings(model: string, provider: string | undefi
   const facts = modelThinking(model);
   if (!facts.binds) return {};
   const direct = provider === 'anthropic';
+  const window = direct && facts.windowShownByRefusal ? getDefaultModelLimits(model)?.maxContextTokens : undefined;
   return {
     thinkingBinding: { binds: true, dropBlock: direct && facts.dropBlock },
-    ...(direct && facts.windowTokens !== undefined ? { physicalWindowTokens: facts.windowTokens } : {}),
+    ...(window !== undefined ? { physicalWindowTokens: window } : {}),
   };
 }
 

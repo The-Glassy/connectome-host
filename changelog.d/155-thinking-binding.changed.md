@@ -1,9 +1,10 @@
 - **Agents on a model whose signed thinking binds** (Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 5.5,
   and, as the host records them, the Mythos models and any Claude model its record doesn't name): the
   host now records per model whether its thinking binds, whether it takes `block_binding`'s
-  `drop_block` control, whether it thinks with no thinking config, and its context window, and
-  passes agent-framework `thinkingBinding` and `physicalWindowTokens` from that record, for the
-  resident and each subagent (anima-research/context-manager#155).
+  `drop_block` control, whether it thinks with no thinking config, and whether the provider's refusal of a longer prompt
+  showed its context window, and passes agent-framework `thinkingBinding` from that record, and
+  `physicalWindowTokens` from the model limits table where it did, for the resident and each
+  subagent (anima-research/context-manager#155).
   - **The drop control:** on the four models that take it, streamed calls through the Anthropic API
     (agent turns, and an MCPL server's streamed inference) carry `block_binding: { prefix_mismatch_behavior: 'drop_block' }` in their
     thinking config, so the provider drops a signed thinking block that a change has invalidated
@@ -13,7 +14,8 @@
     `agent.thinking`, if any. A call with none is sent `{ type: 'adaptive',
     display: 'omitted' }` with the control, which goes as `'updates'` on Fable 5.1, Opus 5.5 and
     Sonnet 5.5. One-shot `complete()` calls get no control.
-  - **The window:** those four get `physicalWindowTokens: 1000000` on the Anthropic route.
+  - **The window:** those four get `physicalWindowTokens` on the Anthropic route, at the
+    1,000,000 tokens the model limits table holds for each, under its id or a dated snapshot of it.
   - **The system prompt:** on a binding model it ends with one more paragraph: "When your context
     folds, the reasoning behind your earlier replies leaves it, though their words stay, so a reply
     of yours that shows no reasoning may still have had some." An empty prompt gets it as its whole

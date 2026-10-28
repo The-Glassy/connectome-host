@@ -14,6 +14,7 @@ import {
   thinkingBindingSettings,
 } from '../src/framework-agent-config.js';
 import { validateRecipe } from '../src/recipe.js';
+import { getDefaultModelLimits } from '../src/model-limits.js';
 import { SubagentModule, describeSubagentLaunch } from '../src/modules/subagent-module.js';
 
 // anima-research/context-manager#155, part 4: the host's record of what each
@@ -21,7 +22,7 @@ import { SubagentModule, describeSubagentLaunch } from '../src/modules/subagent-
 // window sizes and the fold line.
 
 const DROP_BLOCK = { prefix_mismatch_behavior: 'drop_block' };
-const BOUND = { binds: true, dropBlock: true, thinksWithoutConfig: true, windowTokens: 1_000_000 };
+const BOUND = { binds: true, dropBlock: true, thinksWithoutConfig: true, windowShownByRefusal: true };
 const BOUND_NO_CONTROL = { binds: true, dropBlock: false, thinksWithoutConfig: true };
 const UNREACHED = { binds: true, dropBlock: false, thinksWithoutConfig: false };
 const THINKS_UNBOUND = { binds: false, dropBlock: false, thinksWithoutConfig: true };
@@ -239,6 +240,13 @@ describe('thinkingBindingSettings and the agent config', () => {
     expect(thinkingBindingSettings('claude-opus-5-5', 'anthropic'))
       .toEqual({ thinkingBinding: { binds: true, dropBlock: true }, physicalWindowTokens: 1_000_000 });
   });
+
+  test.each(['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'])(
+    '%s gets the 1,000,000-token window its provider\'s refusal showed, from the limits table', (model) => {
+      expect(getDefaultModelLimits(model)?.maxContextTokens).toBe(1_000_000);
+      expect(thinkingBindingSettings(model, 'anthropic').physicalWindowTokens).toBe(1_000_000);
+    },
+  );
 
   test('on another route, or one not stated, it binds without the control and has no window', () => {
     for (const provider of ['bedrock', 'openrouter', undefined]) {

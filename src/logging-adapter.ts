@@ -122,12 +122,12 @@ export interface ModelThinking {
   /** It thinks, minting signed thinking, when a request carries no thinking
    *  config. */
   thinksWithoutConfig: boolean;
-  /** Its context window, where the provider's own refusal of a longer prompt
-   *  named it. */
-  windowTokens?: number;
+  /** The provider's own refusal of a longer prompt showed its context window,
+   *  the size src/model-limits.ts holds for it. */
+  windowShownByRefusal?: true;
 }
 
-const BINDS_WITH_CONTROL: ModelThinking = { binds: true, dropBlock: true, thinksWithoutConfig: true, windowTokens: 1_000_000 };
+const BINDS_WITH_CONTROL: ModelThinking = { binds: true, dropBlock: true, thinksWithoutConfig: true, windowShownByRefusal: true };
 const BINDS_WITHOUT_CONTROL: ModelThinking = { binds: true, dropBlock: false, thinksWithoutConfig: true };
 const THINKS_UNBOUND: ModelThinking = { binds: false, dropBlock: false, thinksWithoutConfig: true };
 const NEITHER: ModelThinking = { binds: false, dropBlock: false, thinksWithoutConfig: false };
