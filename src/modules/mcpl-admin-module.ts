@@ -154,11 +154,6 @@ export class McplAdminModule implements Module {
     this.operatorServers = new Map(servers.map((server) => [server.id, serverProvisions(server)]));
   }
 
-  /** How agents are shown a server at first, as configured: by the agent's own
-   *  overlay entry where it defines the server (it replaces the operator's
-   *  definition whole, so without a presentation it's full), else by the
-   *  operator's definition, else in full; unknown while the overlay can't be
-   *  read, as its source is. Each agent's own switch since isn't shown. */
   private configuredPresentation(id: string, overlay: Record<string, AgentOverlayEntry> | null): string {
     if (overlay === null) return 'unknown';
     const own = entryOf(overlay, id);
@@ -232,8 +227,6 @@ export class McplAdminModule implements Module {
     return this.definitions();
   }
 
-  /** MCPL administration is rare: its tools live in agent-framework's built-in
-   *  toolset ("settings"), out of the tool list. */
   toolPlacement(_toolName: string): 'builtin' {
     return 'builtin';
   }

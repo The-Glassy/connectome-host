@@ -13,7 +13,6 @@ export interface ToolOffering {
   toolPlacement?(toolName: string): 'header' | 'builtin' | undefined;
 }
 
-/** agent-framework's built-in toolset, where utilities and the tools a module places there live. */
 const SETTINGS = 'the built-in "settings" toolset';
 
 export function settingsRoute(tool: string): string {
@@ -25,8 +24,6 @@ export function unknownToolResult(module: ToolOffering, called: string, also?: s
   const full = (name: string) => `${module.name}--${name}`;
   const own = module.getTools();
   const listed = own.filter((t) => module.toolPlacement?.(t.name) !== 'builtin').map((t) => full(t.name));
-  // A module's tools placed in the built-in toolset and its utilities live in
-  // the same place, out of the tool list, and are reached the same way.
   const inSettings = [
     ...own.filter((t) => module.toolPlacement?.(t.name) === 'builtin').map((t) => full(t.name)),
     ...(module.getUtilities?.() ?? []).filter((u) => !own.some((t) => t.name === u.name)).map((u) => full(u.name)),
