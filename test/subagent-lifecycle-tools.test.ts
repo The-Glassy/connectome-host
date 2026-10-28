@@ -589,6 +589,65 @@ describe('a resume that ends before its run starts', () => {
   }, 30_000);
 });
 
+describe("a resumed run's launch, and a registry stop of a live run", () => {
+  type Internals = {
+    registry: { register(spec: ReturnType<typeof workerSpec>): unknown; end(name: string, reason: string, by?: string): unknown };
+  };
+
+  test("a resumed run runs with its launch's tools, stream budget and prose routing", async () => {
+    let seen: { readFile: boolean; writeFile: boolean; maxStreamTokens: number; proseRouting: string } | undefined;
+    let h: Awaited<ReturnType<typeof harness>> | undefined;
+    h = await harness({
+      responseGenerator: (r) => {
+        if (r.model === 'mock-launched') {
+          const agent = h!.framework.getAgent('spawn-launched-1')!;
+          seen = { readFile: agent.canUseTool('read_file'), writeFile: agent.canUseTool('write_file'), maxStreamTokens: agent.maxStreamTokens, proseRouting: agent.proseRouting };
+        }
+        return 'ok';
+      },
+    });
+    try {
+      const internals = h.framework as unknown as Internals;
+      internals.registry.register(workerSpec('spawn-launched-1', { spawnedBy: 'parent', metadata: { subagent: 'launched-1', task: 'again', launch: { kind: 'spawn', model: 'mock-launched', systemPrompt: 'p', maxTokens: 64, maxStreamTokens: 12_345, proseRouting: 'explicit', allowedTools: ['read_file', 'subagent--return'], strategy: {} } } }));
+      internals.registry.end('spawn-launched-1', 'failed', 'test');
+      const resumed = await h.call('resume', { name: 'launched-1' });
+      expect(resumed.success).toBe(true);
+      await h.until(() => seen !== undefined, "the resumed run's request");
+      expect(seen).toEqual({ readFile: true, writeFile: false, maxStreamTokens: 12_345, proseRouting: 'explicit' });
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
+  test('a live spawn, fork or resume stopped through the registry, outside this module, ends as a stop that names who stopped it, not as a failure', async () => {
+    const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, responseGenerator: (r) => (r.model === 'mock-slow' ? 'x'.repeat(1_200) : 'ok') });
+    try {
+      const result = (name: string) => h.parentMessages().find((m) => m.content.some((b) => b.text?.includes(`[Subagent '${name}' `)));
+      const stopLive = async (name: string) => {
+        await h.until(() => h.recordOf(name) !== undefined && !h.recordOf(name)!.ended, `${name} is running`);
+        h.framework.stopAgent(h.recordOf(name)!.name, { by: 'operator' });
+        await h.until(() => result(name) !== undefined, `${name}'s end reaches the parent`);
+        const text = result(name)!.content.map((b) => b.text ?? '').join('');
+        expect(text).toContain(`[Subagent '${name}' returned]`);
+        expect(text).toContain('[Stopped by operator]');
+      };
+
+      expect((await h.call('spawn', { name: 'reg-spawn', systemPrompt: 'p', task: 'take your time', model: 'mock-slow' })).success).toBe(true);
+      await stopLive('reg-spawn');
+
+      const cm = h.framework.getAgent('parent')!.getContextManager();
+      cm.addMessage('user', [{ type: 'text', text: 'please look into it' }]);
+      cm.addMessage('parent', [{ type: 'tool_use', id: 'toolu_reg', name: 'subagent--fork', input: { name: 'reg-fork', task: 'look slowly' } }] as never);
+      expect((await h.call('fork', { name: 'reg-fork', task: 'look slowly', model: 'mock-slow' }, 'toolu_reg')).success).toBe(true);
+      await stopLive('reg-fork');
+
+      const internals = h.framework as unknown as Internals;
+      internals.registry.register(workerSpec('spawn-reg-resume-1', { spawnedBy: 'parent', resultTo: { to: 'parent', as: 'message' }, metadata: { subagent: 'reg-resume', task: 'again', launch: { kind: 'spawn', model: 'mock-slow', systemPrompt: 'p', maxTokens: 64, allowedTools: 'all', strategy: {} } } }));
+      internals.registry.end('spawn-reg-resume-1', 'failed', 'test');
+      expect((await h.call('resume', { name: 'reg-resume' })).success).toBe(true);
+      await stopLive('reg-resume');
+    } finally { await h.cleanup(); }
+  }, 40_000);
+});
+
 describe("the host's stop and a live run's record", () => {
   test("a run the host's stop cuts off keeps its record live for the next boot: the module's stop, which #454's loop runs for it, writes nothing", async () => {
     const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, defaultResponse: 'x'.repeat(1_200) });
