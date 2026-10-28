@@ -391,8 +391,10 @@ async function createFramework(
 
   let mcplAdminModule: McplAdminModule | null = null;
   if (modules.mcplAdmin === true || typeof modules.mcplAdmin === 'object') {
-    const surface = typeof modules.mcplAdmin === 'object' ? modules.mcplAdmin.surface : undefined;
-    mcplAdminModule = new McplAdminModule({ timeZone, ...(surface ? { surface } : {}) });
+    if (typeof modules.mcplAdmin === 'object' && modules.mcplAdmin.surface !== undefined) {
+      console.warn('[deprecated] modules.mcplAdmin.surface is no longer read: mcpl-admin\'s tools are in the built-in "settings" toolset (toolsets--open {toolset:"settings"}).');
+    }
+    mcplAdminModule = new McplAdminModule({ timeZone });
     moduleInstances.push(mcplAdminModule);
   }
 
@@ -435,10 +437,10 @@ async function createFramework(
       ...(subscriptionUnmetered ? { subscriptionUnmetered } : {}),
     });
     moduleInstances.push(webUiModule);
-    moduleInstances.push(new ObserversModule({
-      path: observersPath,
-      ...(webuiConfig.observersSurface ? { surface: webuiConfig.observersSurface } : {}),
-    }));
+    if (webuiConfig.observersSurface !== undefined) {
+      console.warn('[deprecated] modules.webui.observersSurface is no longer read: the observer tools are in the built-in "settings" toolset (toolsets--open {toolset:"settings"}).');
+    }
+    moduleInstances.push(new ObserversModule({ path: observersPath }));
   }
 
   if (modules.ttsRelay) {

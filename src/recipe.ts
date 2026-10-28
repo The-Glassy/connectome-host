@@ -22,6 +22,7 @@ import { isLoopbackOrTailnetHost } from './history-semantic.js';
 import { REASONING_EFFORTS, type ReasoningEffort } from './modules/settings-module.js';
 import { DEFAULT_INSTRUCTIONS_PATH } from './modules/instructions-module.js';
 import { recipeFit, type RecipeFit } from './recipe-fit.js';
+import { isServerPresentation, SERVER_PRESENTATIONS_TEXT } from './server-presentation.js';
 
 export interface RecipeStrategy {
   /** Built-in strategy name, or a custom type registered by a
@@ -546,14 +547,25 @@ export interface RecipeMcpServer {
   /** Feature-set deny-list; wins over enabledFeatureSets on overlap. */
   disabledFeatureSets?: string[];
   /**
-   * MCPL RFC-014 opt-in: whether this host advertises `toolHints` to the
+   * MCPL RFC-014: whether this host advertises `toolHints` to the
    * server, so it lists every tool with its hints (static or dynamic,
    * visible or not, which toolset) and its toolsets can be opened and
    * closed, instead of tailoring its list to a host that reads no hints.
    * Hints confer no authority. Passed through to agent-framework; omitted,
-   * the framework's default applies.
+   * the framework's default applies (on, from agent-framework 0.29.0).
    */
   toolHints?: boolean;
+  /**
+   * How agents are shown this server at first (agent-framework's host
+   * toolsets, 0.29.0): `'full'` (the default) puts its tools in the tool
+   * list; `'tab'` keeps it connected, its events still arriving, with none of
+   * its tools in the list until an agent opens its tab
+   * (`toolsets--open {server}`) and calls them through `toolsets--act`;
+   * `'closed-tab'` leaves it disconnected until an agent opens it. Each agent
+   * can switch it later, and its choice is kept over this default. Passed
+   * through to agent-framework; an earlier one ignores it.
+   */
+  presentation?: 'full' | 'tab' | 'closed-tab';
   /**
    * Tool allow-list (bare tool names as the server exports them, no toolPrefix).
    * `*` is a substring wildcard (`read_*`, `*_file`, `*`).
@@ -1062,10 +1074,11 @@ export interface RecipeModules {
    * SECURITY: `mcpl_deploy` spawns arbitrary commands as the host user —
    * enabling this module means trusting the agent with code execution.
    *
-   * `{ surface: 'utilities' }` keeps the module but parks its four tools
-   * behind the framework's single `utils` meta-tool (mcpl management is
-   * rare; it needn't cost four schemas on every inference). `true` keeps
-   * the historical first-class surface.
+   * Its four tools live in agent-framework's built-in toolset ("settings",
+   * 0.29.0): out of the tool list, opened with
+   * `toolsets--open {toolset:"settings"}` and called with `toolsets--act`.
+   * `surface` is no longer read (it chose between the tool list and the
+   * removed `utils` tool); it's accepted so older recipes still load.
    */
   mcplAdmin?: boolean | { surface?: 'tools' | 'utilities' };
 
@@ -1124,8 +1137,9 @@ export interface RecipeModules {
    * The agent's own archipelago-home identity (connectome docs/home-node.md):
    * an ed25519 keypair in the data dir, enrolled at the home node via an
    * operator invite, exchanged for fresh aid1 audience tokens on demand.
-   * Utilities-only (`utils run identity--status/enroll/token`) — costs no
-   * tool slots. `home` defaults to id.animalabs.ai; `audience` is the
+   * Its tools are utilities, in agent-framework's built-in toolset
+   * ("settings": `toolsets--open {toolset:"settings"}`, then
+   * `toolsets--act {tool:"identity--status"}`) — costs no tool slots. `home` defaults to id.animalabs.ai; `audience` is the
    * default for `token` calls.
    */
   identity?: boolean | { home?: string; audience?: string };
@@ -1241,10 +1255,12 @@ export interface RecipeWebUi {
   port?: number;
   host?: string;
   /**
-   * Where the observer grant tools (observers--get/grant/revoke) surface:
-   * 'tools' (default, historical) or 'utilities' (behind the `utils`
-   * meta-tool — grant edits are rare). Consent semantics unchanged: the
-   * agent holds the pen either way.
+   * No longer read: the observer grant tools (observers--get/grant/revoke)
+   * live in agent-framework's built-in toolset ("settings", 0.29.0), out of
+   * the tool list, opened with `toolsets--open {toolset:"settings"}` and
+   * called with `toolsets--act`. It chose between the tool list and the
+   * removed `utils` tool; it's accepted so older recipes still load.
+   * Consent semantics unchanged: the agent holds the pen.
    */
   observersSurface?: 'tools' | 'utilities';
   /**
@@ -2635,6 +2651,9 @@ export function validateRecipe(raw: unknown): Recipe {
       }
       if (server.toolHints !== undefined && typeof server.toolHints !== 'boolean') {
         throw new Error(`mcpServers.${id}.toolHints must be true or false`);
+      }
+      if (server.presentation !== undefined && !isServerPresentation(server.presentation)) {
+        throw new Error(`mcpServers.${id}.presentation must be ${SERVER_PRESENTATIONS_TEXT}`);
       }
       if (server.requestTimeoutMs !== undefined
           && !(typeof server.requestTimeoutMs === 'number' && Number.isFinite(server.requestTimeoutMs) && server.requestTimeoutMs >= 0)) {
