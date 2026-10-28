@@ -5,7 +5,7 @@
  * mail; and five tools act on the registry — list, stop, message, adopt,
  * resume.
  */
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, spyOn } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -565,6 +565,23 @@ describe('what a run that ends without a result says, and to whom', () => {
       expect(JSON.stringify(mail!.content)).toContain('Stopped');
       expect(h.parentMessages().some((m) => m.content.some((b) => b.text?.includes("[Subagent 'stopped-1'")))).toBe(false);
     } finally { await h.cleanup(); }
+  }, 30_000);
+
+  test("a result held for a caller that has ended is logged, and counted on its run in list", async () => {
+    const logged = spyOn(console, 'error');
+    const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, responseGenerator: (r) => (r.model === 'mock-slow' ? 'the held answer ' + 'x'.repeat(400) : 'ok') }, {}, [caller]);
+    try {
+      const accepted = await h.callAs('caller', 'spawn', { name: 'held-1', systemPrompt: 'p', task: 'take your time', model: 'mock-slow' });
+      expect(accepted.success).toBe(true);
+      await h.until(() => h.recordOf('held-1') !== undefined && !h.recordOf('held-1')!.ended, 'the run is registered');
+      h.framework.stopAgent('caller', { by: 'test' });
+      await h.until(() => heldFor(h, 'caller', "[Subagent 'held-1' returned]").length > 0, 'the result is held for the ended caller');
+      const lines = logged.mock.calls.map((c) => String(c[0]));
+      expect(lines.some((l) => l.includes("'held-1' returned, and its result is held as mail for 'caller', which has ended"))).toBe(true);
+      const listed = await h.subagent.handleToolCall({ id: 'list-held', name: 'list', input: {} } as unknown as ToolCall);
+      const row = (listed.data as { subagents: Array<{ name: string; held?: number }> }).subagents.find((s) => s.name === 'held-1')!;
+      expect(row.held).toBe(1);
+    } finally { logged.mockRestore(); await h.cleanup(); }
   }, 30_000);
 
   test("a resumed run's failure goes where its record's route goes, as its result would, not to whoever resumed it", async () => {

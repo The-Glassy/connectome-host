@@ -1304,7 +1304,8 @@ export class SubagentModule implements Module {
         name: 'list',
         description:
           'List the subagents within your reach (Dendrite registry) — the ones you started, and theirs: name, kind (worker or task-fork), who spawned it, its task, ' +
-          'whether it is running, ended (and why) or orphaned (its spawner ended), and where its result goes. Ended ones are listed too.',
+          'whether it is running, ended (and why) or orphaned (its spawner ended), where its result goes, and how many of its results and messages ' +
+          "haven't reached their recipient yet (held), as when the recipient has ended. Ended ones are listed too.",
         inputSchema: { type: 'object', properties: {} },
       },
       {
@@ -2516,10 +2517,11 @@ export class SubagentModule implements Module {
         if (route?.as === 'message') {
           const delivered = fw.deliverAgentResult(record.name, content);
           if (delivered.delivered) ctx.pushEvent({ type: 'inference-request', agentName: delivered.to, reason, source: 'subagent' });
+          else this.noteHeld(name, outcome, delivered.to);
           return;
         }
         if (toRecord) {
-          fw.sendAgentMessage(record.name, to, content, { wake: true });
+          if (!fw.sendAgentMessage(record.name, to, content, { wake: true }).delivered) this.noteHeld(name, outcome, to);
           return;
         }
       } catch (err) {
@@ -2531,6 +2533,13 @@ export class SubagentModule implements Module {
       : this.addForLauncher(to, this.shownName(to), name, outcome, body);
     if (wake === null) return;
     ctx.pushEvent({ type: 'inference-request', agentName: wake, reason, source: 'subagent' });
+  }
+
+  private noteHeld(name: string, outcome: 'returned' | 'failed', to: string): void {
+    console.error(
+      `[subagent] '${name}' ${outcome}, and its ${outcome === 'returned' ? 'result' : 'failure'} is held as mail for '${to}', ` +
+      `which has ended; subagent--list counts it on '${name}'.`,
+    );
   }
 
   private addForLauncher(launcher: string | undefined, launcherShown: string | undefined, name: string, outcome: 'returned' | 'failed', body: string): string | null {
@@ -2718,6 +2727,7 @@ export class SubagentModule implements Module {
 
   private describeRecord(r: AgentRecord): Record<string, unknown> {
     const meta = r.metadata as { subagent: string; task?: string; depth?: number };
+    const held = this.framework?.listHeldMail({ from: r.name }).length ?? 0;
     return {
       name: meta.subagent,
       agent: r.name,
@@ -2729,6 +2739,7 @@ export class SubagentModule implements Module {
       status: r.ended ? `ended: ${r.ended.reason}${r.ended.by ? ` (by ${r.ended.by})` : ''}` : r.orphaned ? 'running, orphaned' : 'running',
       ...(r.orphaned ? { orphanedSince: new Date(r.orphaned.since).toISOString(), formerParent: r.orphaned.formerParent.agent } : {}),
       ...(r.relationships.resultTo ? { resultTo: r.relationships.resultTo } : {}),
+      ...(held > 0 ? { held } : {}),
       createdAt: new Date(r.createdAt).toISOString(),
     };
   }
