@@ -450,3 +450,46 @@ describe("the host's stop and a live run's record", () => {
     } finally { await h.cleanup(); }
   }, 30_000);
 });
+
+describe('what a run that ends without a result says, and to whom', () => {
+  const caller = { name: 'caller', model: 'mock', systemPrompt: 'caller prompt', maxTokens: 256 };
+  const heldFor = (h: Awaited<ReturnType<typeof harness>>, to: string, said: string) =>
+    h.framework.listHeldMail({ to }).filter((m) => JSON.stringify(m.content).includes(said));
+
+  test("a failed run whose caller has ended is held for that caller as mail from the run's own agent, not a line in the primary's window", async () => {
+    let atRequest: (() => void) | undefined;
+    const h = await harness({
+      responseGenerator: (r) => {
+        if (r.model !== 'mock-fail') return 'ok';
+        atRequest?.();
+        throw new Error('the provider is unavailable');
+      },
+    }, {}, [caller]);
+    try {
+      atRequest = () => { atRequest = undefined; h.framework.stopAgent('caller', { by: 'test' }); };
+      const accepted = await h.callAs('caller', 'spawn', { name: 'failing-1', systemPrompt: 'p', task: 'try', model: 'mock-fail' });
+      expect(accepted.success).toBe(true);
+      await h.until(() => heldFor(h, 'caller', "[Subagent 'failing-1' failed]").length > 0, "the failure is held for the ended caller");
+      const [mail] = heldFor(h, 'caller', "[Subagent 'failing-1' failed]");
+      expect(mail!.from.agent).toBe(h.recordOf('failing-1')!.name);
+      expect(h.parentMessages().some((m) => m.content.some((b) => b.text?.includes("[Subagent 'failing-1'")))).toBe(false);
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
+  test("a stopped run whose caller has ended is held for that caller as mail from the run's own agent, not a line in the primary's window", async () => {
+    const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, responseGenerator: (r) => (r.model === 'mock-slow' ? 'x'.repeat(1_200) : 'ok') }, {}, [caller]);
+    try {
+      const accepted = await h.callAs('caller', 'spawn', { name: 'stopped-1', systemPrompt: 'p', task: 'take your time', model: 'mock-slow' });
+      expect(accepted.success).toBe(true);
+      await h.until(() => h.recordOf('stopped-1') !== undefined && !h.recordOf('stopped-1')!.ended, 'the run is registered');
+      const run = h.recordOf('stopped-1')!;
+      h.framework.stopAgent('caller', { by: 'test' });
+      h.framework.stopAgent(run.name, { by: 'test' });
+      await h.until(() => heldFor(h, 'caller', "[Subagent 'stopped-1' returned]").length > 0, 'the stop is held for the ended caller');
+      const [mail] = heldFor(h, 'caller', "[Subagent 'stopped-1' returned]");
+      expect(mail!.from.agent).toBe(run.name);
+      expect(JSON.stringify(mail!.content)).toContain('Stopped');
+      expect(h.parentMessages().some((m) => m.content.some((b) => b.text?.includes("[Subagent 'stopped-1'")))).toBe(false);
+    } finally { await h.cleanup(); }
+  }, 30_000);
+});

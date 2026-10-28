@@ -117,6 +117,14 @@ class SubagentFailure extends Error {
   }
 }
 
+class RunFailed extends Error {
+  constructor(message: string, readonly frameworkAgentName?: string) {
+    super(message);
+  }
+}
+
+interface RunProgress { started: boolean; attempts: number; agentName?: string }
+
 /** setTimeout's longest delay; a longer one fires at once. */
 const MAX_TIMER_MS = 2_147_483_647;
 const timerDelay = (ms: number): number => Math.min(MAX_TIMER_MS, Math.max(0, ms));
@@ -1693,15 +1701,15 @@ export class SubagentModule implements Module {
     };
   }
 
-  private endTerminated(name: string, entry: ActiveSubagent, err: SubagentTerminated, waitedMs: number, started: boolean): SubagentResult {
+  private endTerminated(name: string, entry: ActiveSubagent, err: SubagentTerminated, waitedMs: number, run: RunProgress): SubagentResult {
     entry.status = 'cancelled';
     entry.completedAt = Date.now();
     entry.statusMessage = err.reason;
     const notice = this.concurrencyNotice(waitedMs);
-    const output = err.partialOutput || (started ? '(no output yet)' : '(no output: it was stopped before its run began, so nothing ran)');
+    const output = err.partialOutput || (run.started ? '(no output yet)' : '(no output: it was stopped before its run began, so nothing ran)');
     const summary = notice + `[${stopLabel(err.reason)}] ` + output;
     this.emit(name, { type: 'done', summary, lastInputTokens: this.lastInputTokens.get(name) });
-    return { summary, findings: [], issues: [], toolCallsCount: entry.toolCallsCount };
+    return { summary, findings: [], issues: [], toolCallsCount: entry.toolCallsCount, ...(run.agentName !== undefined ? { frameworkAgentName: run.agentName } : {}) };
   }
 
   private claimName(name: string, parent: string | undefined): void {
@@ -2511,7 +2519,7 @@ export class SubagentModule implements Module {
     const fw = this.framework;
     const callerRecord = fw?.getAgentRecord(parentAgentName) ?? null;
     if (fw && callerRecord && (parentAgentName !== this.config.parentAgentName || callerRecord.ended)) {
-      const from = [...this.runOfAttempt.entries()].filter(([, display]) => display === name).map(([agent]) => agent).reverse().find((agent) => fw.getAgentRecord(agent));
+      const from = err instanceof RunFailed && err.frameworkAgentName !== undefined && fw.getAgentRecord(err.frameworkAgentName) ? err.frameworkAgentName : undefined;
       if (from) {
         try {
           fw.sendAgentMessage(from, parentAgentName, [{ type: 'text', text: `[Subagent '${name}' failed]\n\nError: ${message}` }], { wake: true });
@@ -2567,16 +2575,17 @@ export class SubagentModule implements Module {
     return null;
   }
 
-  private failedRun(name: string, kind: 'spawn' | 'fork', err: unknown, run: { started: boolean; attempts: number }): Error {
+  private failedRun(name: string, kind: 'spawn' | 'fork', err: unknown, run: RunProgress): Error {
     const who = kind === 'fork' ? `Fork '${name}'` : `Subagent '${name}'`;
     const own = err instanceof SubagentFailure ? err : null;
     const why = (own ? own.why : err instanceof Error ? err.message : String(err)).replace(/[\s.]+$/, '');
     const remedy = own?.remedy ? ` ${own.remedy}` : '';
-    if (!run.started) return new Error(`${who} didn't start, so nothing ran: ${why}.${remedy}`);
+    if (!run.started) return new RunFailed(`${who} didn't start, so nothing ran: ${why}.${remedy}`, run.agentName);
     const tries = run.attempts > 1 ? ` after ${run.attempts} attempts` : '';
-    return new Error(
+    return new RunFailed(
       `${who} stopped${tries} and returned no result: ${why}. What it did before then stays done, and ` +
       `${kind === 'fork' ? 'forking' : 'spawning'} it again starts its task over.${remedy}`,
+      run.agentName,
     );
   }
 
@@ -2957,7 +2966,7 @@ export class SubagentModule implements Module {
   private async runResumed(name: string, record: AgentRecord, launch: ResumableLaunch, parentAgentName: string): Promise<SubagentResult> {
     const framework = this.getFramework();
     const cancel = this.cancelFor(name, { record: record.name });
-    const run = { started: false, attempts: 1 };
+    const run: RunProgress = { started: false, attempts: 1 };
     let acquired: { waitedMs: number; slot: object };
     try {
       acquired = await this.acquireSlot(launch.kind, undefined, cancel.promise);
@@ -2977,6 +2986,7 @@ export class SubagentModule implements Module {
         cancel.promise,
       ]);
       const { agent, contextManager, cleanup } = created;
+      run.agentName = record.name;
       this.agentDepths.set(record.name, (record.metadata as { depth?: number }).depth ?? 1);
       this.registerLive(name, record.name, launch.systemPrompt, contextManager);
       this.runOfAttempt.set(record.name, name);
@@ -2997,9 +3007,9 @@ export class SubagentModule implements Module {
         this.emit(name, { type: 'done', summary: finalSummary, lastInputTokens: this.lastInputTokens.get(name) });
         return { summary: finalSummary, findings: [], issues: [], toolCallsCount, frameworkAgentName: record.name };
       } catch (err) {
-        if (err instanceof SubagentTerminated) return this.endTerminated(name, entry, err, waitedMs, run.started);
+        if (err instanceof SubagentTerminated) return this.endTerminated(name, entry, err, waitedMs, run);
         if (err instanceof AgentStoppedError) {
-          return this.endTerminated(name, entry, new SubagentTerminated('cancelled', this.liveSubagents.get(name)?.currentStream ?? '', `Subagent "${name}" stopped${err.by ? ` by ${err.by}` : ''} (${err.reason})`), waitedMs, run.started);
+          return this.endTerminated(name, entry, new SubagentTerminated('cancelled', this.liveSubagents.get(name)?.currentStream ?? '', `Subagent "${name}" stopped${err.by ? ` by ${err.by}` : ''} (${err.reason})`), waitedMs, run);
         }
         entry.status = 'failed';
         entry.completedAt = Date.now();
@@ -3057,7 +3067,7 @@ export class SubagentModule implements Module {
   ): Promise<SubagentResult> {
     const cancel = this.cancelFor(input.name, launch.parentAgent ? { spawner: launch.parentAgent.name } : {});
     this.claimName(input.name, _callerAgentName);
-    const run = { started: false, attempts: 0 };
+    const run: RunProgress = { started: false, attempts: 0 };
     let acquired: { waitedMs: number; slot: object };
     try {
       acquired = await this.acquireSlot('spawn', undefined, cancel.promise, ticket);
@@ -3108,11 +3118,12 @@ export class SubagentModule implements Module {
         } catch (err) {
           if (err instanceof SubagentTerminated) {
             giveBackWhenCreated(creating, input.name);
-            return this.endTerminated(input.name, entry, err, waitedMs, run.started);
+            return this.endTerminated(input.name, entry, err, waitedMs, run);
           }
           throw err;
         }
         const { agent, contextManager, cleanup } = created;
+        run.agentName = agentName;
 
         this.agentDepths.set(agentName, childDepth);
 
@@ -3179,17 +3190,17 @@ export class SubagentModule implements Module {
         } catch (err) {
           lastError = err instanceof Error ? err : new Error(String(err));
 
-          if (lastError instanceof SubagentTerminated) return this.endTerminated(input.name, entry, lastError, waitedMs, run.started);
+          if (lastError instanceof SubagentTerminated) return this.endTerminated(input.name, entry, lastError, waitedMs, run);
           if (lastError instanceof AgentStoppedError) {
             // Stopped in the registry from outside this module: a clean end, not a failure.
-            return this.endTerminated(input.name, entry, new SubagentTerminated('cancelled', this.liveSubagents.get(input.name)?.currentStream ?? '', `Subagent "${input.name}" stopped${lastError.by ? ` by ${lastError.by}` : ''} (${lastError.reason})`), waitedMs, run.started);
+            return this.endTerminated(input.name, entry, new SubagentTerminated('cancelled', this.liveSubagents.get(input.name)?.currentStream ?? '', `Subagent "${input.name}" stopped${lastError.by ? ` by ${lastError.by}` : ''} (${lastError.reason})`), waitedMs, run);
           }
 
           if (lastError instanceof SubagentFailure) break;
           if (this.isUnsleptProviderWait(lastError)) break;
           if (this.isRateLimitError(lastError, agentName)) {
             const stopped = await this.waitOrStop(this.onRateLimitHit(deadline), cancel.promise);
-            if (stopped) return this.endTerminated(input.name, entry, stopped, waitedMs, run.started);
+            if (stopped) return this.endTerminated(input.name, entry, stopped, waitedMs, run);
           }
           if (!this.isTransientError(lastError, agentName) || attempt === this.maxRetries) break;
 
@@ -3201,7 +3212,7 @@ export class SubagentModule implements Module {
           );
           entry.statusMessage = `Retry ${attempt + 1}: ${lastError.message}`;
           const stopped = await this.waitOrStop(delay, cancel.promise);
-          if (stopped) return this.endTerminated(input.name, entry, stopped, waitedMs, run.started);
+          if (stopped) return this.endTerminated(input.name, entry, stopped, waitedMs, run);
         } finally {
           this.agentDepths.delete(agentName);
           this.unregisterLive(input.name, agentName);
@@ -3239,7 +3250,7 @@ export class SubagentModule implements Module {
   ): Promise<SubagentResult> {
     const cancel = this.cancelFor(input.name, launch.parentAgent ? { spawner: launch.parentAgent.name } : {});
     this.claimName(input.name, callerAgentName);
-    const run = { started: false, attempts: 0 };
+    const run: RunProgress = { started: false, attempts: 0 };
     let acquired: { waitedMs: number; slot: object };
     try {
       acquired = await this.acquireSlot('fork', undefined, cancel.promise, ticket);
@@ -3303,11 +3314,12 @@ export class SubagentModule implements Module {
         } catch (err) {
           if (err instanceof SubagentTerminated) {
             giveBackWhenCreated(creating, input.name);
-            return this.endTerminated(input.name, entry, err, waitedMs, run.started);
+            return this.endTerminated(input.name, entry, err, waitedMs, run);
           }
           throw err;
         }
         const { agent, contextManager, cleanup } = created;
+        run.agentName = agentName;
 
         this.agentDepths.set(agentName, childDepth);
 
@@ -3453,17 +3465,17 @@ export class SubagentModule implements Module {
         } catch (err) {
           lastError = err instanceof Error ? err : new Error(String(err));
 
-          if (lastError instanceof SubagentTerminated) return this.endTerminated(input.name, entry, lastError, waitedMs, run.started);
+          if (lastError instanceof SubagentTerminated) return this.endTerminated(input.name, entry, lastError, waitedMs, run);
           if (lastError instanceof AgentStoppedError) {
             // Stopped in the registry from outside this module: a clean end, not a failure.
-            return this.endTerminated(input.name, entry, new SubagentTerminated('cancelled', this.liveSubagents.get(input.name)?.currentStream ?? '', `Subagent "${input.name}" stopped${lastError.by ? ` by ${lastError.by}` : ''} (${lastError.reason})`), waitedMs, run.started);
+            return this.endTerminated(input.name, entry, new SubagentTerminated('cancelled', this.liveSubagents.get(input.name)?.currentStream ?? '', `Subagent "${input.name}" stopped${lastError.by ? ` by ${lastError.by}` : ''} (${lastError.reason})`), waitedMs, run);
           }
 
           if (lastError instanceof SubagentFailure) break;
           if (this.isUnsleptProviderWait(lastError)) break;
           if (this.isRateLimitError(lastError, agentName)) {
             const stopped = await this.waitOrStop(this.onRateLimitHit(deadline), cancel.promise);
-            if (stopped) return this.endTerminated(input.name, entry, stopped, waitedMs, run.started);
+            if (stopped) return this.endTerminated(input.name, entry, stopped, waitedMs, run);
           }
           if (!this.isTransientError(lastError, agentName) || attempt === this.maxRetries) break;
 
@@ -3475,7 +3487,7 @@ export class SubagentModule implements Module {
           );
           entry.statusMessage = `Retry ${attempt + 1}: ${lastError.message}`;
           const stopped = await this.waitOrStop(delay, cancel.promise);
-          if (stopped) return this.endTerminated(input.name, entry, stopped, waitedMs, run.started);
+          if (stopped) return this.endTerminated(input.name, entry, stopped, waitedMs, run);
         } finally {
           this.agentDepths.delete(agentName);
           this.unregisterLive(input.name, agentName);
