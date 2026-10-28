@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { AgentFramework } from '@animalabs/agent-framework';
 import { handleCommand } from '../src/commands.js';
-import type { CredentialActionId, CredentialState } from '../src/credential-state.js';
+import { CredentialMonitor, type CredentialActionId, type CredentialState } from '../src/credential-state.js';
 
 function state(over: Partial<CredentialState> = {}): CredentialState {
   return {
@@ -64,6 +64,17 @@ describe('/auth', () => {
     const done = await result.asyncWork!;
     expect(ran).toEqual([['set-token', { token: 'sk-ant-oat01-secret' }]]);
     expect(JSON.stringify([result.lines, done.lines])).not.toContain('secret');
+  });
+
+  test('status says the credential isn\'t in its file while that stands, and how to write it again', () => {
+    const monitor = new CredentialMonitor({ source: { provider: 'anthropic', canRefresh: () => true }, alert: () => {} });
+    monitor.observeWriteBack('/x/creds.json', 'EACCES: permission denied');
+    const unsaved = handleCommand('/auth status', app(monitor)).lines.map((l) => l.text).join('\n');
+    expect(unsaved).toContain(`WARNING: ${monitor.snapshot().unsaved}`);
+    expect(unsaved).toContain('/auth recheck');
+    monitor.observeWriteBack('/x/creds.json');
+    expect(handleCommand('/auth status', app(monitor)).lines.map((l) => l.text).join('\n')).not.toContain('WARNING');
+    monitor.dispose();
   });
 
   test('rejects unknown subcommands and a bare token', () => {

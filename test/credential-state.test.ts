@@ -288,15 +288,17 @@ describe('CredentialMonitor — actions', () => {
     expect(done.kind).toBe('ok');
   });
 
-  test('a persist warning from the source rides on the action outcome', async () => {
-    const { monitor } = harness({
-      source: { canRefresh: () => true, refresh: async () => {}, probe: async () => {}, persistWarning: () => 'credential rotated in memory but not written to /x: EACCES' },
-    });
+  test('a refresh whose write to the file fails says so in its outcome', async () => {
+    let monitor!: CredentialMonitor;
+    ({ monitor } = harness({
+      source: { canRefresh: () => true, refresh: async () => { monitor.observeWriteBack('/x/creds.json', 'EACCES: permission denied'); }, probe: async () => {} },
+    }));
     monitor.observeError(authErr());
     const s = await monitor.runAction('refresh');
     expect(s.kind).toBe('ok');
     expect(s.lastAction?.ok).toBe(true);
-    expect(s.lastAction?.message).toContain('WARNING: credential rotated in memory but not written to /x');
+    expect(s.unsaved).toContain('/x/creds.json');
+    expect(s.lastAction?.message).toContain(`WARNING: ${s.unsaved}`);
   });
 
   test('a restart during a pending login is refused when the source cannot cancel; a later fresh login runs', async () => {
@@ -476,6 +478,73 @@ describe('CredentialMonitor — precedence', () => {
     const { monitor } = harness({ source: { currentToken: () => 'sk-live' } });
     expect(monitor.bearer()).toBe('sk-live');
     expect(JSON.stringify(monitor.snapshot())).not.toContain('sk-live');
+  });
+});
+
+describe('CredentialMonitor — a credential not written to its file', () => {
+  test('each failed write raises credential-unsaved, naming the file and the error and offering a re-check, and leaves the state as it was', () => {
+    const { monitor, alerts } = harness({ source: { canRefresh: () => true, refresh: async () => {} } });
+    monitor.observeWriteBack('/x/creds.json', 'EACCES: permission denied');
+    expect(alerts.map((a) => a.kind)).toEqual(['credential-unsaved']);
+    expect(alerts[0]!.message).toContain('/x/creds.json');
+    expect(alerts[0]!.message).toContain('EACCES: permission denied');
+    expect((alerts[0]!.data.actions as Array<{ id: string }>).map((a) => a.id)).toEqual(['recheck']);
+    expect(monitor.snapshot().kind).toBe('ok');
+    expect(monitor.snapshot().unsaved).toBe(alerts[0]!.message);
+    monitor.observeWriteBack('/x/creds.json', 'EACCES: permission denied');
+    expect(alerts.map((a) => a.kind)).toEqual(['credential-unsaved', 'credential-unsaved']);
+    monitor.dispose();
+  });
+
+  test('it stands beside the credential state, whose alerts go on as before', () => {
+    const { monitor, alerts } = harness({ source: { canRefresh: () => true, refresh: async () => {} } });
+    monitor.observeError(authErr());
+    monitor.observeWriteBack('/x/creds.json', 'EACCES: permission denied');
+    expect(monitor.snapshot().kind).toBe('auth-rejected');
+    monitor.observeSuccess();
+    expect(monitor.snapshot().kind).toBe('ok');
+    expect(monitor.snapshot().unsaved).toBeDefined();
+    expect(alerts.map((a) => a.kind)).toEqual(['auth-rejected', 'credential-unsaved', 'auth-rejected-clear']);
+    monitor.dispose();
+  });
+
+  test('the next write that succeeds clears it once; one with nothing standing raises nothing', () => {
+    const { monitor, alerts } = harness();
+    monitor.observeWriteBack('/x/creds.json');
+    expect(alerts).toEqual([]);
+    monitor.observeWriteBack('/x/creds.json', 'EACCES: permission denied');
+    monitor.observeWriteBack('/x/creds.json');
+    monitor.observeWriteBack('/x/creds.json');
+    expect(alerts.map((a) => a.kind)).toEqual(['credential-unsaved', 'credential-unsaved-clear']);
+    expect(alerts[1]!.message).toContain('/x/creds.json');
+    expect(monitor.snapshot().unsaved).toBeUndefined();
+    monitor.dispose();
+  });
+
+  test('/auth recheck writes the credential again while the alert stands, and only then', async () => {
+    let writable = false;
+    let writes = 0;
+    let monitor!: CredentialMonitor;
+    let alerts!: Alert[];
+    ({ monitor, alerts } = harness({
+      source: {
+        probe: async () => {},
+        writeBack: () => { writes++; monitor.observeWriteBack('/x/creds.json', writable ? undefined : 'EACCES: permission denied'); },
+      },
+    }));
+    monitor.observeWriteBack('/x/creds.json', 'EACCES: permission denied');
+    const still = await monitor.runAction('recheck');
+    expect(writes).toBe(1);
+    expect(still.lastAction?.message).toContain('WARNING');
+    writable = true;
+    const fixed = await monitor.runAction('recheck');
+    expect(writes).toBe(2);
+    expect(fixed.unsaved).toBeUndefined();
+    expect(fixed.lastAction?.message).not.toContain('WARNING');
+    expect(alerts.at(-1)!.kind).toBe('credential-unsaved-clear');
+    await monitor.runAction('recheck');
+    expect(writes).toBe(2);
+    monitor.dispose();
   });
 });
 

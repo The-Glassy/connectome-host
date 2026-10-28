@@ -43,6 +43,9 @@ export interface CredentialState {
   login?: { verificationUrl: string; userCode: string };
   /** Outcome of the last operator action, for the panel. */
   lastAction?: { id: CredentialActionId; at: number; ok: boolean; message: string };
+  /** While the last write of the credential to its file failed: what the
+   *  `credential-unsaved` alert said. */
+  unsaved?: string;
 }
 
 export interface CredentialSource {
@@ -57,7 +60,7 @@ export interface CredentialSource {
    *  429 on the usage endpoint. */
   probe?(): Promise<void>;
   currentToken?(): string | undefined;
-  persistWarning?(): string | undefined;
+  writeBack?(): void;
 }
 
 export interface CredentialMonitorOptions {
@@ -109,6 +112,7 @@ export class CredentialMonitor {
   private actionChain: Promise<void> = Promise.resolve();
   private loginInFlight = false;
   private disposed = false;
+  private unsaved: string | undefined;
 
   constructor(options: CredentialMonitorOptions) {
     this.source = options.source;
@@ -132,7 +136,7 @@ export class CredentialMonitor {
   }
 
   snapshot(): CredentialState {
-    return { ...this.state, actions: [...this.state.actions] };
+    return { ...this.state, actions: [...this.state.actions], ...(this.unsaved !== undefined ? { unsaved: this.unsaved } : {}) };
   }
 
   bearer(): string | undefined {
@@ -210,6 +214,23 @@ export class CredentialMonitor {
         { id: 'login', label: 'Restart login', hint: 'Starts a new device-code login and shows a fresh code.' },
         { id: 'recheck', label: 'Re-check' },
       ],
+    });
+  }
+
+  observeWriteBack(file: string, error?: string): void {
+    if (this.disposed) return;
+    const provider = this.source.provider;
+    if (error === undefined) {
+      if (this.unsaved === undefined) return;
+      this.unsaved = undefined;
+      this.emit('credential-unsaved-clear', `${provider} credential written to ${file}`, { provider });
+      return;
+    }
+    const why = error.trim() ? ` (${trim(error)})` : '';
+    this.unsaved = `${provider} credential couldn't be written to ${file}${why} — the file keeps the previous one, which a restart would load and which may no longer be accepted`;
+    this.emit('credential-unsaved', this.unsaved, {
+      provider,
+      actions: [{ id: 'recheck', label: 'Re-check', hint: 'Writes the credential to its file again, then re-checks it.' }],
     });
   }
 
@@ -358,6 +379,7 @@ export class CredentialMonitor {
           return done(...(await this.settle('token replaced', id)));
         }
         case 'recheck': {
+          if (this.unsaved !== undefined) this.source.writeBack?.();
           await this.meter?.refresh();
           return done(...(await this.settle('re-checked', id)));
         }
@@ -372,8 +394,7 @@ export class CredentialMonitor {
 
   private async settle(what: string, id: CredentialActionId): Promise<[boolean, string]> {
     this.armExpiryTimer();
-    const persistWarning = this.source.persistWarning?.();
-    const warn = persistWarning ? `; WARNING: ${persistWarning}` : '';
+    const warn = this.unsaved !== undefined ? `; WARNING: ${this.unsaved}` : '';
     if (!this.source.probe) {
       if (id === 'recheck') {
         return [true, `${what}; nothing to verify for ${this.source.provider} (no probe) — state unchanged`];
