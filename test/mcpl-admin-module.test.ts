@@ -933,6 +933,22 @@ describe('mcpl_restart', () => {
 });
 
 describe('mcpl_list', () => {
+  test('an agent\'s entry that replaces an operator\'s server decides its presentation alone: full without one', async () => {
+    const { stub } = makeStubFramework();
+    const mod = makeModule(stub);
+    mod.setOperatorServers([{ id: 'games', url: 'wss://games.example/mcpl', presentation: 'closed-tab' }]);
+    await call(mod, 'mcpl_deploy', { id: 'games', command: 'node' });
+    expect(String((await call(mod, 'mcpl_list')).data ?? '')).toMatch(/games: [^\n]*presentation=full/);
+  });
+
+  test('while the overlay can\'t be read, a server\'s presentation is unknown, as its source is', async () => {
+    const { stub } = makeStubFramework();
+    const mod = makeModule(stub);
+    await call(mod, 'mcpl_deploy', { id: 'mine', command: 'node', presentation: 'tab' });
+    writeFileSync(overlayPath, '{ not json');
+    expect(String((await call(mod, 'mcpl_list')).data ?? '')).toMatch(/mine: [^\n]*presentation=unknown, prefix=[^,]*, source=unknown/);
+  });
+
   test('shows a closed tab as such, and each server\'s configured presentation: the agent\'s own entry, else the operator\'s, else full', async () => {
     const { stub, servers } = makeStubFramework();
     const mod = makeModule(stub);

@@ -155,11 +155,14 @@ export class McplAdminModule implements Module {
   }
 
   /** How agents are shown a server at first, as configured: by the agent's own
-   *  overlay entry where it defines the server, else by the operator's
-   *  definition, else in full. Each agent's own switch since isn't shown. */
+   *  overlay entry where it defines the server (it replaces the operator's
+   *  definition whole, so without a presentation it's full), else by the
+   *  operator's definition, else in full; unknown while the overlay can't be
+   *  read, as its source is. Each agent's own switch since isn't shown. */
   private configuredPresentation(id: string, overlay: Record<string, AgentOverlayEntry> | null): string {
-    const own = overlay ? entryOf(overlay, id) : undefined;
-    if (own && overlayEntryReplaces(own) && isServerPresentation(own.presentation)) return own.presentation;
+    if (overlay === null) return 'unknown';
+    const own = entryOf(overlay, id);
+    if (own && overlayEntryReplaces(own)) return isServerPresentation(own.presentation) ? own.presentation : 'full';
     const operator = this.operatorDefinitions.find((d) => d.id === id)?.presentation;
     return isServerPresentation(operator) ? operator : 'full';
   }
