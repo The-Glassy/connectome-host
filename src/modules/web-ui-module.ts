@@ -34,6 +34,8 @@ import type { CallLedger } from '../call-ledger.js';
 import type { QuotaMeter } from '../quota-meter.js';
 import type { CredentialMonitor } from '../credential-state.js';
 import { handleCommand } from '../commands.js';
+import { PANEL_OPS_THAT_CHANGE_THE_SESSION, refusedWhileSwitching, trackRunning } from '../session-switch.js';
+import { parseCommand } from '../command-name.js';
 import { AgentTreeReducer, type AgentTreeSnapshot } from '../state/agent-tree-reducer.js';
 import { FleetTreeAggregator } from '../state/fleet-tree-aggregator.js';
 import { TurnInterrupts, interruptAgents, interruptSubagents } from '../state/turn-interrupt.js';
@@ -43,6 +45,7 @@ import {
   WEB_PROTOCOL_VERSION,
   isClientMessage,
   type WebUiServerMessage,
+  type WebUiClientMessage,
   type WelcomeMessage,
   type WelcomeMessageEntry,
   type RequestHistoryMessage,
@@ -120,6 +123,7 @@ export interface WebUiAppRef {
   recipe: Recipe;
   branchState: BranchState;
   switchSession(id: string): Promise<void>;
+  switching?: boolean;
 }
 
 export interface WebUiModuleConfig {
@@ -183,6 +187,35 @@ const HEALTH_ROUTE_STRINGS: ReadonlyMap<string, KeptStrings> = new Map<string, K
 
 function isChildScope(scope: string | undefined): scope is string {
   return scope !== undefined && scope !== '' && scope !== 'local';
+}
+
+export function switchRefusalFor(
+  app: { switching?: boolean },
+  message: WebUiClientMessage,
+): WebUiServerMessage | null {
+  switch (message.type) {
+    case 'rollback':
+    case 'suppress': {
+      const error = refusedWhileSwitching(app, message.type);
+      return error ? { type: 'surgery-result', corrId: message.corrId, op: message.type, ok: false, error } : null;
+    }
+    case 'fleet-stop':
+    case 'fleet-restart': {
+      const text = refusedWhileSwitching(app, `${message.type} ${message.name}`);
+      return text ? { type: 'command-result', lines: [{ text, style: 'tool' }] } : null;
+    }
+    case 'host-quiesce':
+    case 'host-resume': {
+      const text = refusedWhileSwitching(app, message.type);
+      return text ? { type: 'error', corrId: message.corrId, message: text } : null;
+    }
+    default: {
+      if (!PANEL_OPS_THAT_CHANGE_THE_SESSION.has(message.type)) return null;
+      if (isChildScope((message as { scope?: string }).scope)) return null;
+      const text = refusedWhileSwitching(app, message.type);
+      return text ? { type: 'error', message: text } : null;
+    }
+  }
 }
 
 function panelErrorResponse(err: unknown): Response {
@@ -1547,6 +1580,13 @@ export class WebUiModule implements Module {
       this.send(client, { type: 'error', message: 'host not ready' });
       return;
     }
+    const app = sharedServer.app;
+    const refused = switchRefusalFor(app, parsed);
+    if (refused) {
+      this.send(client, refused);
+      if (parsed.type === 'host-quiesce' || parsed.type === 'host-resume') this.broadcastHostMode();
+      return;
+    }
 
     switch (parsed.type) {
       case 'ping':
@@ -1594,19 +1634,19 @@ export class WebUiModule implements Module {
       }
 
       case 'rollback':
-        void this.handleSurgery(client, 'rollback', parsed);
+        void trackRunning(app, 'rollback', this.handleSurgery(client, 'rollback', parsed));
         return;
 
       case 'suppress':
-        void this.handleSurgery(client, 'suppress', parsed);
+        void trackRunning(app, 'suppress', this.handleSurgery(client, 'suppress', parsed));
         return;
 
       case 'host-quiesce':
-        void this.handleHostMode(client, 'quiesce', parsed);
+        void trackRunning(app, 'host-quiesce', this.handleHostMode(client, 'quiesce', parsed));
         return;
 
       case 'host-resume':
-        void this.handleHostMode(client, 'resume', parsed);
+        void trackRunning(app, 'host-resume', this.handleHostMode(client, 'resume', parsed));
         return;
 
       case 'request-host-mode': {
@@ -1655,7 +1695,7 @@ export class WebUiModule implements Module {
 
       case 'fleet-stop':
       case 'fleet-restart': {
-        void this.handleFleetControl(client, parsed.type, parsed.name);
+        void trackRunning(app, `${parsed.type} ${parsed.name}`, this.handleFleetControl(client, parsed.type, parsed.name));
         return;
       }
 
@@ -2413,9 +2453,10 @@ export class WebUiModule implements Module {
 
   private async dispatchCommand(client: ClientState, command: string, corrId?: string): Promise<void> {
     if (!sharedServer?.app) return;
+    const app = sharedServer.app;
     let result;
     try {
-      result = handleCommand(command, sharedServer?.app);
+      result = handleCommand(command, app);
     } catch (err) {
       this.send(client, {
         type: 'error',
@@ -2444,8 +2485,9 @@ export class WebUiModule implements Module {
       this.scheduleShutdown();
     }
 
+    const commandName = `/${parseCommand(command).name}`;
     if (result.branchChanged) {
-      await this.materializeConfigMount();
+      await trackRunning(app, commandName, this.materializeConfigMount());
       this.broadcastBranchChanged();
       this.refreshAllWelcomes();
     }
@@ -2474,7 +2516,7 @@ export class WebUiModule implements Module {
           switchToSessionId: follow.switchToSessionId,
         });
         if (follow.branchChanged) {
-          await this.materializeConfigMount();
+          await trackRunning(app, commandName, this.materializeConfigMount());
           this.broadcastBranchChanged();
           this.refreshAllWelcomes();
         }

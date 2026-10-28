@@ -857,6 +857,21 @@ Commands that move the head are refused while a turn is in flight: `/undo`,
 store is mid-turn, the subconscious included, and `/newtopic` while the main
 agent is.
 
+While a session switch is under way, these are refused, each saying
+nothing changed: `/undo`, `/redo`, `/checkout`, `/branchto`, `/newtopic`,
+`/nudge`, `/puppet`, `/session rename`, `/session delete`, `/fleet stop` and
+`/fleet restart`, and `/checkpoint`, `/restore` and `/budget` given a name or
+a value. The forms of those three that only list or show answer as they do
+without a switch. The same goes for the fleet view's stop and restart keys,
+and for the Web UI's rollback, suppress, fleet stop and restart, host
+quiesce and resume, and pin and settings changes. A pin or settings change
+made for a fleet child is passed on to it, and the child refuses it only
+while its own session is switching. Once the switch has stopped the old
+session's framework, the Web UI answers "host not ready" until the next one
+is installed, as before. `/session new` and `/session switch` start no
+switch while one is under way, or while one of the commands above, given
+earlier, or one of these actions on this host is still running.
+
 ## TUI controls
 
 | Key | Action |

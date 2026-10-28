@@ -37,6 +37,7 @@ import { SELF_RESTART_EXIT_CODE, selfRestart } from './self-restart.js';
 import { RESTART_EXIT_CODE } from './update/contract.js';
 import { hostUpdate } from './update/update.js';
 import { traceFollower } from './piped-turns.js';
+import { PANEL_OPS_THAT_CHANGE_THE_SESSION, refusedWhileSwitching, trackRunning } from './session-switch.js';
 
 interface HeadlessOptions {
   socketPath?: string;
@@ -425,15 +426,27 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
       }
       case 'panel-request': {
         const op = typeof cmd.op === 'string' ? cmd.op : '';
-        const { runPanelOp } = await import('./web/panel-data.js');
-        const result = await runPanelOp(app, op, cmd.params ?? {});
+        const changes = PANEL_OPS_THAT_CHANGE_THE_SESSION.has(op);
+        const refused = changes ? refusedWhileSwitching(app, op) : null;
+        if (refused) {
+          reply({ type: 'panel-response', corrId: cmd.corrId, op, ok: false, error: refused, status: 409 });
+          return;
+        }
+        const running = import('./web/panel-data.js').then(({ runPanelOp }) => runPanelOp(app, op, cmd.params ?? {}));
+        const result = await (changes ? trackRunning(app, op, running) : running);
         reply({ type: 'panel-response', corrId: cmd.corrId, op, ...result });
         return;
       }
       case 'update-request': {
-        const { answerSwitchRequest } = await import('./update/quiesce.js');
+        const asked = (cmd.request as { op?: unknown } | null)?.op;
+        const refused = asked === 'quiesce' ? refusedWhileSwitching(app, "the release switch's quiesce") : null;
+        if (refused) {
+          reply({ type: 'update-response', corrId: cmd.corrId, ok: false, error: refused });
+          return;
+        }
+        const answering = import('./update/quiesce.js').then(({ answerSwitchRequest }) => answerSwitchRequest(app.framework, cmd.request));
         try {
-          const data = await answerSwitchRequest(app.framework, cmd.request);
+          const data = await (asked === 'quiesce' ? trackRunning(app, "the release switch's quiesce", answering) : answering);
           reply({ type: 'update-response', corrId: cmd.corrId, ok: true, data });
         } catch (error) {
           reply({ type: 'update-response', corrId: cmd.corrId, ok: false, error: error instanceof Error ? error.message : String(error) });

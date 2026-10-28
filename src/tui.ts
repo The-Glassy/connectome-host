@@ -30,6 +30,7 @@ import { type FleetModule } from './modules/fleet-module.js';
 import type { WireEvent } from './modules/fleet-types.js';
 import { parseFleetRoute } from './modules/fleet-types.js';
 import { handleCommand, resetBranchState } from './commands.js';
+import { refusedWhileSwitching, trackRunning } from './session-switch.js';
 import { formatQuotaReadout } from './quota-meter.js';
 import { recipeModel } from './recipe.js';
 import { takeRecipeWarnings } from './recipe-warnings.js';
@@ -269,6 +270,7 @@ interface AppContext {
   credentials?: import('./credential-state.js').CredentialMonitor | null;
   subscriptionUnmetered?: boolean;
   stopping?: boolean;
+  switching?: boolean;
   switchSession(id: string): Promise<void>;
 }
 
@@ -825,7 +827,7 @@ export async function runTui(app: AppContext): Promise<void> {
 
     const ws = app.framework.getModule('workspace');
     if (ws && 'materializeMount' in ws) {
-      (ws as any).materializeMount('_config').catch(() => {});
+      trackRunning(app, "the _config mount's refresh", (ws as any).materializeMount('_config')).catch(() => {});
     }
 
     updateStatus();
@@ -2241,7 +2243,12 @@ export async function runTui(app: AppContext): Promise<void> {
         if (node && node.kind !== 'researcher') {
           if (node.kind === 'fleet-child' && fleetMod) {
             const childName = node.fleetChildName!;
-            fleetMod.handleToolCall({ id: `tui-kill-${Date.now()}`, name: 'kill', input: { name: childName } })
+            const refused = refusedWhileSwitching(app, `stop ${childName}`);
+            if (refused) {
+              showFleetNotice(refused);
+              return;
+            }
+            trackRunning(app, `stop ${childName}`, fleetMod.handleToolCall({ id: `tui-kill-${Date.now()}`, name: 'kill', input: { name: childName } }))
               .then((res) => {
                 if (!res.success) showFleetNotice(`stop ${childName} failed: ${res.error ?? 'unknown'}`);
                 updateFleetView();
@@ -2261,7 +2268,12 @@ export async function runTui(app: AppContext): Promise<void> {
         const node = nodeId ? visibleNodes.get(nodeId) : undefined;
         if (node?.kind === 'fleet-child' && fleetMod) {
           const childName = node.fleetChildName!;
-          fleetMod.handleToolCall({ id: `tui-restart-${Date.now()}`, name: 'restart', input: { name: childName } })
+          const refused = refusedWhileSwitching(app, `restart ${childName}`);
+          if (refused) {
+            showFleetNotice(refused);
+            return;
+          }
+          trackRunning(app, `restart ${childName}`, fleetMod.handleToolCall({ id: `tui-restart-${Date.now()}`, name: 'restart', input: { name: childName } }))
             .then((res) => {
               if (!res.success) showFleetNotice(`restart ${childName} failed: ${res.error ?? 'unknown'}`);
               updateFleetView();
