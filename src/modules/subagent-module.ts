@@ -2086,6 +2086,7 @@ export class SubagentModule implements Module {
         compressionModel: launch.strategy.compressionModel,
         autoTickOnNewMessage: true,
         maxMessageTokens: launch.strategy.maxMessageTokens,
+        summaryParticipant: agentName,
       }),
       allowedTools: launch.tools.allowed === 'all' ? 'all' as const : [...launch.tools.allowed],
     };

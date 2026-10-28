@@ -480,7 +480,7 @@ async function createFramework(
     return withEnv;
   });
 
-  const strategy = buildFrameworkStrategy(recipe, model, timeZone, extensionRegistry);
+  const strategy = buildFrameworkStrategy(recipe, model, timeZone, extensionRegistry, agentName);
   const agentConfig = buildFrameworkAgentConfig(recipe, agentName, model, strategy);
 
   for (const notice of deprecatedConversationsNotices(recipe.conversations)) console.warn(`[deprecated] ${notice}`);
