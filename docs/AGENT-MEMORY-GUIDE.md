@@ -32,7 +32,9 @@ The context you're given is assembled from three parts:
    for as long as it fits; only when your whole context would exceed its
    budget (`contextBudgetTokens`) are stretches folded — just enough to fit.
 3. **Tail** — the most recent messages, kept **verbatim**
-   (`recentWindowTokens`). Everything here is exactly as it happened. If this
+   (`recentWindowTokens`). Everything here is exactly as it happened, except that on
+   a model whose thinking binds, the reasoning behind replies after a fold's first
+   change is left out, though their words stay. If this
    is large, most of an ordinary conversation stays verbatim for a long time.
 
 You're never shown the same stretch twice: a span appears either raw or as a

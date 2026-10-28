@@ -20,9 +20,14 @@ import { traceError } from '../state/turn-trace.js';
 import { shown } from './shown.js';
 import { unknownToolResult } from './unknown-tool.js';
 import { hostNoteMetadata } from '../speaker.js';
+import { hasFoldLine, systemPromptFor, thinkingBindingSettings } from '../framework-agent-config.js';
 
 export interface SubagentModuleConfig {
   provider?: string;
+  /** The recipe's formatter, which every agent the host runs sends through
+   *  (recipe-formatter.ts). Under `anthropic-xml` no subagent gets the fold
+   *  line, as no resident does (framework-agent-config.ts systemPromptFor). */
+  formatter?: 'native' | 'anthropic-xml';
   maxDepth?: number;
   currentDepth?: number;
   defaultModel?: string;
@@ -384,6 +389,11 @@ export interface SubagentLaunch {
   model: string;
   systemPrompt: string;
   systemPromptSource: 'parent' | 'override' | 'caller' | 'default';
+  /** Whether the fold line (systemPromptFor) was added to the prompt this
+   *  launch was given (the parent's, the caller's or the override), or taken
+   *  off it, as for a fork whose model binds where its parent's doesn't, or
+   *  the other way round. Absent when it was neither. */
+  systemPromptFoldLine?: 'added' | 'removed';
   maxTokens: number;
   maxStreamTokens: number;
   strategy: {
@@ -555,15 +565,20 @@ export function describeSubagentLaunch(launch: SubagentLaunch): string {
     settings.push({ name: 'provider connection', line: `- Provider: ${launch.provider ?? 'not stated by the host'}.` });
   }
 
+  const foldLine = launch.systemPromptFoldLine === 'added'
+    ? ", with the host's paragraph on folds added"
+    : launch.systemPromptFoldLine === 'removed'
+      ? ", with the host's paragraph on folds taken off"
+      : '';
   const promptText: Record<SubagentLaunch['systemPromptSource'], string> = {
-    parent: "- System prompt: the parent's.",
-    override: p ? '- System prompt: overridden for this fork.' : '- System prompt: set for this fork.',
-    caller: '- System prompt: supplied by the caller for this spawn.',
-    default: '- System prompt: the default research-assistant prompt.',
+    parent: `- System prompt: the parent's${foldLine}.`,
+    override: p ? `- System prompt: overridden for this fork${foldLine}.` : `- System prompt: set for this fork${foldLine}.`,
+    caller: `- System prompt: supplied by the caller for this spawn${foldLine}.`,
+    default: `- System prompt: the default research-assistant prompt${foldLine}.`,
   };
   settings.push({
     name: 'system prompt',
-    ...(fork && p ? { same: launch.systemPromptSource === 'parent' } : {}),
+    ...(fork && p ? { same: launch.systemPromptSource === 'parent' && launch.systemPromptFoldLine === undefined } : {}),
     line: promptText[launch.systemPromptSource],
   });
 
@@ -1991,7 +2006,12 @@ export class SubagentModule implements Module {
     if (kind === 'spawn') {
       systemPrompt = (input as SpawnInput).systemPrompt;
       systemPromptSource = 'caller';
-    } else if (input.systemPrompt !== undefined && input.systemPrompt !== parentAgent?.systemPrompt) {
+    } else if (
+      input.systemPrompt !== undefined
+      // Compared as this fork would get each, so the fold line alone
+      // (systemPromptFor) doesn't make the parent's own prompt an override.
+      && (!parentAgent || systemPromptFor(input.systemPrompt, model, this.config.formatter) !== systemPromptFor(parentAgent.systemPrompt, model, this.config.formatter))
+    ) {
       systemPrompt = input.systemPrompt;
       systemPromptSource = 'override';
     } else if (parentAgent) {
@@ -2001,6 +2021,8 @@ export class SubagentModule implements Module {
       systemPrompt = NO_PARENT_SYSTEM_PROMPT;
       systemPromptSource = 'default';
     }
+
+    const given = systemPromptFor(systemPrompt, model, this.config.formatter);
 
     const requestedTools = kind === 'spawn' ? (input as SpawnInput).tools : undefined;
     const allowed = this.filterToolNames(requestedTools, callerDepth, parentAgent);
@@ -2026,8 +2048,14 @@ export class SubagentModule implements Module {
       ...(kind === 'fork' && callToolUseId ? { forkPoint: callToolUseId } : {}),
       ...(this.config.provider !== undefined ? { provider: this.config.provider } : {}),
       model,
-      systemPrompt,
+      // A subagent's context folds too, so on a model that binds it gets the
+      // fold line as a resident does, once (a fork's copy of its parent's
+      // prompt may already end with it).
+      systemPrompt: given,
       systemPromptSource,
+      ...(hasFoldLine(given) !== hasFoldLine(systemPrompt)
+        ? { systemPromptFoldLine: hasFoldLine(given) ? 'added' as const : 'removed' as const }
+        : {}),
       maxTokens: this.resolveMaxTokens(input.maxTokens, callerAgentName),
       maxStreamTokens: SUBAGENT_STREAM_TOKENS,
       strategy: { ...SUBAGENT_STRATEGY, compressionModel: model },
@@ -2063,6 +2091,7 @@ export class SubagentModule implements Module {
       maxTokens: launch.maxTokens,
       ...(launch.proseRouting !== undefined ? { proseRouting: launch.proseRouting } : {}),
       maxStreamTokens: launch.maxStreamTokens,
+      ...thinkingBindingSettings(launch.model, launch.provider),
       strategy: new KnowledgeStrategy({
         headWindowTokens: launch.strategy.headWindowTokens,
         recentWindowTokens: launch.strategy.recentWindowTokens,

@@ -327,7 +327,9 @@ and keep everything under `strategy` as is; chunk size, merge fan-in and the
 fallback rungs are window-independent.
 
 **System prompt: keep it minimal.** Leave it empty (`""` is valid; the request then carries
-no system block at all), or write a few sentences at most. Most long-running residents run
+no system block at all, except on a model whose thinking binds, where the host's one paragraph
+on folds is the system text, unless the recipe uses the `anthropic-xml` formatter), or write a
+few sentences at most. Most long-running residents run
 a single sentence or nothing. Why:
 
 - **The agent's identity lives in its memory.** That means the imported history and everything
@@ -834,8 +836,11 @@ trigger into a channel the resident reads.
 works only on the model that minted them; any other model 400s. Editing the *shape* of a turn
 around a retained thinking block (split, reorder, insert before) also 400s ("thinking blocks
 cannot be modified") — a transport error the membrane retries once text-only, not a refusal.
-Newer API accounts additionally enforce preserved thinking on context edits before thinking
-blocks; expect folds to interact with this on the next model generation.
+On a model whose thinking binds (Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5), a block is bound
+to the conversation and head (system text, tools, model) it was minted under: an account that
+enforces the binding refuses a request where those changed, as after a fold. The host sends the
+drop control on agent turns through the Anthropic API so the provider sets such a block aside instead, and context-manager
+leaves out what a fold invalidates (anima-research/context-manager#155).
 
 ---
 

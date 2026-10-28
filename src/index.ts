@@ -259,6 +259,7 @@ async function createFramework(
     subagentModule = new SubagentModule({
       parentAgentName: agentName,
       provider: resolveProvider(recipe),
+      formatter: recipe.agent.formatter,
       defaultModel: subagentConfig.defaultModel || model,
       defaultMaxTokens: subagentConfig.defaultMaxTokens,
       timeZone,
