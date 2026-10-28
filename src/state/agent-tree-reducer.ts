@@ -145,15 +145,13 @@ const EVENT_HANDLERS: Record<string, EventHandler> = {
     }
   },
 
-  // Dendrite (agent-framework#546): every agent the framework derives
-  // announces itself with the agent it was made from — reader forks and
-  // task forks their source, the persistent reader the resident it serves —
-  // so they hang under it without a tool call to infer the edge from. A
-  // resident announces no parent and stays top-level. These are framework
-  // agents (their own traces carry their name; SubagentModule owns none of
-  // them), so they are `framework` nodes with a parent, as fleet--launch's
-  // children are: the panel streams their own traces and offers no
-  // subagent stop. An agent the tree already has keeps its node.
+  // Every agent the framework derives announces itself with the agent it
+  // was made from — reader forks and task forks their source, the
+  // persistent reader the resident it serves — so it hangs under it without
+  // a tool call to infer the edge from. A resident announces no parent and
+  // stays top-level. An agent the tree already has keeps its node; any
+  // other is a `framework` node with a parent, as fleet--launch's children
+  // are: the panel streams its own traces and offers no subagent stop.
   'dendrite:agent-created': (r, e, ts) => {
     if (!e.agentName) return;
     const inherit = e.inherit as { from?: string } | undefined;

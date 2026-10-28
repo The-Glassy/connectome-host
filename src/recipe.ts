@@ -932,18 +932,19 @@ export interface RecipeModules {
     defaultModel?: string;
     defaultMaxTokens?: number;
     /**
-     * What a forked or spawned stream is told at its start (connectome-host
-     * #213's orientation and the fork's "two parallel streams of you"
-     * framing). `'full'` (default) describes the launch and the stream's
-     * place in it; `'none'` hands the stream its task alone. What a stream
-     * is told is the deployment's to decide, not the host's.
+     * What a forked or spawned stream is told at its start. `'full'`
+     * (default) describes the launch and the stream's place in it, and
+     * gives a fork the "two parallel streams of you" framing; `'none'` hands
+     * a spawn its task alone, and a fork its task after one line saying it
+     * is the forked stream. What a stream is told is the deployment's to
+     * decide, not the host's.
      */
     orientation?: 'full' | 'none';
     /**
-     * How far the lifecycle tools (list, stop, message, adopt) reach.
-     * `'subtree'` (default): a caller sees and acts on the subagents it
-     * started and theirs, as `peek` is scoped (postmortem 2026-05-28 P3 #8);
-     * `'all'`: every subagent the host knows.
+     * How far the lifecycle tools (list, stop, message, adopt, resume)
+     * reach. `'subtree'` (default): a caller sees and acts on the subagents
+     * it started and theirs, as `peek` is scoped; `'all'`: every subagent
+     * the host knows.
      */
     lifecycleReach?: 'subtree' | 'all';
   };
@@ -3000,6 +3001,17 @@ export function validateRecipe(raw: unknown): Recipe {
       }
     }
 
+    const subagents = mods.subagents;
+    if (subagents && typeof subagents === 'object' && !Array.isArray(subagents)) {
+      const options = subagents as Record<string, unknown>;
+      if (options.orientation !== undefined && options.orientation !== 'full' && options.orientation !== 'none') {
+        throw new Error(`Recipe modules.subagents.orientation is ${JSON.stringify(options.orientation)}; it must be "full" or "none".`);
+      }
+      if (options.lifecycleReach !== undefined && options.lifecycleReach !== 'subtree' && options.lifecycleReach !== 'all') {
+        throw new Error(`Recipe modules.subagents.lifecycleReach is ${JSON.stringify(options.lifecycleReach)}; it must be "subtree" or "all".`);
+      }
+    }
+
     const history = mods.history;
     if (history !== undefined && typeof history !== 'boolean') {
       if (!history || typeof history !== 'object' || Array.isArray(history)) {
@@ -3278,7 +3290,17 @@ export function validateRecipe(raw: unknown): Recipe {
     const allowedSubconsciousKeys = new Set(forks
       ? ['enabled', 'reader', 'model', 'voice', 'allowChannelSpeech', 'forkIdleTimeoutMs']
       : ['enabled', 'reader', 'name', 'model', 'systemPrompt', 'allowChannelSpeech', 'reAnchorFraction']);
+    const otherReadersKeys = new Set(forks
+      ? ['name', 'systemPrompt', 'reAnchorFraction']
+      : ['voice', 'forkIdleTimeoutMs']);
     for (const key of Object.keys(sub)) {
+      if (!allowedSubconsciousKeys.has(key) && otherReadersKeys.has(key)) {
+        const other = forks ? 'persistent' : 'forks';
+        throw new Error(
+          `Recipe subconscious.${key} is for reader "${other}", and this recipe's reader is "${forks ? 'forks' : 'persistent'}". ` +
+          `Set subconscious.reader to "${other}", or remove ${key}.`,
+        );
+      }
       if (!allowedSubconsciousKeys.has(key)) {
         throw new Error(
           `Recipe subconscious has unknown field ${JSON.stringify(key)} ` +

@@ -36,10 +36,10 @@ export interface SubagentModuleConfig {
   maxRetries?: number;
   /**
    * What a stream is told at its start: `'full'` (default) — the launch as
-   * resolved and what happened at the start (#213), and for a fork the
-   * "two parallel streams of you" framing; `'none'` — its task alone. A
-   * policy: the stamp assumes one kind of mind's preferences (tel0s and
-   * Antra, 2026-10-19).
+   * resolved and what happened at the start, and for a fork the "two
+   * parallel streams of you" framing; `'none'` — a spawn's task alone, and
+   * a fork's task after one line saying it is the forked stream. A policy:
+   * the stamp assumes one kind of mind's preferences.
    */
   orientation?: 'full' | 'none';
   /**
