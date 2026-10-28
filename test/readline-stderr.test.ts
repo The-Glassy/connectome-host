@@ -207,6 +207,7 @@ test('in readline mode, a notice of a newer release that comes while the prompt 
     expect(session.lines()).toContain(`[update] connectome-host 99.0.0 is out; this host runs ${RUNNING}.`);
     expect(session.lines()).toContain('[update] Breaking: 99.0.0. Read its notes before updating.');
     await until(() => session.lines().at(-1) === '> ab', 10_000, 'the prompt drawn again with what was typed', session.screen);
+    expect(session.lines().filter((line) => line === '> ab')).toHaveLength(1);
     session.type('\x15/quit\r');
     expect(await session.exited).toBe(0);
   } finally {
