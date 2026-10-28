@@ -6,7 +6,7 @@
   `physicalWindowTokens` from the model limits table where it did, for the resident and each
   subagent (anima-research/context-manager#155).
   - **The drop control:** on the four models that take it, streamed calls through the Anthropic API
-    (agent turns, and an MCPL server's streamed inference) carry `block_binding: { prefix_mismatch_behavior: 'drop_block' }` in their
+    (agent turns) carry `block_binding: { prefix_mismatch_behavior: 'drop_block' }` in their
     thinking config, so the provider drops a signed thinking block that a change has invalidated
     instead of refusing the call. An adaptive or enabled thinking config a call already has keeps
     its fields and gains the control, unless it carries a binding control of its own: with
@@ -27,8 +27,6 @@
     mode, whose transcript carries none of a reply's reasoning into the next request, fold or none.
     On the binding models named above, such a recipe's agents can't run at all, since membrane
     refuses their assistant prefill.
-  - **Cache:** that paragraph changes the system text, so each such agent that caches its prompt
-    writes its cached prefix again, once.
   - **Bedrock and the other routes:** an agent there on a binding model binds without the control
     and has no window, since nobody has tried the control or read a window there.
     `LoggingBedrockAdapter` adds no control, as before.
