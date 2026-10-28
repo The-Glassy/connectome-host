@@ -78,7 +78,7 @@ import { toolClassConfig } from './tool-lifecycle-config.js';
 import { batchModeStartNotice, batchTeardownNotice, batchWebUiNotice, batchEchoLine, BATCH_MCPL_LOG_NOTE } from './batch-mode.js';
 import { createPipedTurns, switchFollowing, traceFollower } from './piped-turns.js';
 import { openReadlineTerminal } from './readline-terminal.js';
-import { credentialActionHint, opsAlertLine, opsAlertOf, type OpsAlertEntry } from './state/ops-alerts.js';
+import { opsAlertLine, opsAlertOf, type OpsAlertEntry } from './state/ops-alerts.js';
 import { setCallLogPath } from './bug-report.js';
 import { SessionManager } from './session-manager.js';
 import { startFramework } from './start-framework.js';
@@ -768,7 +768,6 @@ async function runPiped(app: AppContext) {
   }
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: '> ' });
-  let fleetAlertsOff = null as (() => void) | null;
   const terminal = openReadlineTerminal(config.dataDir, { showing: () => atPrompt, redraw: () => { rl.prompt(true); } });
   try {
     say = terminal.say;
@@ -779,28 +778,11 @@ async function runPiped(app: AppContext) {
       if (line !== null) terminal.say(line.text);
     };
     onAlert = (event) => { showAlert(opsAlertOf(event)); };
-    const followFleetAlerts = (): void => {
-      fleetAlertsOff?.();
-      const fleet = app.framework.getModule('fleet');
-      fleetAlertsOff = fleet instanceof FleetModule
-        ? fleet.onChildEvent('*', (child, event) => {
-          if (event.type === 'ops:alert') showAlert(opsAlertOf(event as Record<string, unknown>, child));
-        })
-        : null;
-    };
-    followFleetAlerts();
-    afterSwitch = () => {
-      alerts.clear();
-      followFleetAlerts();
-    };
+    afterSwitch = () => { alerts.clear(); };
     let restarting = false;
     hostUpdate.attachStop({ supervised: false, stop: () => { restarting = true; setTimeout(() => { rl.close(); }, 0); } });
     console.log('connectome-host (readline mode). Type /help for commands.');
     if (terminal.logging()) terminal.say(`Error log: ${terminal.logPath}`);
-    const credentials = app.credentials?.snapshot();
-    if (credentials && credentials.kind !== 'ok') {
-      showAlert({ kind: credentials.kind, agent: app.agentName, message: credentials.message + credentialActionHint(credentials) });
-    }
     let closed = false;
     rl.on('close', () => { closed = true; atPrompt = false; });
     rl.prompt();
@@ -821,7 +803,6 @@ async function runPiped(app: AppContext) {
       });
     }
   } finally {
-    fleetAlertsOff?.();
     onAlert = null;
     terminal.end();
   }

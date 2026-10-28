@@ -131,8 +131,8 @@ the working directory):
   `[routing]` and `[inference-failed]` among them. It is created readable by
   its owner alone, and each line is written to it as it comes. What the person
   at the terminal needs still prints there, each on a line of its own: a
-  turn's failure and how it ended, a slash command's failure, ops alerts (as
-  the TUI words them), the credential state at start when it isn't ok, an
+  turn's failure and how it ended, a slash command's failure, the host's own
+  ops alerts (as the TUI words them; a fleet child's aren't printed there), an
   update notice, a self-restart's failure to close the Web UI's server, and
   the log's path at start when it opened. A crash prints on the terminal too.
   If the log can't be opened or written, the host says so, and from then on
