@@ -47,7 +47,8 @@ export interface SubagentModuleConfig {
    * `'subtree'` (default): a caller sees and acts on the subagents it
    * started, and theirs — the scoping `peek` has (postmortem 2026-05-28 P3
    * #8: sibling gossip caused retry storms). `'all'`: every subagent the
-   * host knows.
+   * host knows, though an orphan is still adopted only by an agent it was
+   * offered to or in whose tree it hung.
    */
   lifecycleReach?: 'subtree' | 'all';
   timeZone?: string;
@@ -321,6 +322,16 @@ const SUBAGENT_STREAM_TOKENS = 500_000;
 const FRAMEWORK_DEFAULT_MAX_TOKENS = 4096;
 
 const UNNAMED_LAUNCHER = 'agent';
+
+interface CancellationHandle {
+  reject: (err: Error) => void;
+  record?: string;
+  spawner?: string;
+}
+
+function startedBy(record: AgentRecord): string | undefined {
+  return record.orphaned?.formerParent.agent ?? record.relationships.spawnedBy;
+}
 
 // agent-framework stores an injection under participant
 // `system_context:<namespace>`.
@@ -974,7 +985,7 @@ export class SubagentModule implements Module {
   private callIdIndex = new Map<string, string>();
   private streamSubscribers = new Map<string, Set<SubagentStreamCallback>>();
   private lastInputTokens = new Map<string, number>();
-  private cancellationHandles = new Map<string, { reject: (err: Error) => void }>();
+  private cancellationHandles = new Map<string, CancellationHandle>();
   private agentDepths = new Map<string, number>();
 
   constructor(config: SubagentModuleConfig = {}) {
@@ -1668,12 +1679,12 @@ export class SubagentModule implements Module {
     }
   }
 
-  private cancelFor(name: string): { promise: Promise<never>; throwIfFired(): void; dispose(): void } {
+  private cancelFor(name: string, reachedBy: { record?: string; spawner?: string }): { promise: Promise<never>; throwIfFired(): void; dispose(): void } {
     let reject!: (err: Error) => void;
     let fired: Error | null = null;
     const promise = new Promise<never>((_, r) => { reject = r; });
     promise.catch(() => { });
-    const handle = { reject: (err: Error) => { fired ??= err; reject(err); } };
+    const handle: CancellationHandle = { reject: (err: Error) => { fired ??= err; reject(err); }, ...reachedBy };
     this.cancellationHandles.set(name, handle);
     return {
       promise,
@@ -2695,6 +2706,13 @@ export class SubagentModule implements Module {
     return all.find((r) => !r.ended) ?? all[0] ?? null;
   }
 
+  private displayNameOf(name: string): string {
+    const records = this.subagentRecords(true);
+    if (records.some((r) => (r.metadata as { subagent: string }).subagent === name)) return name;
+    const byAgent = records.find((r) => r.name === name);
+    return byAgent ? (byAgent.metadata as { subagent: string }).subagent : name;
+  }
+
   private describeRecord(r: AgentRecord): Record<string, unknown> {
     const meta = r.metadata as { subagent: string; task?: string; depth?: number };
     return {
@@ -2726,6 +2744,10 @@ export class SubagentModule implements Module {
     // slash command, headless — acting as the operator, with full reach,
     // as a launch without a caller runs for the configured parent.
     if ((this.config.lifecycleReach ?? 'subtree') === 'all' || !caller) return true;
+    return this.inTree(caller, record);
+  }
+
+  private inTree(caller: string, record: AgentRecord): boolean {
     const fw = this.framework;
     if (!fw) return false;
     const seen = new Set<string>();
@@ -2739,8 +2761,21 @@ export class SubagentModule implements Module {
     return false;
   }
 
-  private outOfReach(verb: string, name: string, record: AgentRecord): ToolResult {
-    const by = record.orphaned?.formerParent.agent ?? record.relationships.spawnedBy;
+  private reachOfRun(caller: string | undefined, name: string): { inReach: boolean; by: string | undefined } {
+    const fw = this.framework;
+    const handle = this.cancellationHandles.get(name);
+    const live = this.liveSubagents.get(name);
+    const ownName = live?.frameworkAgentName ?? handle?.record;
+    const own = fw && ownName !== undefined ? fw.getAgentRecord(ownName) ?? null : null;
+    const by = own ? startedBy(own) : handle?.spawner;
+    if ((this.config.lifecycleReach ?? 'subtree') === 'all' || !caller) return { inReach: true, by };
+    if (own) return { inReach: this.inTree(caller, own), by };
+    if (!fw || by === undefined) return { inReach: false, by };
+    const spawner = fw.getAgentRecord(by) ?? null;
+    return { inReach: by === caller || (spawner !== null && this.inTree(caller, spawner)), by };
+  }
+
+  private outOfReach(verb: string, name: string, by: string | undefined): ToolResult {
     return {
       success: false,
       isError: true,
@@ -2779,22 +2814,25 @@ export class SubagentModule implements Module {
   private handleStop(input: { name: string; reason?: string }, caller?: string): ToolResult {
     const fw = this.framework;
     if (!fw) return { success: false, isError: true, error: 'Nothing was stopped: the subagent module has no framework yet.' };
-    const known = this.recordNamed(input.name);
-    if (known && !this.inReach(caller, known)) return this.outOfReach('stopped', input.name, known);
+    const name = this.displayNameOf(input.name);
+    const stop = { ...(caller ? { by: caller } : {}), ...(input.reason ? { reason: input.reason } : {}) };
     // A run this module drives is stopped through its own cancel (its
     // children first), which ends the registry record as the framework
     // tears the run down; any other live record under the name is stopped
     // in the registry directly.
-    if (this.cancellationHandles.has(input.name)) {
-      const stopped = this.stopTree(input.name, { ...(caller ? { by: caller } : {}), ...(input.reason ? { reason: input.reason } : {}) });
-      return { success: true, data: { stopped: input.name, runs: stopped, note: 'Its run is cancelled; task work it spawned is orphaned and offered for adoption.' } };
+    if (this.cancellationHandles.has(name)) {
+      const reach = this.reachOfRun(caller, name);
+      if (!reach.inReach) return this.outOfReach('stopped', input.name, reach.by);
+      const stopped = this.stopTree(name, stop);
+      return { success: true, data: { stopped: name, runs: stopped, note: 'Its run is cancelled; task work it spawned is orphaned and offered for adoption.' } };
     }
-    const record = this.recordNamed(input.name);
+    const record = this.recordNamed(name);
     if (!record) return { success: false, isError: true, error: `Nothing was stopped: no subagent named '${input.name}' is known.` };
+    if (!this.inReach(caller, record)) return this.outOfReach('stopped', input.name, startedBy(record));
     if (record.ended) return { success: false, isError: true, error: `Nothing was stopped: '${input.name}' already ended (${record.ended.reason}).` };
     try {
-      const outcome = fw.stopAgent(record.name, { ...(caller ? { by: caller } : {}), ...(input.reason ? { reason: input.reason } : {}) });
-      return { success: true, data: { stopped: input.name, agent: record.name, ended: outcome.ended.name, orphaned: outcome.orphaned.map((o) => ({ agent: o.record.name, candidates: o.candidates })) } };
+      const outcome = fw.stopAgent(record.name, stop);
+      return { success: true, data: { stopped: name, agent: record.name, ended: outcome.ended.name, orphaned: outcome.orphaned.map((o) => ({ agent: o.record.name, candidates: o.candidates })) } };
     } catch (err) {
       return { success: false, isError: true, error: `Nothing was stopped: ${err instanceof Error ? err.message : String(err)}` };
     }
@@ -2806,7 +2844,7 @@ export class SubagentModule implements Module {
     if (!caller) return { success: false, isError: true, error: 'Nothing was sent: a message to a subagent is sent by an agent, under its name.' };
     const record = this.recordNamed(input.name);
     if (!record || record.ended) return { success: false, isError: true, error: `Nothing was sent: no subagent named '${input.name}' is running${record?.ended ? ` (it ended: ${record.ended.reason})` : ''}.` };
-    if (!this.inReach(caller, record)) return this.outOfReach('sent', input.name, record);
+    if (!this.inReach(caller, record)) return this.outOfReach('sent', input.name, startedBy(record));
     try {
       const sent = fw.sendAgentMessage(caller, record.name, [{ type: 'text', text: input.text }], { wake: true });
       return { success: true, data: { to: input.name, agent: record.name, delivered: sent.delivered, note: sent.delivered ? 'In its context under your name; it wakes for it.' : 'Held for it until it can receive.' } };
@@ -2819,24 +2857,30 @@ export class SubagentModule implements Module {
     const fw = this.framework;
     if (!fw) return { success: false, isError: true, error: 'Nothing was adopted: the subagent module has no framework yet.' };
     if (!caller) return { success: false, isError: true, error: 'Nothing was adopted: an agent adopts, under its name.' };
-    const record = this.recordNamed(input.name);
+    const name = this.displayNameOf(input.name);
+    const record = this.recordNamed(name);
     if (!record || record.ended) return { success: false, isError: true, error: `Nothing was adopted: no subagent named '${input.name}' is running.` };
     if (!record.orphaned) return { success: false, isError: true, error: `Nothing was adopted: '${input.name}' has its parent (${record.relationships.spawnedBy ?? 'none'}); only an orphan is adopted.` };
     // Offered to the caller: the framework's candidates (the nearest live
     // ancestor of the former parent, then the primary), or anyone in whose
     // tree the orphan hung. An unrelated agent would take the held results
     // meant for the lost parent with it.
-    if (!record.orphaned.candidates.includes(caller) && !this.inReach(caller, record)) {
+    if (!record.orphaned.candidates.includes(caller) && !this.inTree(caller, record)) {
       const former = record.orphaned.formerParent.agent;
       const offered = record.orphaned.candidates.length ? record.orphaned.candidates.join(', ') : 'no one yet';
       return {
         success: false,
         isError: true,
-        error: `Nothing was adopted: '${input.name}' was ${former}'s, and it is offered to ${offered} — an ancestor of its former parent, or the primary — not to you.`,
+        error: `Nothing was adopted: '${input.name}' was ${former}'s, and it is offered to ${offered} — an ancestor of its former parent, or the primary — and to the agents in whose tree it hung, not to you.`,
       };
     }
     try {
       const adopted = fw.reparentAgent(record.name, caller, { by: caller });
+      if (this.cancellationHandles.has(name)) {
+        this.parentMap.set(name, caller);
+        this.launcherShownOf.set(name, this.shownName(caller));
+        this.persistState();
+      }
       return { success: true, data: { adopted: input.name, agent: record.name, parent: caller, resultTo: adopted.relationships.resultTo ?? null } };
     } catch (err) {
       return { success: false, isError: true, error: `Nothing was adopted: ${err instanceof Error ? err.message : String(err)}` };
@@ -2846,11 +2890,12 @@ export class SubagentModule implements Module {
   private async handleResume(input: { name: string }, caller?: string): Promise<ToolResult> {
     const fw = this.framework;
     if (!fw) return { success: false, isError: true, error: 'Nothing was resumed: the subagent module has no framework yet.' };
-    const record = this.recordNamed(input.name);
+    const name = this.displayNameOf(input.name);
+    const record = this.recordNamed(name);
     if (!record) return { success: false, isError: true, error: `Nothing was resumed: no subagent named '${input.name}' is known.` };
     if (!record.ended) return { success: false, isError: true, error: `Nothing was resumed: '${input.name}' is still running.` };
-    if (!this.inReach(caller, record)) return this.outOfReach('resumed', input.name, record);
-    const inUse = this.nameInUse(input.name);
+    if (!this.inReach(caller, record)) return this.outOfReach('resumed', input.name, startedBy(record));
+    const inUse = this.nameInUse(name);
     if (inUse) return inUse;
     const launch = (record.metadata as { launch?: ResumableLaunch } | undefined)?.launch;
     if (!launch) return { success: false, isError: true, error: `Nothing was resumed: '${input.name}' left no launch to rebuild its configuration from.` };
@@ -2872,18 +2917,18 @@ export class SubagentModule implements Module {
     // someone else who is still running reports to them, not the resumer.
     const route = record.relationships.resultTo;
     const elsewhere = route?.as === 'message' && route.to !== parentAgentName && fw.getAgentRecord(route.to)?.ended === undefined && fw.getAgentRecord(route.to) ? route.to : null;
-    const promise = this.runResumed(input.name, record, launch, parentAgentName);
-    this.asyncHandles.set(input.name, { name: input.name, type: launch.kind, promise, parentAgentName });
+    const promise = this.runResumed(name, record, launch, parentAgentName);
+    this.asyncHandles.set(name, { name, type: launch.kind, promise, parentAgentName });
     promise
       .then(
-        (result) => this.deliverAsyncResult(input.name, result, launcher, launcherShown),
-        (err) => this.deliverAsyncError(input.name, err, launcher, launcherShown),
+        (result) => this.deliverAsyncResult(name, result, launcher, launcherShown),
+        (err) => this.deliverAsyncError(name, err, launcher, launcherShown),
       )
-      .catch((err) => console.error(`[subagent] delivering ${input.name}'s resumed result: ${err instanceof Error ? err.message : String(err)}`));
+      .catch((err) => console.error(`[subagent] delivering ${name}'s resumed result: ${err instanceof Error ? err.message : String(err)}`));
     return {
       success: true,
       data: {
-        resumed: input.name,
+        resumed: name,
         agent: record.name,
         incarnation: record.incarnation + 1,
         resultTo: elsewhere ?? parentAgentName,
@@ -2911,7 +2956,7 @@ export class SubagentModule implements Module {
   /** Drive a resumed incarnation as this module drives any run: a slot, the live register, the watchdogs, the result. */
   private async runResumed(name: string, record: AgentRecord, launch: ResumableLaunch, parentAgentName: string): Promise<SubagentResult> {
     const framework = this.getFramework();
-    const cancel = this.cancelFor(name);
+    const cancel = this.cancelFor(name, { record: record.name });
     const run = { started: false, attempts: 1 };
     let acquired: { waitedMs: number; slot: object };
     try {
@@ -3010,7 +3055,7 @@ export class SubagentModule implements Module {
     executionTimeoutMs?: number,
     ticket?: { queued: boolean },
   ): Promise<SubagentResult> {
-    const cancel = this.cancelFor(input.name);
+    const cancel = this.cancelFor(input.name, launch.parentAgent ? { spawner: launch.parentAgent.name } : {});
     this.claimName(input.name, _callerAgentName);
     const run = { started: false, attempts: 0 };
     let acquired: { waitedMs: number; slot: object };
@@ -3192,7 +3237,7 @@ export class SubagentModule implements Module {
     callToolUseId?: string,
     ticket?: { queued: boolean },
   ): Promise<SubagentResult> {
-    const cancel = this.cancelFor(input.name);
+    const cancel = this.cancelFor(input.name, launch.parentAgent ? { spawner: launch.parentAgent.name } : {});
     this.claimName(input.name, callerAgentName);
     const run = { started: false, attempts: 0 };
     let acquired: { waitedMs: number; slot: object };

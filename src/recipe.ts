@@ -944,7 +944,8 @@ export interface RecipeModules {
      * How far the lifecycle tools (list, stop, message, adopt, resume)
      * reach. `'subtree'` (default): a caller sees and acts on the subagents
      * it started and theirs, as `peek` is scoped; `'all'`: every subagent
-     * the host knows.
+     * the host knows, though an orphan is still adopted only by an agent it
+     * was offered to or in whose tree it hung.
      */
     lifecycleReach?: 'subtree' | 'all';
   };

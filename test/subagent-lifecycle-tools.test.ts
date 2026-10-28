@@ -200,7 +200,8 @@ describe('subagents are Dendrite agents', () => {
  * The tools keep the module's own rules (slimepriestess's read of 1639b86 on
  * connectome-host#334): reach is the caller's subtree, as peek's is; a
  * resume never grants more than its caller has; an orphan goes only to an
- * agent it was offered to; a resume says where the result will go.
+ * agent it was offered to or in whose tree it hung; a resume says where the
+ * result will go.
  */
 describe('the lifecycle tools keep the module\'s rules', () => {
   const bob = { name: 'bob', model: 'mock', systemPrompt: 'bob prompt', maxTokens: 256 };
@@ -254,7 +255,7 @@ describe('the lifecycle tools keep the module\'s rules', () => {
     } finally { await h.cleanup(); }
   }, 30_000);
 
-  test('an orphan is adopted only by an agent it was offered to, and the offer\'s framework name is accepted', async () => {
+  test('an orphan is adopted only by an agent it was offered to or in whose tree it hung, and the offer\'s framework name is accepted', async () => {
     const h = await harness({}, {}, [bob]);
     try {
       const internals = h.framework as unknown as Registry;
@@ -277,6 +278,101 @@ describe('the lifecycle tools keep the module\'s rules', () => {
     } finally { await h.cleanup(); }
   }, 30_000);
 
+  test('an ancestor the offer passes over adopts too, since the orphan hung in its tree', async () => {
+    const h = await harness({}, {}, [bob]);
+    try {
+      const internals = h.framework as unknown as Registry;
+      internals.registry.register(workerSpec('top', { spawnedBy: 'parent', metadata: { subagent: 'top', task: 'top' } }));
+      internals.registry.register(workerSpec('mid', { spawnedBy: 'top', metadata: { subagent: 'mid', task: 'middle' } }));
+      internals.registry.register(workerSpec('mid-2', { spawnedBy: 'mid', metadata: { subagent: 'mid-2', task: 'lower' } }));
+      internals.registry.register(workerSpec('leaf', { spawnedBy: 'mid-2', metadata: { subagent: 'leaf', task: 'leaf work' } }));
+      h.framework.stopAgent('mid', { by: 'test' });
+      h.framework.stopAgent('mid-2', { by: 'test' });
+      await h.until(() => h.recordOf('leaf')?.orphaned !== undefined, 'leaf is orphaned');
+      expect(h.recordOf('leaf')!.orphaned!.candidates).not.toContain('top');
+      const adopted = await h.callAs('top', 'adopt', { name: 'leaf' });
+      expect(adopted.success).toBe(true);
+      expect(h.recordOf('leaf')!.relationships.spawnedBy).toBe('top');
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
+  test("lifecycleReach 'all' widens what the tools reach, not who adopts: an orphan still goes only to an agent it was offered to or in whose tree it hung", async () => {
+    const h = await harness({}, { lifecycleReach: 'all' }, [bob]);
+    try {
+      const internals = h.framework as unknown as Registry;
+      internals.registry.register(workerSpec('mid', { spawnedBy: 'parent', metadata: { subagent: 'mid', task: 'middle' } }));
+      internals.registry.register(workerSpec('spawn-leaf-1', { spawnedBy: 'mid', metadata: { subagent: 'leaf', task: 'leaf work' } }));
+      h.framework.stopAgent('mid', { by: 'test' });
+      await h.until(() => h.recordOf('leaf')?.orphaned !== undefined, 'leaf is orphaned');
+      const stranger = await h.callAs('bob', 'adopt', { name: 'leaf' });
+      expect(stranger.success).toBe(false);
+      expect(stranger.error).toContain("'leaf' was mid's, and it is offered to parent");
+      expect(h.recordOf('leaf')!.orphaned).toBeDefined();
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
+  test('a run waiting for a slot is reached through the agent it was launched for, not a record another launch left under its name', async () => {
+    const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, defaultResponse: 'x'.repeat(1_200) }, { maxConcurrent: 1 }, [bob]);
+    try {
+      const internals = h.framework as unknown as Registry;
+      internals.registry.register(workerSpec('spawn-x-bob', { spawnedBy: 'bob', metadata: { subagent: 'x', task: "bob's own x" } }));
+      h.framework.stopAgent('spawn-x-bob', { by: 'test' });
+      expect((await h.call('spawn', { name: 'busy', systemPrompt: 'p', task: 'hold the slot' })).success).toBe(true);
+      await h.until(() => h.recordOf('busy') !== undefined && !h.recordOf('busy')!.ended, 'the slot is taken');
+      expect((await h.call('spawn', { name: 'x', systemPrompt: 'p', task: 'wait for the slot' })).success).toBe(true);
+      expect(h.subagent.getConcurrencyStatus().queued).toBe(1);
+
+      const stranger = await h.callAs('bob', 'stop', { name: 'x' });
+      expect(stranger.success).toBe(false);
+      expect(stranger.error).toContain("'x' is not in your tree (it was started by parent)");
+      expect(h.subagent.getConcurrencyStatus().queued).toBe(1);
+
+      const own = await h.call('stop', { name: 'x' });
+      expect(own.success).toBe(true);
+      await h.until(() => h.subagent.getConcurrencyStatus().queued === 0, 'the queued run leaves the queue');
+      await h.call('stop', { name: 'busy' });
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
+  test('a stop by the framework name the adoption offer gives stops a run and the runs it started, as a stop by its name does', async () => {
+    const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, defaultResponse: 'x'.repeat(5_000) });
+    try {
+      expect((await h.call('spawn', { name: 'mid', systemPrompt: 'p', task: 'take your time' })).success).toBe(true);
+      await h.until(() => h.recordOf('mid') !== undefined && !h.recordOf('mid')!.ended, 'mid runs');
+      const mid = h.recordOf('mid')!.name;
+      expect((await h.callAs(mid, 'spawn', { name: 'leaf', systemPrompt: 'p', task: 'take your time too' })).success).toBe(true);
+      await h.until(() => h.recordOf('leaf') !== undefined && !h.recordOf('leaf')!.ended, 'leaf runs');
+      const stopped = await h.call('stop', { name: mid });
+      expect(stopped.success).toBe(true);
+      expect(h.recordOf('leaf')!.orphaned).toBeUndefined();
+      expect(h.recordOf('leaf')!.ended).toBeDefined();
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
+  test("an adopted run is its adopter's: stopping the adopter stops it first, as one of its own", async () => {
+    const h = await harness({
+      streamChunkDelayMs: 20, streamChunkSize: 10,
+      responseGenerator: (r) => (r.model === 'mock-brief' ? 'y'.repeat(600) : 'x'.repeat(5_000)),
+    });
+    try {
+      const live = (name: string) => h.recordOf(name) !== undefined && !h.recordOf(name)!.ended;
+      expect((await h.call('spawn', { name: 'top', systemPrompt: 'p', task: 'take your time' })).success).toBe(true);
+      await h.until(() => live('top'), 'top runs');
+      const top = h.recordOf('top')!.name;
+      expect((await h.callAs(top, 'spawn', { name: 'mid', systemPrompt: 'p', task: 'be brief', model: 'mock-brief' })).success).toBe(true);
+      await h.until(() => live('mid'), 'mid runs');
+      expect((await h.callAs(h.recordOf('mid')!.name, 'spawn', { name: 'leaf', systemPrompt: 'p', task: 'take your time' })).success).toBe(true);
+      await h.until(() => live('leaf'), 'leaf runs');
+      await h.until(() => h.recordOf('mid')?.ended !== undefined && h.recordOf('leaf')?.orphaned !== undefined, 'mid ends and leaf is orphaned');
+      expect(h.recordOf('leaf')!.orphaned!.candidates).toContain(top);
+      expect((await h.callAs(top, 'adopt', { name: 'leaf' })).success).toBe(true);
+
+      expect((await h.call('stop', { name: 'top' })).success).toBe(true);
+      expect(h.recordOf('leaf')!.orphaned).toBeUndefined();
+      expect(h.recordOf('leaf')!.ended).toBeDefined();
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
   test("a resume is refused when the launch's tools exceed the caller's rule, or the subagent is outside the caller's tree, or it is still running", async () => {
     const narrow = { name: 'narrow', model: 'mock', systemPrompt: 'narrow prompt', maxTokens: 256, allowedTools: ['subagent--resume', 'subagent--return'] };
     const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, defaultResponse: 'x'.repeat(1_200) }, {}, [bob, narrow]);
@@ -285,11 +381,16 @@ describe('the lifecycle tools keep the module\'s rules', () => {
       expect(first.success).toBe(true);
       expect((h.recordOf('f1')!.metadata as { launch: { allowedTools: unknown } }).launch.allowedTools).toBe('all');
 
-      const beyond = await h.callAs('narrow', 'resume', { name: 'f1' });
-      expect(beyond.success).toBe(false);
-      expect(beyond.error).toContain("'f1' is not in your tree");
+      const outside = await h.callAs('narrow', 'resume', { name: 'f1' });
+      expect(outside.success).toBe(false);
+      expect(outside.error).toContain("'f1' is not in your tree");
       // Give narrow a launch of its own that it could not have made.
       const internals = h.framework as unknown as Registry;
+      internals.registry.register(workerSpec('spawn-all-1', { spawnedBy: 'narrow', metadata: { subagent: 'everything', task: 'all work', launch: { kind: 'spawn', model: 'mock', systemPrompt: 'p', maxTokens: 64, allowedTools: 'all', strategy: {} } } }));
+      h.framework.stopAgent('spawn-all-1', { by: 'test' });
+      const all = await h.callAs('narrow', 'resume', { name: 'everything' });
+      expect(all.success).toBe(false);
+      expect(all.error).toContain('tools you do not have (all tools, where your own list is limited)');
       internals.registry.register(workerSpec('spawn-wide-1', { spawnedBy: 'narrow', metadata: { subagent: 'wide', task: 'wide work', launch: { kind: 'spawn', model: 'mock', systemPrompt: 'p', maxTokens: 64, allowedTools: ['subagent--resume', 'subagent--return', 'read_file'], strategy: {} } } }));
       h.framework.stopAgent('spawn-wide-1', { by: 'test' });
       const more = await h.callAs('narrow', 'resume', { name: 'wide' });
