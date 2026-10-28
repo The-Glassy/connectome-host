@@ -850,7 +850,7 @@ headless socket.
 | `/auth [status\|refresh\|login\|recheck\|token <tok>]` | Subscription credential state and operator actions (see docs/subscription-transport.md) |
 | `/session [list\|new\|switch\|rename\|delete]` | Session management; `delete` requires `--confirm` |
 | `/fleet [list\|status\|view\|peek\|stop\|restart]` | Fleet children (see [`docs/fleet-protocol.md`](docs/fleet-protocol.md)) |
-| `/update [install\|restart [wait\|now\|resume\|<version>]\|back [(keep\|restore) [<version>]]]` | Whether a newer release is out and what it costs; on an install set up to update itself, install it, restart onto it, or go back. A version, as the Web UI sends it, makes Restart or Go back refuse unless that's still the release it would act on ("Updating an install" in [`docs/DEPLOYMENTS.md`](docs/DEPLOYMENTS.md)) |
+| `/update [check\|install\|restart [wait\|now\|resume\|<version>]\|back [(keep\|restore) [<version>]]]` | Whether a newer release is out and what it costs (`check`, or `/update` alone); on an install set up to update itself, install it, restart onto it, or go back. A version, as the Web UI sends it, makes Restart or Go back refuse unless that's still the release it would act on ("Updating an install" in [`docs/DEPLOYMENTS.md`](docs/DEPLOYMENTS.md)) |
 
 Commands that move the head are refused while a turn is in flight: `/undo`,
 `/redo`, `/checkout`, `/restore` and `/branchto` while any agent sharing the

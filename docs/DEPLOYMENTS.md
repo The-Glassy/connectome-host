@@ -283,8 +283,9 @@ DATA_DIR=... bun node_modules/@animalabs/connectome-host/src/update/setup.ts [--
 
 It copies the install as the first release of an install root,
 `./connectome-host` unless `--root` names another, and writes the entry point
-`start.js` there. Give `--extra-state` for each place an MCPL server keeps its
-state outside the data directory, so each update copies it with the data.
+`start.js` there, with the install's own command, `connectome`, beside it.
+Give `--extra-state` for each place an MCPL server keeps its state outside
+the data directory, so each update copies it with the data.
 Then have the service start the host with `bun <root>/start.js`, followed by
 the arguments it gives the host now, and restart it. Setup says whether the
 service restarts the host when it exits with 75 and with 1, as a switch and
@@ -398,8 +399,10 @@ while a clone installs from its tag's `bun.lock`. So:
   reaches by `url` whose state the copy takes, wherever it's defined, the
   agent's own deploys (`mcpl-servers.agent.json`) included: it runs apart
   from the host. Then install the new version: `npm install
-  @animalabs/connectome-host@<version>`, or `bun add
-  @animalabs/connectome-host@<version>`, or in a clone `git fetch --tags`,
+  @animalabs/connectome-host@<version>`, or `bun --no-env-file add
+  @animalabs/connectome-host@<version>` (on Bun 1.4.4 and later,
+  `--no-env-file` keeps the folder's `.env` from install scripts; on 1.4.3
+  it doesn't), or in a clone `git fetch --tags`,
   `git checkout v<version>`, `bun install` and `bun run build:web`. Until
   that build succeeds, the Web UI serves whatever `dist/web` holds, if
   anything, which isn't this version's build. If it fails, the host still

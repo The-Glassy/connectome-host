@@ -41,8 +41,8 @@ import { formatToolClassRows, readToolClasses } from './tool-lifecycle-config.js
 import { type FleetModule, formatChildRow } from './modules/fleet-module.js';
 import { EXACT_VERSION } from './update/install.js';
 import { SWITCH_UNDER_WAY } from './session-switch.js';
-import { hostUpdate } from './update/update.js';
-import { goBackLines, statusLines } from './web/update-text.js';
+import { hostUpdate, type UpdateAnswer } from './update/update.js';
+import { goBackLines, goBackUnread, statusLines } from './web/update-text.js';
 
 interface AppContext {
   framework: AgentFramework;
@@ -95,6 +95,7 @@ export interface CommandResult {
   switchToSessionId?: string;
   branchChanged?: boolean;
   asyncWork?: Promise<CommandResult>;
+  refused?: boolean;
   switchToFleetPeek?: string;
   switchToFleetView?: boolean;
 }
@@ -244,7 +245,7 @@ export function handleCommand(command: string, app: AppContext): CommandResult {
           { text: '  /fleet                 Show / peek / stop / restart cross-process children', style: 'system' },
           { text: '                         (subcommands: list | status [name] | view | peek <name> | stop <name> | restart <name>)', style: 'system' },
           { text: '  /update                Whether a newer release is out, and this install\'s update state', style: 'system' },
-          { text: '                         (subcommands: install | restart [wait | now | resume | <version>] | back [(keep | restore) [<version>]])', style: 'system' },
+          { text: '                         (subcommands: check | install | restart [wait | now | resume | <version>] | back [(keep | restore) [<version>]])', style: 'system' },
         ],
       };
 
@@ -344,15 +345,18 @@ export function handleCommand(command: string, app: AppContext): CommandResult {
  *  host refuses rather than act on another one. */
 function handleUpdate(args: string[]): CommandResult {
   const say = (lines: string[]): CommandResult => ({ lines: lines.map((text) => ({ text, style: 'system' as const })) });
-  const after = (first: string, work: Promise<{ lines: string[] }>): CommandResult =>
-    ({ ...say([first]), asyncWork: work.then((answer) => say(answer.lines)) });
+  const after = (first: string, work: Promise<UpdateAnswer>): CommandResult =>
+    ({ ...say([first]), asyncWork: work.then((answer) => ({ ...say(answer.lines), ...(answer.done ? {} : { refused: true }) })) });
   const [sub, choice, release, extra] = args;
-  const usage = say(['Usage: /update [install | restart [wait | now | resume | <version>] | back [(keep | restore) [<version>]]]']);
+  const usage = { ...say(['Usage: /update [check | install | restart [wait | now | resume | <version>] | back [(keep | restore) [<version>]]]']), refused: true };
   if (extra !== undefined) return usage;
   const version = (word: string | undefined): word is string => word !== undefined && EXACT_VERSION.test(word);
-  if (sub === undefined) {
+  if (sub === undefined || (sub === 'check' && choice === undefined)) {
     return after('Reading the registry…',
-      hostUpdate.readRegistry().then(() => ({ lines: statusLines(hostUpdate.status()) })));
+      hostUpdate.readRegistry().then(() => {
+        const status = hostUpdate.status();
+        return { done: status.check?.ok !== false, lines: statusLines(status) };
+      }));
   }
   if (sub === 'install' && choice === undefined) return after('Reading the registry, then installing…', hostUpdate.install());
   if (sub === 'restart' && release === undefined) {
@@ -364,7 +368,10 @@ function handleUpdate(args: string[]): CommandResult {
     if (version(choice)) return after(quiescing, hostUpdate.restartToInstalled(choice));
   }
   if (sub === 'back') {
-    if (choice === undefined) return say(goBackLines(hostUpdate.status()));
+    if (choice === undefined) {
+      const status = hostUpdate.status();
+      return { ...say(goBackLines(status)), ...(status.install && goBackUnread(status) === undefined ? {} : { refused: true }) };
+    }
     if ((choice === 'keep' || choice === 'restore') && (release === undefined || version(release))) {
       return after('Going back unless refused: turns in progress get up to 2 min to end…', hostUpdate.goBack(choice === 'keep', release));
     }

@@ -3,6 +3,9 @@
   "version": "0.15.0",
   "description": "Recipe-configured host for long-lived agents on the Connectome stack: TUI, headless daemon, fleets, and a web operator console",
   "type": "module",
+  "bin": {
+    "connectome-host": "src/cli/connectome.ts"
+  },
   "files": [
     "src",
     "recipes",
