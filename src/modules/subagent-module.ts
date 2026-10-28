@@ -104,6 +104,7 @@ export class SubagentTerminated extends Error {
     public readonly reason: 'cancelled' | 'zombie' | 'killed',
     public readonly partialOutput: string,
     message?: string,
+    public readonly stop: { by?: string; why?: string } = {},
   ) {
     super(message ?? `Subagent terminated: ${reason}`);
     this.name = 'SubagentTerminated';
@@ -197,9 +198,9 @@ function inputsOf(input: unknown): Record<string, unknown> | null {
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== null));
 }
 
-function stopLabel(reason: SubagentTerminated['reason']): string {
+function stopLabel(reason: SubagentTerminated['reason'], stop: SubagentTerminated['stop'] = {}): string {
   switch (reason) {
-    case 'cancelled': return 'Stopped by user';
+    case 'cancelled': return `Stopped by ${stop.by ?? 'user'}${stop.why ? `: ${stop.why}` : ''}`;
     case 'killed': return "Stopped: its session stopped, as at a session switch or the host's exit";
     case 'zombie': return `Stopped: it showed no activity for over ${duration(ZOMBIE_THRESHOLD_MS)}, so the host reclaimed its slot`;
     default: return 'Stopped';
@@ -1313,7 +1314,7 @@ export class SubagentModule implements Module {
         description: 'Stop a running subagent by name: its run is cancelled, its own subagents are stopped first, and what it spawned as task work is orphaned and offered for adoption.',
         inputSchema: {
           type: 'object',
-          properties: { name: { type: 'string', description: 'The subagent to stop' }, reason: { type: 'string', description: 'Why (optional); kept on its record' } },
+          properties: { name: { type: 'string', description: 'The subagent to stop' }, reason: { type: 'string', description: "Why (optional); it's said with the run's stopped result, after who stopped it" } },
           required: ['name'],
         },
       },
@@ -1726,7 +1727,7 @@ export class SubagentModule implements Module {
     entry.statusMessage = err.reason;
     const notice = this.concurrencyNotice(waitedMs);
     const output = err.partialOutput || (run.started ? '(no output yet)' : '(no output: it was stopped before its run began, so nothing ran)');
-    const summary = notice + `[${stopLabel(err.reason)}] ` + output;
+    const summary = notice + `[${stopLabel(err.reason, err.stop)}] ` + output;
     this.emit(name, { type: 'done', summary, lastInputTokens: this.lastInputTokens.get(name) });
     return { summary, findings: [], issues: [], toolCallsCount: entry.toolCallsCount, ...(run.agentName !== undefined ? { frameworkAgentName: run.agentName } : {}) };
   }
@@ -1751,7 +1752,7 @@ export class SubagentModule implements Module {
   }
 
   private endQueued(name: string, err: SubagentTerminated): SubagentResult {
-    const summary = `[${stopLabel(err.reason)}] (no output: it was still waiting for a concurrency slot, and never started)`;
+    const summary = `[${stopLabel(err.reason, err.stop)}] (no output: it was still waiting for a concurrency slot, and never started)`;
     this.emit(name, { type: 'done', summary });
     return { summary, findings: [], issues: [], toolCallsCount: 0 };
   }
@@ -1859,7 +1860,7 @@ export class SubagentModule implements Module {
     const cause = kind === 'killed'
       ? 'stopped as its module stopped'
       : `${stop.by ? `stopped by ${stop.by}` : 'cancelled by user'}${stop.reason ? `: ${stop.reason}` : ''}`;
-    handle.reject(new SubagentTerminated(kind, partial, `Subagent "${displayName}" ${cause}`));
+    handle.reject(new SubagentTerminated(kind, partial, `Subagent "${displayName}" ${cause}`, { ...(stop.by ? { by: stop.by } : {}), ...(stop.reason ? { why: stop.reason } : {}) }));
     this.cancellationHandles.delete(displayName);
     // A cancel ends the registry record as stopped, by whom and why, before
     // the run's own rejection could end it as failed (Dendrite): task work it
@@ -3028,7 +3029,7 @@ export class SubagentModule implements Module {
       } catch (err) {
         if (err instanceof SubagentTerminated) return this.endTerminated(name, entry, err, waitedMs, run);
         if (err instanceof AgentStoppedError) {
-          return this.endTerminated(name, entry, new SubagentTerminated('cancelled', this.liveSubagents.get(name)?.currentStream ?? '', `Subagent "${name}" stopped${err.by ? ` by ${err.by}` : ''} (${err.reason})`), waitedMs, run);
+          return this.endTerminated(name, entry, new SubagentTerminated('cancelled', this.liveSubagents.get(name)?.currentStream ?? '', `Subagent "${name}" stopped${err.by ? ` by ${err.by}` : ''} (${err.reason})`, err.by ? { by: err.by } : {}), waitedMs, run);
         }
         entry.status = 'failed';
         entry.completedAt = Date.now();
@@ -3213,7 +3214,7 @@ export class SubagentModule implements Module {
           if (lastError instanceof SubagentTerminated) return this.endTerminated(input.name, entry, lastError, waitedMs, run);
           if (lastError instanceof AgentStoppedError) {
             // Stopped in the registry from outside this module: a clean end, not a failure.
-            return this.endTerminated(input.name, entry, new SubagentTerminated('cancelled', this.liveSubagents.get(input.name)?.currentStream ?? '', `Subagent "${input.name}" stopped${lastError.by ? ` by ${lastError.by}` : ''} (${lastError.reason})`), waitedMs, run);
+            return this.endTerminated(input.name, entry, new SubagentTerminated('cancelled', this.liveSubagents.get(input.name)?.currentStream ?? '', `Subagent "${input.name}" stopped${lastError.by ? ` by ${lastError.by}` : ''} (${lastError.reason})`, lastError.by ? { by: lastError.by } : {}), waitedMs, run);
           }
 
           if (lastError instanceof SubagentFailure) break;
@@ -3488,7 +3489,7 @@ export class SubagentModule implements Module {
           if (lastError instanceof SubagentTerminated) return this.endTerminated(input.name, entry, lastError, waitedMs, run);
           if (lastError instanceof AgentStoppedError) {
             // Stopped in the registry from outside this module: a clean end, not a failure.
-            return this.endTerminated(input.name, entry, new SubagentTerminated('cancelled', this.liveSubagents.get(input.name)?.currentStream ?? '', `Subagent "${input.name}" stopped${lastError.by ? ` by ${lastError.by}` : ''} (${lastError.reason})`), waitedMs, run);
+            return this.endTerminated(input.name, entry, new SubagentTerminated('cancelled', this.liveSubagents.get(input.name)?.currentStream ?? '', `Subagent "${input.name}" stopped${lastError.by ? ` by ${lastError.by}` : ''} (${lastError.reason})`, lastError.by ? { by: lastError.by } : {}), waitedMs, run);
           }
 
           if (lastError instanceof SubagentFailure) break;

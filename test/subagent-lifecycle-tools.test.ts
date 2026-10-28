@@ -567,6 +567,20 @@ describe('what a run that ends without a result says, and to whom', () => {
     } finally { await h.cleanup(); }
   }, 30_000);
 
+  test("a run stopped with the stop tool says who stopped it and why in its stopped result", async () => {
+    const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, responseGenerator: (r) => (r.model === 'mock-slow' ? 'x'.repeat(1_200) : 'ok') });
+    try {
+      const accepted = await h.call('spawn', { name: 'told-1', systemPrompt: 'p', task: 'take your time', model: 'mock-slow' });
+      expect(accepted.success).toBe(true);
+      await h.until(() => h.recordOf('told-1') !== undefined && !h.recordOf('told-1')!.ended, 'the run is registered');
+      const stopped = await h.call('stop', { name: 'told-1', reason: 'the question was answered elsewhere' });
+      expect(stopped.success).toBe(true);
+      const result = () => h.parentMessages().find((m) => m.content.some((b) => b.text?.includes("[Subagent 'told-1' returned]")));
+      await h.until(() => result() !== undefined, 'the stopped result reaches the parent');
+      expect(result()!.content.map((b) => b.text ?? '').join('')).toContain('[Stopped by parent: the question was answered elsewhere]');
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
   test("a result held for a caller that has ended is logged, and counted on its run in list", async () => {
     const logged = spyOn(console, 'error');
     const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, responseGenerator: (r) => (r.model === 'mock-slow' ? 'the held answer ' + 'x'.repeat(400) : 'ok') }, {}, [caller]);
