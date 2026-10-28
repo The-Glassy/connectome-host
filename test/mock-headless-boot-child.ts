@@ -4,8 +4,8 @@
  * emitted before runHeadless attached its sink) in `bootTraces`, and dropped
  * two more past its cap. The tree and socket sink takes the hold; the
  * runtime's other listeners (idle detection) still attach through onTrace,
- * which here sees nothing. A `/puppet` command makes the framework emit one
- * live trace through the handed-over sink.
+ * which here sees nothing. A `live` file in its data directory makes the
+ * framework emit one live trace through the handed-over sink.
  */
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -29,10 +29,6 @@ const app: Record<string, unknown> & { framework: unknown; onFrameworkReplaced?:
     getAllAgents: () => [{ name: 'fixture', state: { status: 'idle' } }],
     onTrace: () => {},
     stop: async () => {},
-    puppetToolCall: async () => {
-      live?.({ type: 'inference:started', agentName: 'fixture', timestamp: 1_700_000_000_010 });
-      return { toolUseId: 'fixture-tool', result: { success: true, data: 'emitted' } };
-    },
   },
   bootTraces: {
     handOver(sink: (event: Record<string, unknown>) => void) {
@@ -42,6 +38,12 @@ const app: Record<string, unknown> & { framework: unknown; onFrameworkReplaced?:
     },
   },
 };
+
+const living = setInterval(() => {
+  if (!live || !existsSync(join(process.env.DATA_DIR!, 'live'))) return;
+  clearInterval(living);
+  live({ type: 'inference:started', agentName: 'fixture', timestamp: 1_700_000_000_010 });
+}, 20);
 
 const switching = setInterval(() => {
   if (!existsSync(join(process.env.DATA_DIR!, 'switch'))) return;

@@ -65,7 +65,7 @@ async function withChild(body: (open: () => Promise<Client>, dir: string) => Pro
 }
 
 test('the first client hears the boot after ready, marked and in order; the next client does not', async () => {
-  await withChild(async (open) => {
+  await withChild(async (open, dir) => {
     const first = await open();
     await until(() => first.events.filter(event => event.replay === true).length >= 3, 'boot replay');
     await until(() => first.events.some(event => event.type === 'lifecycle' && event.phase === 'replay-truncated'), 'truncation line');
@@ -89,7 +89,7 @@ test('the first client hears the boot after ready, marked and in order; the next
     expect(fork?.status).toBe('cancelled');
 
     // A live trace after the handover reaches the client unmarked.
-    first.send({ type: 'command', command: '/puppet live {}' });
+    writeFileSync(join(dir, 'live'), '');
     await until(() => first.events.some(event => event.type === 'inference:started'), 'live trace');
     const liveTrace = first.events.find(event => event.type === 'inference:started')!;
     expect(liveTrace.replay).toBeUndefined();
