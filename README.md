@@ -746,7 +746,7 @@ bun src/index.ts                    # Interactive TUI
 bun src/index.ts --no-tui           # Readline mode
 echo "Hello" | bun src/index.ts     # Batch mode: run each line, then stop
 bun src/index.ts <recipe> --headless                     # Daemon: JSONL IPC over $DATA_DIR/ipc.sock, no terminal
-bun src/index.ts <recipe> --headless --exit-when-idle    # One-shot: exit once the agent goes idle
+bun src/index.ts <recipe> --headless --exit-when-idle    # One-shot: exit once the agent is idle with nothing in flight
 bun src/index.ts <recipe> --headless --socket-path <p>   # Custom socket path
 bun --watch src/index.ts            # Dev mode
 bun src/index.ts --audit-stores --recipe <recipe> <data dir>  # Store audit: starts no agent (below)

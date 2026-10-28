@@ -16,6 +16,7 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 import { resolveClockConfig, WorkspaceModule, type ClockConfig, type CodeExecutionConfig, type MountConfig } from '@animalabs/agent-framework';
 import { buildWorkspaceMounts } from './workspace-mounts.js';
 import { parseHandWrittenJson } from './hand-written-json.js';
+import { noteRecipeWarning } from './recipe-warnings.js';
 import { validateToolClassTable, validateToolLifecycle } from './tool-lifecycle-config.js';
 import { isLoopbackOrTailnetHost } from './history-semantic.js';
 import { REASONING_EFFORTS, type ReasoningEffort } from './modules/settings-module.js';
@@ -2028,13 +2029,6 @@ export function unknownRecipeKeys(raw: unknown): string[] {
   return found;
 }
 
-const pendingRecipeWarnings: string[] = [];
-const MAX_PENDING_RECIPE_WARNINGS = 50;
-
-export function takeRecipeWarnings(): string[] {
-  return pendingRecipeWarnings.splice(0);
-}
-
 /**
  * `modules.heartbeat`: true, false, or an object of the keys agent-framework
  * reads, each checked. On, it can't stand beside an `mcpServers.heartbeat`
@@ -2132,8 +2126,7 @@ export function validateRecipe(raw: unknown): Recipe {
   if (unknownKeys.length > 0) {
     const warning = `Recipe "${obj.name}" has keys the host does not read (ignored): ${unknownKeys.join(', ')}.`;
     console.warn(warning);
-    pendingRecipeWarnings.push(warning);
-    if (pendingRecipeWarnings.length > MAX_PENDING_RECIPE_WARNINGS) pendingRecipeWarnings.shift();
+    noteRecipeWarning(warning);
   }
 
   const agent = obj.agent as Record<string, unknown>;
