@@ -760,6 +760,12 @@ describe('a resume that ends before its run starts', () => {
         const resumed = await h.call('resume', { name: endAs(n, reason) });
         expect(resumed.success).toBe(true);
       }
+      const incarnation = (n: number) => h.framework.getAgentRecord(`spawn-ends-${n}`)!.incarnation;
+      await h.until(() => [4, 5, 6].every((n) => incarnation(n) === incarnation(1) + 1), 'the three resumes run as new incarnations');
+      for (const n of [1, 2, 3]) {
+        expect(h.framework.getAgentRecord(`spawn-ends-${n}`)!.ended).toBeDefined();
+        expect(incarnation(n)).toBe(incarnation(4) - 1);
+      }
     } finally { await h.cleanup(); }
   }, 30_000);
 
