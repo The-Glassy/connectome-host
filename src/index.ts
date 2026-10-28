@@ -510,6 +510,7 @@ agents: [agentConfig],
     // defaults.
     ...(recipe.subconscious ? { subconscious: recipe.subconscious } : {}),
     ...(toolClassConfig(recipe) as object),
+    maintenanceIntervalMs: recipe.maintenanceIntervalMs,
   });
 
   // An agent-framework without the heartbeat ignores modules.heartbeat: the

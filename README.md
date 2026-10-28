@@ -166,6 +166,21 @@ for channel-staffing agents, `passthrough` for none) — see
 `docs/AGENT-ONBOARDING.md` for sizing guidance on long-lived agents and
 [`docs/AGENT-MEMORY-GUIDE.md`](docs/AGENT-MEMORY-GUIDE.md) for how it works.
 
+`maintenanceIntervalMs`, at the recipe's top level, is how often
+agent-framework runs its context maintenance pass, in milliseconds: a whole
+number from 0 to 2147483647, and the framework's own 5000 when the recipe
+leaves it out. 0 turns the timer off, and with it the pass at start. Work
+only a pass would take then waits for something else to start it. Queued
+compression waits for, say, the next message, an over-budget compile or a
+`maintain` from an MCPL server the recipe allows host commands. After a
+start, compression that needs the agent's tool definitions (of history that
+holds tool calls, or any with a Fable- or Mythos-family compression model)
+waits for the agent's first request or a `maintain`. And no timer retries
+failed tool-result storage of a subagent run or fork that has ended, so a
+process that ends without a stop can lose it. Set 0 only for a short run in
+which a pass at a point that depends on the machine's load would make runs
+differ, such as a test fixture's.
+
 ### Prose routing
 
 Plain assistant text (anything the model writes that is not a tool call) is
