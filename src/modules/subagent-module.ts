@@ -2254,16 +2254,21 @@ export class SubagentModule implements Module {
       subagent: input.name,
       task: input.task,
       depth,
-      launch: {
-        kind: launch.kind,
-        model: launch.model,
-        systemPrompt: launch.systemPrompt,
-        maxTokens: launch.maxTokens,
-        maxStreamTokens: launch.maxStreamTokens,
-        ...(launch.proseRouting !== undefined ? { proseRouting: launch.proseRouting } : {}),
-        allowedTools: launch.tools.allowed === 'all' ? 'all' : [...launch.tools.allowed],
-        strategy: launch.strategy,
-      },
+      launch: this.storedLaunch(launch),
+    };
+  }
+
+  /** The launch as its record stores it: what a resume reads back, and what a launch and a resume both build their agent from. */
+  private storedLaunch(launch: SubagentLaunch): ResumableLaunch {
+    return {
+      kind: launch.kind,
+      model: launch.model,
+      systemPrompt: launch.systemPrompt,
+      maxTokens: launch.maxTokens,
+      maxStreamTokens: launch.maxStreamTokens,
+      ...(launch.proseRouting !== undefined ? { proseRouting: launch.proseRouting } : {}),
+      allowedTools: launch.tools.allowed === 'all' ? 'all' : [...launch.tools.allowed],
+      strategy: launch.strategy,
     };
   }
 
@@ -2282,24 +2287,7 @@ export class SubagentModule implements Module {
   }
 
   private ephemeralAgentConfig(launch: SubagentLaunch, agentName: string) {
-    return {
-      name: agentName,
-      model: launch.model,
-      systemPrompt: launch.systemPrompt,
-      maxTokens: launch.maxTokens,
-      ...(launch.proseRouting !== undefined ? { proseRouting: launch.proseRouting } : {}),
-      maxStreamTokens: launch.maxStreamTokens,
-      ...thinkingBindingSettings(launch.model, launch.provider),
-      strategy: new KnowledgeStrategy({
-        headWindowTokens: launch.strategy.headWindowTokens,
-        recentWindowTokens: launch.strategy.recentWindowTokens,
-        compressionModel: launch.strategy.compressionModel,
-        autoTickOnNewMessage: true,
-        maxMessageTokens: launch.strategy.maxMessageTokens,
-        summaryParticipant: agentName,
-      }),
-      allowedTools: launch.tools.allowed === 'all' ? 'all' as const : [...launch.tools.allowed],
-    };
+    return { name: agentName, ...this.agentConfig(this.storedLaunch(launch), agentName) };
   }
 
   /**
@@ -3033,8 +3021,8 @@ export class SubagentModule implements Module {
     };
   }
 
-  /** A resumed run's config: what its launch recorded, with the thinking binding and summary voice a launch gets. */
-  private resumedAgentConfig(launch: ResumableLaunch, agentName: string) {
+  /** An agent's config from its stored launch, for a launch and a resume alike, so a resumed run gets what it launched with. */
+  private agentConfig(launch: ResumableLaunch, agentName: string) {
     return {
       model: launch.model,
       systemPrompt: launch.systemPrompt,
@@ -3043,7 +3031,14 @@ export class SubagentModule implements Module {
       ...(launch.proseRouting !== undefined ? { proseRouting: launch.proseRouting } : {}),
       ...thinkingBindingSettings(launch.model, this.config.provider),
       allowedTools: launch.allowedTools === 'all' ? 'all' as const : [...launch.allowedTools],
-      strategy: new KnowledgeStrategy({ ...launch.strategy, autoTickOnNewMessage: true, summaryParticipant: agentName }),
+      strategy: new KnowledgeStrategy({
+        headWindowTokens: launch.strategy.headWindowTokens,
+        recentWindowTokens: launch.strategy.recentWindowTokens,
+        compressionModel: launch.strategy.compressionModel,
+        autoTickOnNewMessage: true,
+        maxMessageTokens: launch.strategy.maxMessageTokens,
+        summaryParticipant: agentName,
+      }),
     };
   }
 
@@ -3070,7 +3065,7 @@ export class SubagentModule implements Module {
       let resuming: ReturnType<AgentFramework['resumeAgent']> | undefined;
       let created: Awaited<ReturnType<AgentFramework['resumeAgent']>>;
       try {
-        resuming = framework.resumeAgent(record.name, this.resumedAgentConfig(launch, record.name));
+        resuming = framework.resumeAgent(record.name, this.agentConfig(launch, record.name));
         created = await Promise.race([resuming, cancel.promise]);
       } catch (err) {
         if (err instanceof SubagentTerminated) {
