@@ -43,7 +43,7 @@ async function harness(
     while (!cond()) { if (Date.now() > deadline) throw new Error(`timed out: ${what}`); await Bun.sleep(25); }
   };
   return {
-    adapter, subagent, framework, call, callAs, records, recordOf, parentMessages, until,
+    adapter, subagent, framework, call, callAs, records, recordOf, parentMessages, until, storePath: join(tmpDir, 'store'),
     cleanup: async () => { await framework.stop().catch(() => {}); rmSync(tmpDir, { recursive: true, force: true }); },
   };
 }
@@ -963,25 +963,35 @@ describe("a resumed run's parent", () => {
 });
 
 describe("the host's stop and a live run's record", () => {
-  test("a run the host's stop cuts off keeps its record live for the next boot: the module's stop, which #454's loop runs for it, writes nothing", async () => {
+  test("a run the host's stop cuts off keeps its record live for the next boot, which ends it as a restart, and it can be resumed then", async () => {
     const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, defaultResponse: 'x'.repeat(1_200) });
+    let next: AgentFramework | undefined;
     try {
       const running = await h.call('spawn', { name: 'slow-k', systemPrompt: 'p', task: 'take your time' });
       expect(running.success).toBe(true);
       await h.until(() => h.recordOf('slow-k') !== undefined && !h.recordOf('slow-k')!.ended, 'the run is registered');
       const before = h.recordOf('slow-k')!;
 
-      // The framework's stop rejects the run (host-stop) and then stops the
-      // modules; the module's stop reaches the run's entry and kills it.
       await h.framework.stop();
-      const after = h.recordOf('slow-k')!;
+      const subagent = new SubagentModule({ provider: 'mock', parentAgentName: 'parent', defaultModel: 'mock', maxRetries: 0 });
+      next = await AgentFramework.create({
+        storePath: h.storePath,
+        membrane: new Membrane(new MockAdapter({ defaultResponse: 'resumed after the restart' }), { formatter: new NativeFormatter() }),
+        agents: [{ name: 'parent', model: 'mock', systemPrompt: 'parent prompt', maxTokens: 256 }],
+        modules: [subagent as unknown as Module],
+      });
+      subagent.setFramework(next);
+      next.start();
+      const after = next.getAgentRecord(before.name)!;
       expect(after.incarnation).toBe(before.incarnation);
-      // Not ended as stopped by an operator who cancelled nothing: left live,
-      // for the next boot to end as interrupted and tell its result recipient.
-      expect(after.ended).toBeUndefined();
-      const internals = h.subagent as unknown as { cancellationHandles: Map<string, unknown> };
-      expect(internals.cancellationHandles.has('slow-k')).toBe(false);
-    } finally { await h.cleanup(); }
+      expect(after.ended?.reason).toBe('host-restart');
+      const resumed = await subagent.handleToolCall({ id: 'resume-k', name: 'resume', input: { name: 'slow-k' }, callerAgentName: 'parent' } as unknown as ToolCall);
+      expect(resumed.success).toBe(true);
+      expect((resumed.data as { incarnation: number }).incarnation).toBe(before.incarnation + 1);
+    } finally {
+      await next?.stop().catch(() => {});
+      await h.cleanup();
+    }
   }, 30_000);
 });
 
