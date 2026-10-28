@@ -546,6 +546,7 @@ export const TRACE_SCOPES: Readonly<Record<string, FrameScopes>> = {
   'dendrite:agent-orphaned': ['health', 'ops'],
   'dendrite:agent-reparented': ['health', 'ops'],
   'dendrite:activation-cancelled': ['health', 'ops'],
+  'dendrite:early-traces-dropped': OPS,
   'dendrite:mail-held': OPS,
   'dendrite:mail-deferred': OPS,
   'dendrite:mail-delivered': OPS,
