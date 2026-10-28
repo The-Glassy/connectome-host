@@ -177,6 +177,25 @@ const EVENT_HANDLERS: Record<string, EventHandler> = {
     node.lastEventAt = ts;
   },
 
+  'dendrite:agent-ended': (r, e, ts) => {
+    if (!e.agentName) return;
+    const node = r._ensureNode(e.agentName);
+    const end = e.reason === 'completed' ? 'completed' : e.reason === 'failed' ? 'failed' : 'cancelled';
+    node.status = end;
+    node.phase = end === 'completed' ? 'done' : end;
+    node.completedAt = ts;
+    node.lastEventAt = ts;
+  },
+
+  'dendrite:agent-interrupted': (r, e, ts) => {
+    if (!e.agentName) return;
+    const node = r._ensureNode(e.agentName);
+    node.status = 'cancelled';
+    node.phase = 'cancelled';
+    node.completedAt = ts;
+    node.lastEventAt = ts;
+  },
+
   'inference:usage': (r, e, ts) => {
     if (!e.agentName) return;
     const node = r._ensureNode(e.agentName);

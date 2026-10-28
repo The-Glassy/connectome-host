@@ -86,6 +86,7 @@ test('the first client hears the boot after ready, marked and in order; the next
     expect(fork?.parent).toBe('fixture');
     expect(fork?.kind).toBe('framework');
     expect(fork?.subagentType).toBeUndefined();
+    expect(fork?.status).toBe('cancelled');
 
     // A live trace after the handover reaches the client unmarked.
     first.send({ type: 'command', command: '/puppet live {}' });
