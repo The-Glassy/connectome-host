@@ -264,7 +264,7 @@ function limitWhen(ready: () => boolean, limitMs = 5 * 60_000): { armed: () => n
     const timer = {};
     const poll = (): void => {
       if (cleared.has(timer)) return;
-      if (ready()) later(() => { if (!cleared.has(timer)) handler(); }, 1_000);
+      if (ready()) handler();
       else later(poll, 50);
     };
     later(poll, 0);
