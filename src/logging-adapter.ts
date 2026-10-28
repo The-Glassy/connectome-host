@@ -108,22 +108,19 @@ export function modelReturnsNotesInThinking(model: string): boolean {
   return /claude-(fable-5(-1)?|mythos-5-1|opus-5-5|sonnet-5-5)(?!\d|-\d{1,2}(?!\d))/.test(model);
 }
 
-/** What a model does with its signed thinking, as our runs found it
- *  (anima-research/context-manager#155, part 4). */
+/** What a model does with its signed thinking (anima-research/context-manager#155). */
 export interface ModelThinking {
   /** A reply's thinking is bound to the request it was minted in: in a later
    *  request whose earlier conversation or head (system text, tools, model)
    *  differs, an enforcing account refuses the block, and others drop it. */
   binds: boolean;
   /** It takes `block_binding: { prefix_mismatch_behavior: 'drop_block' }`,
-   *  which has the provider drop such a block rather than refuse the request.
-   *  Recorded only where something binds, since elsewhere it drops nothing. */
+   *  which has the provider drop such a block rather than refuse the request. */
   dropBlock: boolean;
   /** It thinks, minting signed thinking, when a request carries no thinking
    *  config. */
   thinksWithoutConfig: boolean;
-  /** The provider's own refusal of a longer prompt showed its context window,
-   *  the size src/model-limits.ts holds for it. */
+  /** The provider's own refusal of a longer prompt showed its context window. */
   windowShownByRefusal?: true;
 }
 
@@ -133,22 +130,6 @@ const THINKS_UNBOUND: ModelThinking = { binds: false, dropBlock: false, thinksWi
 const NEITHER: ModelThinking = { binds: false, dropBlock: false, thinksWithoutConfig: false };
 const UNREACHED: ModelThinking = { binds: true, dropBlock: false, thinksWithoutConfig: false };
 
-/** The models the record names, by the id after `claude-`.
- *  - Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 5.5, run on 2026-10-19: each
- *    thought with no config, and a reply replayed with its tool list changed
- *    at the head was refused without the control ("The block is bound to a
- *    different conversation") and dropped with it. On 2026-10-23 each refused
- *    a 2.1M-token prompt with "> 1000000 maximum".
- *  - Mythos 5.1, 5 and preview aren't served to our accounts. They're
- *    recorded as membrane treats the family, thinking whatever the config,
- *    and as binding without the control, since an untried control could
- *    itself be refused: membrane's changelog records the family refusing
- *    thinking configs with a 400.
- *  - Fable 5, Opus 5 and Sonnet 5, the same runs: each thought with no
- *    config and kept the replayed reply's thinking.
- *  - Opus 4.8, 4.7, 4.6 and 4.5, Sonnet 4.6 and 4.5 and Haiku 4.5, the same
- *    runs: none thought with no config, or dropped or refused a reply's
- *    thinking after a change to an earlier message. */
 const MODEL_THINKING: ReadonlyArray<readonly [string, ModelThinking]> = [
   ['fable-5-1', BINDS_WITH_CONTROL],
   ['opus-5-5', BINDS_WITH_CONTROL],
@@ -172,24 +153,12 @@ const MODEL_THINKING_PATTERNS = MODEL_THINKING.map(
   ([name, facts]) => [new RegExp(`claude-${name}(?!\\d|-\\d{1,2}(?!\\d))`), facts] as const,
 );
 
-/** The record for `model` (ModelThinking). An entry covers its id with a
- *  routing prefix (`anthropic/`, `anthropic.`), a dated snapshot or a suffix
- *  such as [1m], and a dotted version spelling (`opus-5.5`), but not a later
- *  version, which is another model: a digit (`opus-5-50`) or a hyphen and one
- *  or two digits (`opus-5-6`) after it. A Claude model the record doesn't
- *  name binds, without the control, and doesn't think with no config: a
- *  wrong "doesn't bind" would cost a refused turn on an account that
- *  enforces, and a wrong "binds" costs that model's earlier thinking after a
- *  change, and gives its system prompt the fold line (framework-agent-config.ts
- *  systemPromptFor). A model that isn't Claude, its id not starting with
- *  `claude-` after any routing prefix, gets none of it. */
 export function modelThinking(model: string): ModelThinking {
   const id = model.toLowerCase().replace(/(\d)\.(\d)/g, '$1-$2');
   if (!/(^|[/.:])claude-/.test(id)) return NEITHER;
   return MODEL_THINKING_PATTERNS.find(([pattern]) => pattern.test(id))?.[1] ?? UNREACHED;
 }
 
-/** The binding control, as the API takes it. */
 const DROP_BLOCK = { prefix_mismatch_behavior: 'drop_block' } as const;
 export type ProviderCallObserver = (record: ProviderCallRecord) => void;
 
@@ -462,29 +431,11 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
     };
   }
 
-  /** Ask the provider to drop a block a change has invalidated, rather than
-   *  refuse the request, on a model that binds and takes the control
-   *  (modelThinking). The thinking config in effect (`extra.thinking` wins
-   *  over `request.thinking`, as in the adapter) gains the binding control,
-   *  its other fields kept. With no config, which is reasoning off, a model
-   *  that thinks with no config is sent `{ type: 'adaptive', display:
-   *  'omitted' }` with the control: it thinks either way, and membrane sends
-   *  none for a model outside the Fable and Mythos family with thinking
-   *  disabled, so nothing else could carry the control. A config of another
-   *  type ('disabled', 'between_tools') is the caller's to keep. The reasoning
-   *  setting's config replaces membrane's whole, binding included, so this
-   *  runs after withReasoning, and before withProgressNotes, which turns the
-   *  'omitted' into 'updates' on the models whose notes need it, keeping the
-   *  control.
-   *
-   *  Called for stream() only: agent turns stream, and so does an MCPL
-   *  server's streamed inference (agent-framework's inference router), which
-   *  gains the control the same way. complete() carries the one-shot calls
-   *  (compression, retrieval, naming), whose thinking is context-manager's to
-   *  decide (anima-research/context-manager#155).
-   *
-   *  membrane >= 0.7.0 adds the `thinking-binding-controls-2026-08-01` beta
-   *  whenever the body it sends carries the control. */
+  /** With no thinking config, a model that thinks anyway is sent an adaptive
+   *  'omitted' config to carry the control: membrane sends none there. Needs
+   *  membrane >= 0.7.0, which adds the
+   *  `thinking-binding-controls-2026-08-01` beta whenever the body carries
+   *  the control. */
   private withBinding(request: ProviderRequest): ProviderRequest {
     const facts = modelThinking(request.model);
     if (!facts.binds || !facts.dropBlock) return request;

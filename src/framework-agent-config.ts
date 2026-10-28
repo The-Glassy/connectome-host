@@ -24,23 +24,11 @@ export type FrameworkAgentConfig = AgentConfig & {
   refusalHandling?: Recipe['agent']['refusalHandling'];
   sameRoundThinkTextPolicy?: 'public' | 'private';
   autoContinue?: Recipe['agent']['autoContinue'];
-  // anima-research/context-manager#155: `binds` reaches the compile, and
-  // `dropBlock` asks for the drop control (thinkingBindingSettings).
   thinkingBinding?: { binds?: boolean; dropBlock?: boolean };
 };
 
-/**
- * What anima-research/context-manager#155 has the host tell agent-framework
- * about an agent's model (logging-adapter.ts modelThinking), over `provider`
- * (recipe.ts resolveProvider): for a model whose thinking binds,
- * `thinkingBinding`, and `physicalWindowTokens` where the record says the
- * provider's refusal showed the model's window, at the size
- * src/model-limits.ts holds. The control and the window are the Anthropic
- * route's: on Bedrock
- * and the other routes nobody has tried the control or read a window, so
- * such an agent binds without the control, and has no window. A model that
- * doesn't bind gets neither, which is the framework's behaviour without them.
- */
+/** The drop control and the window go only on the Anthropic route, the one
+ *  they were tried on (anima-research/context-manager#155). */
 export function thinkingBindingSettings(model: string, provider: string | undefined): {
   thinkingBinding?: { binds: true; dropBlock: boolean };
   physicalWindowTokens?: number;
@@ -55,30 +43,19 @@ export function thinkingBindingSettings(model: string, provider: string | undefi
   };
 }
 
-/** The line anima-research/context-manager#155 puts in the system text of an
- *  agent whose model binds, word for word. Its context's folds take the
- *  reasoning of earlier replies, and nothing else in the window says so. */
+/** The system-text line anima-research/context-manager#155 gives an agent
+ *  whose model binds. */
 export const FOLD_REASONING_LINE =
   'When your context folds, the reasoning behind your earlier replies leaves it, though their words stay, ' +
   'so a reply of yours that shows no reasoning may still have had some.';
 
-/** Whether `systemPrompt` ends with FOLD_REASONING_LINE, as its own last
- *  paragraph or as the whole prompt. */
 export function hasFoldLine(systemPrompt: string): boolean {
   return systemPrompt === FOLD_REASONING_LINE || systemPrompt.endsWith(`\n\n${FOLD_REASONING_LINE}`);
 }
 
-/** `systemPrompt` as an agent on `model` gets it, under a recipe whose
- *  formatter is `formatter`: ending in FOLD_REASONING_LINE, as its own
- *  paragraph, when the model binds, and without it otherwise. A prompt that
- *  already ends with the line, such as a fork's copy of its parent's, has it
- *  once either way.
- *
- *  No agent under an `anthropic-xml` recipe gets it. Every agent the host
- *  runs sends through the recipe's formatter (recipe-formatter.ts), and that
- *  one sends in XML mode, whose transcript renders no thinking: a reply's
- *  reasoning never reaches the model again, fold or none, so the line would
- *  say something untrue. */
+/** No agent under an `anthropic-xml` recipe gets the line: membrane's XML
+ *  transcript renders no thinking, so a reply's reasoning never reaches the
+ *  model again, fold or none. */
 export function systemPromptFor(systemPrompt: string, model: string, formatter?: Recipe['agent']['formatter']): string {
   const base = !hasFoldLine(systemPrompt) ? systemPrompt
     : systemPrompt === FOLD_REASONING_LINE ? ''

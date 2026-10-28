@@ -24,9 +24,6 @@ import { hasFoldLine, systemPromptFor, thinkingBindingSettings } from '../framew
 
 export interface SubagentModuleConfig {
   provider?: string;
-  /** The recipe's formatter, which every agent the host runs sends through
-   *  (recipe-formatter.ts). Under `anthropic-xml` no subagent gets the fold
-   *  line, as no resident does (framework-agent-config.ts systemPromptFor). */
   formatter?: 'native' | 'anthropic-xml';
   maxDepth?: number;
   currentDepth?: number;
@@ -389,10 +386,6 @@ export interface SubagentLaunch {
   model: string;
   systemPrompt: string;
   systemPromptSource: 'parent' | 'override' | 'caller' | 'default';
-  /** Whether the fold line (systemPromptFor) was added to the prompt this
-   *  launch was given (the parent's, the caller's or the override), or taken
-   *  off it, as for a fork whose model binds where its parent's doesn't, or
-   *  the other way round. Absent when it was neither. */
   systemPromptFoldLine?: 'added' | 'removed';
   maxTokens: number;
   maxStreamTokens: number;
@@ -2008,8 +2001,6 @@ export class SubagentModule implements Module {
       systemPromptSource = 'caller';
     } else if (
       input.systemPrompt !== undefined
-      // Compared as this fork would get each, so the fold line alone
-      // (systemPromptFor) doesn't make the parent's own prompt an override.
       && (!parentAgent || systemPromptFor(input.systemPrompt, model, this.config.formatter) !== systemPromptFor(parentAgent.systemPrompt, model, this.config.formatter))
     ) {
       systemPrompt = input.systemPrompt;
@@ -2048,9 +2039,6 @@ export class SubagentModule implements Module {
       ...(kind === 'fork' && callToolUseId ? { forkPoint: callToolUseId } : {}),
       ...(this.config.provider !== undefined ? { provider: this.config.provider } : {}),
       model,
-      // A subagent's context folds too, so on a model that binds it gets the
-      // fold line as a resident does, once (a fork's copy of its parent's
-      // prompt may already end with it).
       systemPrompt: given,
       systemPromptSource,
       ...(hasFoldLine(given) !== hasFoldLine(systemPrompt)
