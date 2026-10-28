@@ -225,7 +225,9 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
     treeReducer.applyEvent(traceEvent);
     const event = traceEvent as unknown as Record<string, unknown>;
     if (bootEvents && !currentClient) {
-      if (bootEvents.length < BOOT_EVENT_CAP) bootEvents.push(event);
+      const lost = event.type === 'dendrite:early-traces-dropped' ? event.dropped : undefined;
+      if (typeof lost === 'number') bootDropped += lost;
+      else if (bootEvents.length < BOOT_EVENT_CAP) bootEvents.push(event);
       else bootDropped++;
       return;
     }
@@ -237,9 +239,10 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
   // here once a session switch replaces that framework.
   const bootFramework = traced;
   if (app.bootTraces) {
-    bootDropped += app.bootTraces.handOver((traceEvent) => {
+    const lost = app.bootTraces.handOver((traceEvent) => {
       if (traced === bootFramework) forwardTrace(traceEvent);
     });
+    bootDropped += lost;
   } else {
     forwarding.follow(traced);
   }
@@ -249,6 +252,10 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
     traced = app.framework;
     treeReducer.reset();
     seedTree();
+    if (bootEvents) {
+      bootEvents = [];
+      bootDropped = 0;
+    }
     for (const follower of followers) follower.follow(traced);
     const carried = [...textsProcessing].filter(([, framework]) => framework !== traced).map(([text]) => text);
     for (const text of carried) {

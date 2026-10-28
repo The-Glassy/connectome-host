@@ -117,3 +117,14 @@ test('after a session switch, what the new framework replays from its create() r
     expect(snapshot.tree.nodes.find(node => node.name === 'fixture.reader-9')).toMatchObject({ status: 'cancelled' });
   });
 });
+
+test('a session switch before any client connects leaves the first client the new session\'s boot, with its own count of what its replay didn\'t keep', async () => {
+  await withChild(async (open, dir) => {
+    writeFileSync(join(dir, 'switch'), '');
+    await until(() => existsSync(join(dir, 'switched')), 'the switch');
+    const client = await open();
+    await until(() => client.events.some(event => event.type === 'lifecycle' && event.phase === 'replay-truncated'), 'truncation line');
+    expect(client.events.filter(event => event.replay === true).map(event => event.agentName)).toEqual(['fixture.reader-9']);
+    expect(client.events.find(event => event.phase === 'replay-truncated')).toMatchObject({ dropped: 250, kept: 1 });
+  });
+});

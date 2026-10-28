@@ -7,7 +7,7 @@
  * which here sees nothing. A `live` file in its data directory makes the
  * framework emit one live trace through the handed-over sink.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runHeadless } from '../src/headless.js';
 import type { AppContext } from '../src/index.js';
@@ -18,7 +18,10 @@ const boot = [
   { type: 'dendrite:agent-ended', agentName: 'fixture.reader-7', reason: 'host-restart', timestamp: 1_700_000_000_003 },
 ];
 
-const restored = { type: 'dendrite:agent-ended', agentName: 'fixture.reader-9', kind: 'task-fork', incarnation: 1, reason: 'host-restart', timestamp: 1_700_000_000_020 };
+const restored = [
+  { type: 'dendrite:agent-ended', agentName: 'fixture.reader-9', kind: 'task-fork', incarnation: 1, reason: 'host-restart', timestamp: 1_700_000_000_020 },
+  { type: 'dendrite:early-traces-dropped', dropped: 250, timestamp: 1_700_000_000_021 },
+];
 
 let live: ((event: Record<string, unknown>) => void) | null = null;
 
@@ -51,12 +54,13 @@ const switching = setInterval(() => {
   app.framework = {
     getAllAgents: () => [{ name: 'fixture', state: { status: 'idle' } }],
     onTrace: (listener: (event: Record<string, unknown>) => void, options?: { replay?: boolean }) => {
-      if (options?.replay) listener(restored);
+      if (options?.replay) for (const event of restored) listener(event);
       return () => {};
     },
     stop: async () => {},
   };
   app.onFrameworkReplaced?.();
+  writeFileSync(join(process.env.DATA_DIR!, 'switched'), '');
 }, 20);
 
 await runHeadless(app as unknown as AppContext);
