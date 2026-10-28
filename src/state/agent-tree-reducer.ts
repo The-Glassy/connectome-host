@@ -186,7 +186,9 @@ const EVENT_HANDLERS: Record<string, EventHandler> = {
 
   'dendrite:agent-ended': (r, e, ts) => {
     if (!e.agentName) return;
+    const unseen = r.getNode(e.agentName) === undefined;
     const node = r._ensureNode(e.agentName);
+    if (unseen && typeof e.spawnedBy === 'string') node.parent = e.spawnedBy;
     const end = e.reason === 'completed' ? 'completed' : e.reason === 'failed' ? 'failed' : 'cancelled';
     node.status = end;
     node.phase = end === 'completed' ? 'done' : end;
