@@ -557,13 +557,14 @@ export interface RecipeMcpServer {
   toolHints?: boolean;
   /**
    * How agents are shown this server at first (agent-framework's host
-   * toolsets, 0.29.0): `'full'` (the default) puts its tools in the tool
-   * list; `'tab'` keeps it connected, its events still arriving, with none of
-   * its tools in the list until an agent opens its tab
-   * (`toolsets--open {server}`) and calls them through `toolsets--act`;
-   * `'closed-tab'` leaves it disconnected until an agent opens it. Each agent
-   * can switch it later, and its choice is kept over this default. Passed
-   * through to agent-framework; an earlier one ignores it.
+   * toolsets): `'full'` (the default) puts its tools in the tool list;
+   * `'tab'` keeps it connected, its events still arriving, with its tools
+   * starting out of the list: `toolsets--open {server}` lists them for
+   * `toolsets--act`, and `toolsets--open {server, full: true}` puts them back
+   * in the list; `'closed-tab'` is a tab that also starts out disconnected.
+   * Each agent can change how it's shown the server later, which this doesn't
+   * decide. An agent without both `toolsets--open` and `toolsets--act` isn't
+   * shown tabs. Passed through to agent-framework.
    */
   presentation?: 'full' | 'tab' | 'closed-tab';
   /**
@@ -1074,11 +1075,11 @@ export interface RecipeModules {
    * SECURITY: `mcpl_deploy` spawns arbitrary commands as the host user —
    * enabling this module means trusting the agent with code execution.
    *
-   * Its four tools live in agent-framework's built-in toolset ("settings",
-   * 0.29.0): out of the tool list, opened with
-   * `toolsets--open {toolset:"settings"}` and called with `toolsets--act`.
-   * `surface` is no longer read (it chose between the tool list and the
-   * removed `utils` tool); it's accepted so older recipes still load.
+   * Its four tools live in agent-framework's built-in toolset ("settings"):
+   * out of the tool list, opened with `toolsets--open {toolset:"settings"}`
+   * and called with `toolsets--act`, for an agent that may call both; for
+   * one that may not, they stay in its tool list.
+   * `surface` is no longer read; it's accepted so older recipes still load.
    */
   mcplAdmin?: boolean | { surface?: 'tools' | 'utilities' };
 
@@ -1139,7 +1140,8 @@ export interface RecipeModules {
    * operator invite, exchanged for fresh aid1 audience tokens on demand.
    * Its tools are utilities, in agent-framework's built-in toolset
    * ("settings": `toolsets--open {toolset:"settings"}`, then
-   * `toolsets--act {tool:"identity--status"}`) — costs no tool slots. `home` defaults to id.animalabs.ai; `audience` is the
+   * `toolsets--act {tool:"identity--status"}`, or by its own name for an
+   * agent that may not call both) — costs no tool slots. `home` defaults to id.animalabs.ai; `audience` is the
    * default for `token` calls.
    */
   identity?: boolean | { home?: string; audience?: string };
@@ -1256,10 +1258,10 @@ export interface RecipeWebUi {
   host?: string;
   /**
    * No longer read: the observer grant tools (observers--get/grant/revoke)
-   * live in agent-framework's built-in toolset ("settings", 0.29.0), out of
-   * the tool list, opened with `toolsets--open {toolset:"settings"}` and
-   * called with `toolsets--act`. It chose between the tool list and the
-   * removed `utils` tool; it's accepted so older recipes still load.
+   * live in agent-framework's built-in toolset ("settings"), out of the tool
+   * list, opened with `toolsets--open {toolset:"settings"}` and called with
+   * `toolsets--act`, for an agent that may call both (for one that may not,
+   * they stay in its tool list). It's accepted so older recipes still load.
    * Consent semantics unchanged: the agent holds the pen.
    */
   observersSurface?: 'tools' | 'utilities';
@@ -1480,6 +1482,19 @@ export interface RecipeConversations {
   /** Prefix for generated fork agent names (default 'conversation'). Also
    * the Chronicle namespace segment, so it is restricted to [A-Za-z0-9_-]. */
   agentPrefix?: string;
+}
+
+export function deprecatedSurfaceNotices(modules: RecipeModules | undefined): string[] {
+  const notices: string[] = [];
+  if (typeof modules?.mcplAdmin === 'object' && modules.mcplAdmin.surface !== undefined) {
+    notices.push('modules.mcplAdmin.surface is no longer read: mcpl-admin\'s tools are in agent-framework\'s built-in ' +
+      '"settings" toolset, or in the tool list of an agent that may not call both toolsets--open and toolsets--act.');
+  }
+  if (typeof modules?.webui === 'object' && modules.webui.observersSurface !== undefined) {
+    notices.push('modules.webui.observersSurface is no longer read: the observer tools are in agent-framework\'s built-in ' +
+      '"settings" toolset, or in the tool list of an agent that may not call both toolsets--open and toolsets--act.');
+  }
+  return notices;
 }
 
 export function deprecatedConversationsNotices(conversations: RecipeConversations | undefined): string[] {

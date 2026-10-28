@@ -46,8 +46,9 @@ Other keys in the `webui` block:
   `[]` disables the check.
 - `observersSurface` — no longer read: from agent-framework 0.29.0 the
   agent's observer-grant tools live in the built-in `settings` toolset
-  (`toolsets--open {"toolset": "settings"}`). Still accepted, with a startup
-  line, so older recipes load.
+  (`toolsets--open {"toolset": "settings"}`), or in the tool list of an agent
+  whose `allowedTools` doesn't permit both `toolsets--open` and
+  `toolsets--act`. Still accepted, with a startup line, so older recipes load.
 
 Front the module with a reverse proxy (Caddy/nginx) to terminate TLS; the
 proxy handles transport security while Basic-Auth gates the app layer.
@@ -82,7 +83,9 @@ The module accepts three credentials:
   not send cached Basic credentials on WebSocket upgrades.
 - **Observer device keys** — Ed25519 grants in `$OBSERVERS_FILE` (default
   `DATA_DIR/observers.json`, hot-reloaded; the agent edits it with its
-  `observers--get/grant/revoke` tools). A grant the viewer can't use, such as
+  `observers--get/grant/revoke` tools, in its built-in `settings` toolset, or
+  in its tool list if its `allowedTools` doesn't permit both `toolsets--open`
+  and `toolsets--act`). A grant the viewer can't use, such as
   one with an unknown scope or an expiry that isn't a date, is left out and
   named in its log, and the file's other grants still apply; a file that isn't
   valid JSON leaves a running viewer's previous grants in force until it

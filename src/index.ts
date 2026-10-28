@@ -101,6 +101,7 @@ import {
   clearSavedRecipe,
   parseRecipeArg,
   deprecatedConversationsNotices,
+  deprecatedSurfaceNotices,
   resolveProvider,
   recipeModel,
   runningFit,
@@ -391,9 +392,6 @@ async function createFramework(
 
   let mcplAdminModule: McplAdminModule | null = null;
   if (modules.mcplAdmin === true || typeof modules.mcplAdmin === 'object') {
-    if (typeof modules.mcplAdmin === 'object' && modules.mcplAdmin.surface !== undefined) {
-      console.warn('[deprecated] modules.mcplAdmin.surface is no longer read: mcpl-admin\'s tools are in the built-in "settings" toolset (toolsets--open {toolset:"settings"}).');
-    }
     mcplAdminModule = new McplAdminModule({ timeZone });
     moduleInstances.push(mcplAdminModule);
   }
@@ -437,9 +435,6 @@ async function createFramework(
       ...(subscriptionUnmetered ? { subscriptionUnmetered } : {}),
     });
     moduleInstances.push(webUiModule);
-    if (webuiConfig.observersSurface !== undefined) {
-      console.warn('[deprecated] modules.webui.observersSurface is no longer read: the observer tools are in the built-in "settings" toolset (toolsets--open {toolset:"settings"}).');
-    }
     moduleInstances.push(new ObserversModule({ path: observersPath }));
   }
 
@@ -486,6 +481,7 @@ async function createFramework(
   const agentConfig = buildFrameworkAgentConfig(recipe, agentName, model, strategy);
 
   for (const notice of deprecatedConversationsNotices(recipe.conversations)) console.warn(`[deprecated] ${notice}`);
+  for (const notice of deprecatedSurfaceNotices(recipe.modules)) console.warn(`[deprecated] ${notice}`);
   const conversations = buildConversationsConfig(recipe, agentName, model, timeZone, extensionRegistry);
 
   // The framework's heartbeat (heartbeat-options.ts), with heartbeat-mcpl
