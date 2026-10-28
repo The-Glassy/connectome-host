@@ -17,8 +17,9 @@
   - **The window:** those four get `physicalWindowTokens` on the Anthropic route, at the
     1,000,000 tokens the model limits table holds for each, under its id or a dated snapshot of it.
     With binding and a window both set, agent-framework doesn't break a turn's stream at
-    `maxStreamTokens`, a recipe's or `/budget`'s: such an agent's turn runs on until its next
-    request would pass the window.
+    `maxStreamTokens`, a recipe's or `/budget`'s: such an agent's stream breaks mid-turn for its
+    size only where its next request would pass the window, and a fresh compile carries the turn
+    on.
   - **The system prompt:** on a binding model it ends with one more paragraph: "When your context
     folds, the reasoning behind your earlier replies leaves it, though their words stay, so a reply
     of yours that shows no reasoning may still have had some." An empty prompt gets it as its whole

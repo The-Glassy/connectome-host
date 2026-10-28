@@ -842,8 +842,8 @@ enforces the binding refuses a request where those changed, as after a fold. The
 drop control on agent turns through the Anthropic API so the provider sets such a block aside instead, and context-manager
 leaves out what a fold invalidates (anima-research/context-manager#155). On those four the host
 also passes the model's window, and with both, agent-framework doesn't break a turn's stream at
-`maxStreamTokens` (or the `/budget` command's value): a turn runs on until its next request
-would pass the window.
+`maxStreamTokens` (or the `/budget` command's value): its stream breaks mid-turn for its size
+only where its next request would pass the window, and a fresh compile carries the turn on.
 
 ---
 

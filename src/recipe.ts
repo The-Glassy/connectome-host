@@ -298,7 +298,7 @@ export interface RecipeAgent {
    * which with prompt caching on are only those after the last cache marker.
    * On a model whose thinking binds and whose window the host passes (Fable
    * 5.1, Opus 5.5, Sonnet 5.5 and Haiku 5.5 through the Anthropic API), the
-   * framework doesn't break a turn's stream at it: only the window does.
+   * framework doesn't break a turn's stream at it; the window still does.
    */
   maxStreamTokens?: number;
   /** Per-agent context compile budget (input tokens), which holds
