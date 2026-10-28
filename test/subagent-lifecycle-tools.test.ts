@@ -582,6 +582,40 @@ describe("a launch whose caller ends before it registers", () => {
     } finally { await h.cleanup(); }
   }, 40_000);
 
+  test("a retry after its run was adopted registers under the adopter, not under the launcher's nearest live ancestor", async () => {
+    let adopted = false;
+    let h: Awaited<ReturnType<typeof harness>> | undefined;
+    h = await harness({
+      streamChunkDelayMs: 20, streamChunkSize: 10,
+      responseGenerator: (r) => {
+        if (r.model === 'mock-slow') return 'x'.repeat(3_000);
+        if (r.model !== 'mock-flaky') return 'ok';
+        if (!adopted) {
+          adopted = true;
+          h!.framework.stopAgent(h!.recordOf('kept-m')!.name, { by: 'test' });
+          h!.framework.reparentAgent(h!.recordOf('kept-c')!.name, 'parent', { by: 'parent' });
+          throw new Error('the provider is overloaded');
+        }
+        return 'the second try';
+      },
+    }, { maxConcurrent: 3, maxRetries: 1 });
+    try {
+      expect((await h.call('spawn', { name: 'kept-a', systemPrompt: 'p', task: 'hold', model: 'mock-slow' })).success).toBe(true);
+      await h.until(() => h!.recordOf('kept-a') !== undefined && !h!.recordOf('kept-a')!.ended, 'A runs');
+      const a = h.recordOf('kept-a')!.name;
+      expect((await h.callAs(a, 'spawn', { name: 'kept-m', systemPrompt: 'p', task: 'hold', model: 'mock-slow' })).success).toBe(true);
+      await h.until(() => h!.recordOf('kept-m') !== undefined && !h!.recordOf('kept-m')!.ended, 'M runs');
+      const m = h.recordOf('kept-m')!.name;
+      expect((await h.callAs(m, 'spawn', { name: 'kept-c', systemPrompt: 'p', task: 'answer', model: 'mock-flaky' })).success).toBe(true);
+      const attempts = () => h!.records().filter((r) => (r.metadata as { subagent: string }).subagent === 'kept-c');
+      await h.until(() => attempts().length === 2, 'the retry registers', 20_000);
+      expect(adopted).toBe(true);
+      const [first, retry] = attempts().sort((x, y) => x.createdAt - y.createdAt);
+      expect(first!.relationships.spawnedBy).toBe('parent');
+      expect(retry!.relationships.spawnedBy).toBe('parent');
+    } finally { await h.cleanup(); }
+  }, 40_000);
+
   test("a launch queued for a slot, whose caller ended while it waited, runs under the caller's nearest live ancestor and returns to it", async () => {
     const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, responseGenerator: (r) => (r.model === 'mock-slow' ? 'x'.repeat(600) : 'the queued answer') }, { maxConcurrent: 1 }, [caller]);
     try {
