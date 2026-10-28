@@ -813,7 +813,7 @@ describe('what a run that ends without a result says, and to whom', () => {
     } finally { logged.mockRestore(); await h.cleanup(); }
   }, 30_000);
 
-  test("an orphan that finished before anyone adopted it is adopted for what it left: its held result reaches the adopter under its name, and it stays ended; a stranger is refused", async () => {
+  test("an orphan that finished before anyone adopted it is adopted for the result it holds for its ended caller: the result reaches the adopter under its name, and it stays ended; a stranger is refused", async () => {
     let adopterSaw = false;
     const h = await harness({
       streamChunkDelayMs: 20, streamChunkSize: 10,
@@ -871,7 +871,7 @@ describe('what a run that ends without a result says, and to whom', () => {
     } finally { await h.cleanup(); }
   }, 30_000);
 
-  test('an orphan that ended and left nothing undelivered is not adopted, and the refusal says so', async () => {
+  test('an orphan that ended and holds nothing for a recipient that has gone is not adopted, and the refusal says so', async () => {
     const h = await harness();
     try {
       const internals = h.framework as unknown as { registry: { register(spec: ReturnType<typeof workerSpec>): unknown } };
@@ -882,7 +882,7 @@ describe('what a run that ends without a result says, and to whom', () => {
       h.framework.stopAgent('spawn-empty-1', { by: 'test' });
       const refused = await h.call('adopt', { name: 'empty' });
       expect(refused.success).toBe(false);
-      expect(refused.error).toContain("'empty' has ended and left nothing undelivered");
+      expect(refused.error).toContain("'empty' has ended, and holds nothing for a recipient that has gone");
       expect(h.framework.getAgentRecord('spawn-empty-1')!.relationships.spawnedBy).toBe('mid');
     } finally { await h.cleanup(); }
   }, 30_000);

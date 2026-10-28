@@ -22,10 +22,11 @@
   orphaned and offered for adoption), `subagent--message` (a message in a
   running subagent's context under the sender's name, waking it),
   `subagent--adopt` (an orphan's new parent, its result following; an orphan
-  that has since ended isn't restarted, and adopting it delivers the results
-  it left), and `subagent--resume` (an ended subagent continued from the
-  context it left, under the same name, its result delivered as a message).
-  The agent tree shows the edges from `dendrite:agent-created`.
+  that has since ended isn't restarted, and adopting it delivers what it
+  holds for a recipient that has gone), and `subagent--resume` (an ended
+  subagent continued from the context it left, under the same name, its
+  result delivered as a message). The agent tree shows the edges from
+  `dendrite:agent-created`.
 - The tools keep the module's own rules. They reach the caller's subtree —
   the subagents it started, and theirs — as `peek` does (postmortem
   2026-05-28 P3 #8); `modules.subagents.lifecycleReach: 'all'` widens them

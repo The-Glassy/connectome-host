@@ -1330,7 +1330,7 @@ export class SubagentModule implements Module {
       {
         name: 'adopt',
         description: "Adopt an orphaned subagent (one whose spawner ended while it ran) that was offered to you — one from your own tree, or offered to you as the primary: you become its parent, its result comes to you, and results it already produced for the lost parent are delivered to you. " +
-          "An orphan that has since ended isn't restarted: adopting it delivers what it left (list counts it as held) into your context, as messages under its name.",
+          "An orphan that has since ended isn't restarted: adopting it delivers into your context, as messages under its name, what it holds for a recipient that has gone; list's held counts what it holds.",
         inputSchema: {
           type: 'object',
           properties: { name: { type: 'string', description: 'The orphaned subagent to adopt' } },
@@ -2925,7 +2925,7 @@ export class SubagentModule implements Module {
         return {
           success: false,
           isError: true,
-          error: `Nothing was adopted: '${input.name}' has ended and left nothing undelivered; adopting a subagent that has ended only collects what it left, and doesn't restart it.`,
+          error: `Nothing was adopted: '${input.name}' has ended, and holds nothing for a recipient that has gone; adopting a subagent that has ended only collects that, and doesn't restart it.`,
         };
       }
       try {
@@ -2940,7 +2940,7 @@ export class SubagentModule implements Module {
           agent: record.name,
           status: `ended: ${record.ended.reason}`,
           collected: left,
-          note: `It has ended and isn't restarted. What it left, ${left} held item${left === 1 ? '' : 's'}, arrives in your context as messages under its name, '${record.name}', with a wake queued for you; it doesn't come back in this result.`,
+          note: `It has ended and isn't restarted. Its ${left} held item${left === 1 ? '' : 's'} for a recipient that has gone arrive${left === 1 ? 's' : ''} in your context as messages under its name, '${record.name}', with a wake queued for you, not in this result.`,
         },
       };
     }
