@@ -1044,13 +1044,17 @@ describe('what a run that ends without a result says, and to whom', () => {
       const internals = h.framework as unknown as { registry: { register(spec: ReturnType<typeof workerSpec>): unknown; end(name: string, reason: string, by?: string): unknown } };
       internals.registry.register(workerSpec('spawn-for-bob-1', { spawnedBy: 'parent', resultTo: { to: 'bob', as: 'message' }, metadata: { subagent: 'for-bob', task: 'for bob', launch: { kind: 'spawn', model: 'mock-fail', systemPrompt: 'p', maxTokens: 64, allowedTools: 'all', strategy: {} } } }));
       internals.registry.end('spawn-for-bob-1', 'failed', 'test');
+      const delivered: Array<{ from: string; to: string; kind: string }> = [];
+      h.framework.onTrace((e) => {
+        const event = e as unknown as { type: string; from: string; to: string; kind: string };
+        if (event.type === 'dendrite:mail-delivered') delivered.push({ from: event.from, to: event.to, kind: event.kind });
+      });
       const resumed = await h.call('resume', { name: 'for-bob' });
       expect(resumed.success).toBe(true);
       expect((resumed.data as { resultTo: string }).resultTo).toBe('bob');
-      const bobMail = () => h.framework.getAgent('bob')!.getContextManager().getAllMessages() as unknown as Array<{ participant: string; content: Array<{ text?: string }> }>;
-      await h.until(() => bobMail().some((m) => m.content.some((b) => b.text?.includes("[Subagent 'for-bob' failed]"))), 'the failure reaches bob');
-      expect(bobMail().find((m) => m.content.some((b) => b.text?.includes("[Subagent 'for-bob' failed]")))!.participant).toBe('spawn-for-bob-1');
-      // The residents share one message slot, so the parent's store holds bob's mail too: what must not be there is a host line for the parent.
+      await h.until(() => delivered.some((m) => m.from === 'spawn-for-bob-1'), 'the failure is delivered');
+      expect(delivered.filter((m) => m.from === 'spawn-for-bob-1')).toEqual([{ from: 'spawn-for-bob-1', to: 'bob', kind: 'result' }]);
+      expect(h.parentMessages().some((m) => m.metadata?.kind === 'agent-result' && m.content.some((b) => b.text?.includes("[Subagent 'for-bob' failed]")))).toBe(true);
       expect(h.parentMessages().filter((m) => m.metadata?.kind !== 'agent-result' && m.content.some((b) => b.text?.includes("[Subagent 'for-bob'")))).toEqual([]);
     } finally { await h.cleanup(); }
   }, 30_000);
