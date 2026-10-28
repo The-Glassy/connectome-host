@@ -505,7 +505,7 @@ describe('FleetModule — unresolved launch artifacts', () => {
     const start = Date.now();
     try {
       process.env.PATH = dir;
-      expect(await (fleet as any).socketRefusesConnection('/unused-test-socket')).toBe(false);
+      expect(await (fleet as any).socketRefusesConnection('/unused-test-socket', 200)).toBe(false);
       expect(Date.now() - start).toBeLessThan(5_000);
     } finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
   }, 6_000);
