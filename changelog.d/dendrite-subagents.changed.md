@@ -14,7 +14,11 @@
   it is adopted, never lost — where before it was a line in the primary's
   context whatever became of the caller; a failure now follows the same path,
   except one whose route is the live primary, which is still told to it as a
-  line in its context.
+  line in its context. A launch whose caller ended before it registered, as
+  one waiting for a slot or a retry can, registers under the caller's
+  nearest live ancestor, or the primary, and its result goes there, saying
+  whose run it was; a fork registered so carries no copy inheritance on its
+  record, since its copy came from the caller.
   The launch refusal and the concurrency, retry, cancel and time-limit rules
   are unchanged; what a stream is told at its start is the recipe's
   `modules.subagents.orientation` (`full`, the default, or `none`).
