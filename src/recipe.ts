@@ -16,6 +16,7 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 import { resolveClockConfig, WorkspaceModule, type ClockConfig, type CodeExecutionConfig, type MountConfig } from '@animalabs/agent-framework';
 import { buildWorkspaceMounts } from './workspace-mounts.js';
 import { parseHandWrittenJson } from './hand-written-json.js';
+import { noteRecipeWarning } from './recipe-warnings.js';
 import { validateToolClassTable, validateToolLifecycle } from './tool-lifecycle-config.js';
 import { isLoopbackOrTailnetHost } from './history-semantic.js';
 import { REASONING_EFFORTS, type ReasoningEffort } from './modules/settings-module.js';
@@ -157,13 +158,19 @@ export interface RecipeStrategy {
    *  speculative compression queue (default 1); demand still overrides. */
   l1HoldbackChunks?: number;
   // Self-voice / compression framing. The host defaults summaryParticipant to
-  // `agent.name`, so self-recollections speak as the agent itself. Set
+  // the agent's name (`agent.name`, or the name it runs under when that's
+  // unset), so self-recollections speak as the agent itself. Set
   // explicitly only to voice summaries as someone else — a mismatched
   // participant surfaces in the compiled prompt as another voice speaking in
   // first person about the agent.
   summaryParticipant?: string;
   summarySystemPrompt?: string;
   summaryUserPrompt?: string;
+  /** The `Context Manager` turn before a summary in the compiled context,
+   *  under adaptive resolution (the default) or `positionedRecallPairs:
+   *  false`. The host defaults it to a sentence saying that a summary
+   *  follows, standing in for earlier conversation, tool calls and results
+   *  included, and that the exact text it replaces isn't shown. */
   summaryContextLabel?: string;
   /** As-of perspective pin: chunks wholly below this message sequence are
    *  compressed as inherited/witnessed record, not first-person memory.
@@ -296,6 +303,9 @@ export interface RecipeAgent {
    * runtime `/budget` command. When unset: contextBudgetTokens + 20k if the
    * budget is left out too; else 150k, a null budget included. It counts the provider's input tokens,
    * which with prompt caching on are only those after the last cache marker.
+   * On a model whose thinking binds and whose window the host passes (Fable
+   * 5.1, Opus 5.5, Sonnet 5.5 and Haiku 5.5 through the Anthropic API), the
+   * framework doesn't break a turn's stream at it; the window still does.
    */
   maxStreamTokens?: number;
   /** Per-agent context compile budget (input tokens), which holds
@@ -409,7 +419,9 @@ export interface RecipeAgent {
      * reasoning_enabled on, a config carrying agent_settings'
      * reasoning_display goes in place of this block's whole thinking
      * config, binding controls included, on a model that takes adaptive
-     * thinking. On a streamed call through it to a model
+     * thinking; on a streamed call to a model the host sends the drop
+     * control to, the control is then added to that config
+     * (LoggingAnthropicAdapter.withBinding). On a streamed call through it to a model
      * modelReturnsNotesInThinking lists, a request that would go with
      * display 'omitted', or with no thinking config, goes with 'updates'
      * instead, so the notes between tool calls come back as text
@@ -2044,13 +2056,6 @@ export function unknownRecipeKeys(raw: unknown): string[] {
   return found;
 }
 
-const pendingRecipeWarnings: string[] = [];
-const MAX_PENDING_RECIPE_WARNINGS = 50;
-
-export function takeRecipeWarnings(): string[] {
-  return pendingRecipeWarnings.splice(0);
-}
-
 /**
  * `modules.heartbeat`: true, false, or an object of the keys agent-framework
  * reads, each checked. On, it can't stand beside an `mcpServers.heartbeat`
@@ -2148,8 +2153,7 @@ export function validateRecipe(raw: unknown): Recipe {
   if (unknownKeys.length > 0) {
     const warning = `Recipe "${obj.name}" has keys the host does not read (ignored): ${unknownKeys.join(', ')}.`;
     console.warn(warning);
-    pendingRecipeWarnings.push(warning);
-    if (pendingRecipeWarnings.length > MAX_PENDING_RECIPE_WARNINGS) pendingRecipeWarnings.shift();
+    noteRecipeWarning(warning);
   }
 
   const agent = obj.agent as Record<string, unknown>;
