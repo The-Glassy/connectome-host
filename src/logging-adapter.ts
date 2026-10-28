@@ -135,6 +135,8 @@ const MODEL_THINKING: ReadonlyArray<readonly [string, ModelThinking]> = [
   ['opus-5-5', BINDS_WITH_CONTROL],
   ['sonnet-5-5', BINDS_WITH_CONTROL],
   ['haiku-5-5', BINDS_WITH_CONTROL],
+  // Membrane's changelog records the Mythos family refusing thinking configs
+  // with a 400, so it isn't sent the control untried.
   ['mythos-5-1', BINDS_WITHOUT_CONTROL],
   ['mythos-5', BINDS_WITHOUT_CONTROL],
   ['mythos-preview', BINDS_WITHOUT_CONTROL],
@@ -431,9 +433,11 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
     };
   }
 
-  /** With no thinking config, a model that thinks anyway is sent an adaptive
-   *  'omitted' config to carry the control: membrane sends none there. Needs
-   *  membrane >= 0.7.0, which adds the
+  /** Membrane applies request.extra after the config it builds, so the
+   *  reasoning setting's config replaces that one whole, control included:
+   *  this step runs after withReasoning. With no thinking config, a model that
+   *  thinks anyway is sent an adaptive 'omitted' config to carry the control:
+   *  membrane sends none there. Needs membrane >= 0.7.0, which adds the
    *  `thinking-binding-controls-2026-08-01` beta whenever the body carries
    *  the control. */
   private withBinding(request: ProviderRequest): ProviderRequest {

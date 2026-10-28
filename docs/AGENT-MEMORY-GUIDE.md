@@ -274,7 +274,7 @@ KV-continuity work described above.
 
 | Knob | Default here | Typical large-tail recipe | What it controls |
 |---|---|---|---|
-| `recentWindowTokens` / `tail_tokens` *(your verbatim tail)* | 30 000 | **~300 000–450 000** | how much recent history stays exactly as it happened |
+| `recentWindowTokens` / `tail_tokens` *(your verbatim tail)* | 30 000 | **~300 000–450 000** | how much recent history stays verbatim (on a model whose thinking binds, see Tail above) |
 | `contextBudgetTokens` / `context_budget_tokens` | 100 000 | set to fit the model's window | the size your whole context is fitted into; decides when the middle folds |
 | `transitionPaceTokens` / `transition_pace_tokens` | 16 000 | — | how much your context may shrink per turn while converging to a lowered budget |
 | `headWindowTokens` | 4 000 | 0 – a few k | verbatim origin/anchor pinned at the very start |

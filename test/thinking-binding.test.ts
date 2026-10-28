@@ -17,10 +17,6 @@ import { validateRecipe } from '../src/recipe.js';
 import { getDefaultModelLimits } from '../src/model-limits.js';
 import { SubagentModule, describeSubagentLaunch } from '../src/modules/subagent-module.js';
 
-// anima-research/context-manager#155, part 4: the host's record of what each
-// model does with its signed thinking, the drop control on agent turns, the
-// window sizes and the fold line.
-
 const DROP_BLOCK = { prefix_mismatch_behavior: 'drop_block' };
 const BOUND = { binds: true, dropBlock: true, thinksWithoutConfig: true, windowShownByRefusal: true };
 const BOUND_NO_CONTROL = { binds: true, dropBlock: false, thinksWithoutConfig: true };
@@ -53,7 +49,6 @@ describe('modelThinking', () => {
   });
 
   test.each([
-    // A later version is another model, which the runs didn't reach.
     'claude-opus-5-6', 'claude-opus-5-50', 'claude-fable-5-2', 'claude-fable-5-10', 'claude-sonnet-5-6', 'claude-haiku-5-6',
     'claude-mythos-5-2', 'claude-opus-6', 'claude-opus-4-9', 'bedrock:claude-opus-5-6',
   ])('records %s, which it doesn\'t name, as binding without the control', (model) => {
@@ -87,12 +82,10 @@ describe('LoggingAnthropicAdapter.withBinding', () => {
     const out = bind(viaExtra);
     expect(thinkingOf(out)).toEqual({ type: 'adaptive', display: 'summarized', block_binding: DROP_BLOCK });
     expect((out.extra as Record<string, unknown>).keep).toBe(1);
-    // The caller's own config is copied, not changed.
     expect(thinkingOf(viaExtra)).toEqual({ type: 'adaptive', display: 'summarized' });
     const topLevel = request('claude-sonnet-5-5', { thinking: { type: 'enabled', budget_tokens: 2048 } });
     expect(thinkingOf(bind(topLevel))).toEqual({ type: 'enabled', budget_tokens: 2048, block_binding: DROP_BLOCK });
     expect((topLevel as { thinking?: unknown }).thinking).toEqual({ type: 'enabled', budget_tokens: 2048 });
-    // A binding control set to null is no control.
     const nulled = request('claude-opus-5-5', { thinking: { type: 'adaptive', block_binding: null } });
     expect(thinkingOf(bind(nulled))).toEqual({ type: 'adaptive', block_binding: DROP_BLOCK });
     const both = request('claude-haiku-5-5', {
@@ -133,7 +126,6 @@ describe('the binding on the wire (through the real adapter)', () => {
   const BINDING_BETA = 'thinking-binding-controls-2026-08-01';
   const UPDATES_BETA = 'thinking-display-updates-2026-08-18';
 
-  /** A real adapter whose SDK client records each request's body and headers. */
   const wire = (reasoning: Reasoning) => {
     const bodies: Array<Record<string, unknown>> = [];
     const headers: Array<Record<string, string> | undefined> = [];
@@ -175,12 +167,11 @@ describe('the binding on the wire (through the real adapter)', () => {
     const w = wire(off);
     for (const model of ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-1']) await w.stream(model);
     expect(w.bodies).toHaveLength(4);
-    // Opus, Sonnet and Fable return their notes as thinking, so 'omitted' goes as 'updates', the control kept.
+    // Opus, Sonnet and Fable return the notes between tool calls as thinking blocks.
     for (const i of [0, 1, 3]) {
       expect(w.bodies[i]?.thinking).toEqual({ type: 'adaptive', display: 'updates', block_binding: DROP_BLOCK });
       expect(w.betas(i)).toEqual(expect.arrayContaining([BINDING_BETA, UPDATES_BETA]));
     }
-    // Haiku 5.5 doesn't, so its config stays 'omitted', which needs no beta of its own.
     expect(w.bodies[2]?.thinking).toEqual({ type: 'adaptive', display: 'omitted', block_binding: DROP_BLOCK });
     expect(w.betas(2)).toContain(BINDING_BETA);
     expect(w.betas(2)).not.toContain(UPDATES_BETA);
@@ -199,8 +190,6 @@ describe('the binding on the wire (through the real adapter)', () => {
       expect(w.bodies[i]?.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
       expect(w.betas(i)).not.toContain(BINDING_BETA);
     }
-    // Haiku 5.5 takes the setting's config too (modelAcceptsAdaptiveThinking),
-    // with the control in it.
     expect(w.bodies[3]?.thinking).toEqual({ type: 'adaptive', display: 'summarized', block_binding: DROP_BLOCK });
     expect(w.betas(3)).toContain(BINDING_BETA);
   });
@@ -212,12 +201,10 @@ describe('the binding on the wire (through the real adapter)', () => {
     await offWire.stream('claude-haiku-5-5');
     expect(on.bodies).toHaveLength(1);
     expect(offWire.bodies).toHaveLength(1);
-    // Haiku 5.5 isn't among the models whose notes need 'updates', so 'omitted' stays.
     expect(on.bodies[0]?.thinking).toEqual({ type: 'adaptive', display: 'omitted', block_binding: DROP_BLOCK });
     expect(offWire.bodies[0]?.thinking).toEqual({ type: 'adaptive', display: 'omitted', block_binding: DROP_BLOCK });
     const summarized = wire(() => ({ enabled: true, budgetTokens: 0 }));
     await summarized.stream('claude-haiku-5-5');
-    // The setting's default display, 'summarized', now reaches it.
     expect(summarized.bodies[0]?.thinking).toEqual({ type: 'adaptive', display: 'summarized', block_binding: DROP_BLOCK });
   });
 
@@ -293,9 +280,7 @@ describe('the fold line and the recipe\'s formatter', () => {
     name: 'xml',
     agent: { systemPrompt, formatter: 'anthropic-xml', ...(prefillUserMessage ? { prefillUserMessage } : {}) },
   });
-  // claude-opus-6, which the record doesn't name, binds without the control:
-  // the binding models it names can't run under anthropic-xml at all, since
-  // membrane refuses their assistant prefill.
+  // Membrane refuses assistant prefill on the binding models the record names.
   const promptOf = (recipe: ReturnType<typeof validateRecipe>, model = 'claude-opus-6') =>
     buildFrameworkAgentConfig(recipe, 'a', model, { kind: 's' } as never).systemPrompt;
 
@@ -304,7 +289,6 @@ describe('the fold line and the recipe\'s formatter', () => {
     expect(promptOf(xml('', '<cmd>cat untitled.txt</cmd>'))).toBe('');
     expect(promptOf(xml('You are you.'))).toBe('You are you.');
     expect(systemPromptFor('You are you.', 'claude-opus-6', 'anthropic-xml')).toBe('You are you.');
-    // A copied line is taken off, not just left unadded.
     expect(systemPromptFor(`You are you.\n\n${FOLD_REASONING_LINE}`, 'claude-opus-6', 'anthropic-xml')).toBe('You are you.');
     expect(systemPromptFor(FOLD_REASONING_LINE, 'claude-opus-6', 'anthropic-xml')).toBe('');
   });
@@ -413,26 +397,19 @@ describe('subagents', () => {
       expect(older.systemPromptFoldLine).toBe('removed');
       const olderReceipt = describeSubagentLaunch(older);
       expect(olderReceipt).toContain("- System prompt: the parent's, with the host's paragraph on folds taken off.");
-      // The prompt differs from the parent's by the line alone, and the
-      // summary says it differs.
       expect(olderReceipt).toMatch(/Differs in [^.]*system prompt/);
       expect(olderReceipt).not.toMatch(/Same: [^.]*system prompt/);
-      // The parent's prompt passed back without the line is still the parent's.
       const passed = inner.resolveLaunch('fork', { name: 'h', task: 't', systemPrompt: 'parent' }, 'parent', 0);
       expect(passed.systemPromptSource).toBe('parent');
       expect(passed.systemPrompt).toBe(parentPrompt);
-      // Another prompt is an override, with the line as its model has it,
-      // and its receipt says the host added it.
       const other = inner.resolveLaunch('fork', { name: 'i', task: 't', systemPrompt: 'other' }, 'parent', 0);
       expect(other.systemPromptSource).toBe('override');
       expect(other.systemPrompt).toBe(`other\n\n${FOLD_REASONING_LINE}`);
       expect(other.systemPromptFoldLine).toBe('added');
       expect(describeSubagentLaunch(other)).toContain("- System prompt: overridden for this fork, with the host's paragraph on folds added.");
-      // So does a spawn's.
       const spawn = inner.resolveLaunch('spawn', { name: 's', systemPrompt: 'Look it up.', task: 't' }, 'parent', 0);
       expect(spawn.systemPromptFoldLine).toBe('added');
       expect(describeSubagentLaunch(spawn)).toContain("- System prompt: supplied by the caller for this spawn, with the host's paragraph on folds added.");
-      // A caller's prompt that already ends with the line is given as it is.
       const already = inner.resolveLaunch('spawn', { name: 't', systemPrompt: parentPrompt, task: 't' }, 'parent', 0);
       expect(already.systemPrompt).toBe(parentPrompt);
       expect(already.systemPromptFoldLine).toBeUndefined();
@@ -452,17 +429,14 @@ describe('subagents', () => {
       const spawn = inner.resolveLaunch('spawn', { name: 's', systemPrompt: 'Look it up.', task: 't' }, 'parent', 0);
       expect(spawn.systemPrompt).toBe('Look it up.');
       expect(spawn.systemPromptFoldLine).toBeUndefined();
-      // A copy of the line in a caller's prompt is taken off.
       const copied = inner.resolveLaunch('spawn', { name: 'c', systemPrompt: `Look it up.\n\n${FOLD_REASONING_LINE}`, task: 't' }, 'parent', 0);
       expect(copied.systemPrompt).toBe('Look it up.');
       expect(copied.systemPromptFoldLine).toBe('removed');
-      // The parent's prompt passed back is still the parent's.
       const passed = inner.resolveLaunch('fork', { name: 'g', task: 't', systemPrompt: '' }, 'parent', 0);
       expect(passed.systemPromptSource).toBe('parent');
     } finally {
       await framework.stop();
     }
-    // Under a native recipe the same fork gets the line.
     const plain = await harness('claude-opus-6', '', 'anthropic', 'native');
     try {
       const fork = plain.inner.resolveLaunch('fork', { name: 'f', task: 't' }, 'parent', 0);
@@ -480,8 +454,6 @@ describe('subagents', () => {
       expect(fork.systemPrompt).toBe(`parent\n\n${FOLD_REASONING_LINE}`);
       expect(fork.systemPromptFoldLine).toBe('added');
       expect(describeSubagentLaunch(fork)).toContain("- System prompt: the parent's, with the host's paragraph on folds added.");
-      // The parent's own prompt passed back, without the line, is still the
-      // parent's: both sides are compared as this fork would get them.
       const passed = inner.resolveLaunch('fork', { name: 'g', task: 't', model: 'claude-opus-5-5', systemPrompt: 'parent' }, 'parent', 0);
       expect(passed.systemPromptSource).toBe('parent');
       expect(passed.systemPromptFoldLine).toBe('added');

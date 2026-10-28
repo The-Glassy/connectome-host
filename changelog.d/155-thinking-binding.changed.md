@@ -16,6 +16,9 @@
     Sonnet 5.5. One-shot `complete()` calls get no control.
   - **The window:** those four get `physicalWindowTokens` on the Anthropic route, at the
     1,000,000 tokens the model limits table holds for each, under its id or a dated snapshot of it.
+    With binding and a window both set, agent-framework doesn't break a turn's stream at
+    `maxStreamTokens`, a recipe's or `/budget`'s: such an agent's turn runs on until its next
+    request would pass the window.
   - **The system prompt:** on a binding model it ends with one more paragraph: "When your context
     folds, the reasoning behind your earlier replies leaves it, though their words stay, so a reply
     of yours that shows no reasoning may still have had some." An empty prompt gets it as its whole
@@ -23,8 +26,8 @@
     mode, whose transcript carries none of a reply's reasoning into the next request, fold or none.
     On the binding models named above, such a recipe's agents can't run at all, since membrane
     refuses their assistant prefill.
-  - **Cache:** that paragraph changes the system text, so each such agent's cached prefix is written
-    again, once.
+  - **Cache:** that paragraph changes the system text, so each such agent that caches its prompt
+    writes its cached prefix again, once.
   - **Bedrock and the other routes:** an agent there on a binding model binds without the control
     and has no window, since nobody has tried the control or read a window there.
     `LoggingBedrockAdapter` adds no control, as before.
