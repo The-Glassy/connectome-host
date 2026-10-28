@@ -1329,7 +1329,8 @@ export class SubagentModule implements Module {
       },
       {
         name: 'adopt',
-        description: "Adopt an orphaned subagent (one whose spawner ended while it ran) that was offered to you — one from your own tree, or offered to you as the primary: you become its parent, its result comes to you, and results it already produced for the lost parent are delivered to you.",
+        description: "Adopt an orphaned subagent (one whose spawner ended while it ran) that was offered to you — one from your own tree, or offered to you as the primary: you become its parent, its result comes to you, and results it already produced for the lost parent are delivered to you. " +
+          "An orphan that has since ended isn't restarted: adopting it delivers what it left (list counts it as held) into your context, as messages under its name.",
         inputSchema: {
           type: 'object',
           properties: { name: { type: 'string', description: 'The orphaned subagent to adopt' } },
@@ -2899,7 +2900,7 @@ export class SubagentModule implements Module {
     if (!fw) return { success: false, isError: true, error: 'Nothing was adopted: the subagent module has no framework yet.' };
     if (!caller) return { success: false, isError: true, error: 'Nothing was adopted: an agent adopts, under its name.' };
     const { record, display: name } = this.lookUp(input.name);
-    if (!record || record.ended) return { success: false, isError: true, error: `Nothing was adopted: no subagent named '${input.name}' is running.` };
+    if (!record) return { success: false, isError: true, error: `Nothing was adopted: no subagent named '${input.name}' is known.` };
     if (!record.orphaned) return { success: false, isError: true, error: `Nothing was adopted: '${input.name}' has its parent (${record.relationships.spawnedBy ?? 'none'}); only an orphan is adopted.` };
     // Offered to the caller: the framework's candidates (the nearest live
     // ancestor of the former parent, then the primary), or anyone in whose
@@ -2912,6 +2913,32 @@ export class SubagentModule implements Module {
         success: false,
         isError: true,
         error: `Nothing was adopted: '${input.name}' was ${former}'s, and it is offered to ${offered} — an ancestor of its former parent, or the primary — and to the agents in whose tree it hung, not to you.`,
+      };
+    }
+    if (record.ended) {
+      const recipientGone = (to: string) => { const r = fw.getAgentRecord(to); return r === null || r.ended !== undefined; };
+      const left = fw.listHeldMail({ from: record.name }).filter((m) => recipientGone(m.to)).length;
+      if (left === 0) {
+        return {
+          success: false,
+          isError: true,
+          error: `Nothing was adopted: '${input.name}' has ended and left nothing undelivered; adopting a subagent that has ended only collects what it left, and doesn't restart it.`,
+        };
+      }
+      try {
+        fw.reparentAgent(record.name, caller, { by: caller });
+      } catch (err) {
+        return { success: false, isError: true, error: `Nothing was adopted: ${err instanceof Error ? err.message : String(err)}` };
+      }
+      return {
+        success: true,
+        data: {
+          adopted: input.name,
+          agent: record.name,
+          status: `ended: ${record.ended.reason}`,
+          collected: left,
+          note: `It has ended and isn't restarted. What it left, ${left} held item${left === 1 ? '' : 's'}, arrives in your context as messages under its name, '${record.name}', with a wake queued for you; it doesn't come back in this result.`,
+        },
       };
     }
     try {

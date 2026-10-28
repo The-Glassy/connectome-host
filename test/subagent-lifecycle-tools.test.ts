@@ -797,6 +797,60 @@ describe('what a run that ends without a result says, and to whom', () => {
     } finally { logged.mockRestore(); await h.cleanup(); }
   }, 30_000);
 
+  test("an orphan that finished before anyone adopted it is adopted for what it left: its held result reaches the adopter under its name, and it stays ended; a stranger is refused", async () => {
+    let adopterSaw = false;
+    const h = await harness({
+      streamChunkDelayMs: 20, streamChunkSize: 10,
+      responseGenerator: (r) => {
+        if (r.model === 'mock-slow') return 'the held answer ' + 'x'.repeat(400);
+        if (JSON.stringify(r).includes('the held answer')) adopterSaw = true;
+        return 'ok';
+      },
+    }, {}, [caller, bob]);
+    try {
+      const accepted = await h.callAs('caller', 'spawn', { name: 'held-2', systemPrompt: 'p', task: 'take your time', model: 'mock-slow' });
+      expect(accepted.success).toBe(true);
+      await h.until(() => h.recordOf('held-2') !== undefined && !h.recordOf('held-2')!.ended, 'the run is registered');
+      const run = h.recordOf('held-2')!.name;
+      h.framework.stopAgent('caller', { by: 'test' });
+      await h.until(() => heldFor(h, 'caller', "[Subagent 'held-2' returned]").length > 0, 'the result is held for the ended caller');
+      expect(h.framework.getAgentRecord(run)!.ended).toBeDefined();
+
+      const stranger = await h.callAs('bob', 'adopt', { name: run });
+      expect(stranger.success).toBe(false);
+      expect(stranger.error).toContain('not to you');
+      expect(heldFor(h, 'caller', "[Subagent 'held-2' returned]").length).toBe(1);
+
+      const adopted = await h.call('adopt', { name: run });
+      expect(adopted.success).toBe(true);
+      expect((adopted.data as { collected: number }).collected).toBe(1);
+      const arrived = () => h.parentMessages().find((m) => m.content.some((b) => b.text?.includes("[Subagent 'held-2' returned")));
+      await h.until(() => arrived() !== undefined, 'the held result reaches the adopter');
+      expect(arrived()!.participant).toBe(run);
+      await h.until(() => adopterSaw, 'the adopter is woken for it');
+      const after = h.framework.getAgentRecord(run)!;
+      expect(after.ended?.reason).toBe('completed');
+      expect(after.incarnation).toBe(1);
+      expect(heldFor(h, 'caller', "[Subagent 'held-2' returned]")).toEqual([]);
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
+  test('an orphan that ended and left nothing undelivered is not adopted, and the refusal says so', async () => {
+    const h = await harness();
+    try {
+      const internals = h.framework as unknown as { registry: { register(spec: ReturnType<typeof workerSpec>): unknown } };
+      internals.registry.register(workerSpec('mid', { spawnedBy: 'parent', metadata: { subagent: 'mid', task: 'middle' } }));
+      internals.registry.register(workerSpec('spawn-empty-1', { spawnedBy: 'mid', metadata: { subagent: 'empty', task: 'nothing to say' } }));
+      h.framework.stopAgent('mid', { by: 'test' });
+      await h.until(() => h.framework.getAgentRecord('spawn-empty-1')?.orphaned !== undefined, 'it is orphaned');
+      h.framework.stopAgent('spawn-empty-1', { by: 'test' });
+      const refused = await h.call('adopt', { name: 'empty' });
+      expect(refused.success).toBe(false);
+      expect(refused.error).toContain("'empty' has ended and left nothing undelivered");
+      expect(h.framework.getAgentRecord('spawn-empty-1')!.relationships.spawnedBy).toBe('mid');
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
   test("a resumed run's failure goes where its record's route goes, as its result would, not to whoever resumed it", async () => {
     const h = await harness({ responseGenerator: (r) => { if (r.model === 'mock-fail') throw new Error('the provider is unavailable'); return 'ok'; } }, {}, [bob]);
     try {
