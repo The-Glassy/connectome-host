@@ -46,6 +46,7 @@ const living = setInterval(() => {
   if (!live || !existsSync(join(process.env.DATA_DIR!, 'live'))) return;
   clearInterval(living);
   live({ type: 'inference:started', agentName: 'fixture', timestamp: 1_700_000_000_010 });
+  writeFileSync(join(process.env.DATA_DIR!, 'live-emitted'), '');
 }, 20);
 
 const switching = setInterval(() => {

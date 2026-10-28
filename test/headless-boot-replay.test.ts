@@ -96,7 +96,8 @@ test('the first client hears the boot after ready, marked and in order; the next
     expect(liveTrace.timestamp).toBe(1_700_000_000_010);
 
     const second = await open();
-    await Bun.sleep(50);
+    second.send({ type: 'describe', corrId: 'fence' });
+    await until(() => second.events.some(event => event.type === 'snapshot' && event.corrId === 'fence'), 'the second client\'s snapshot');
     expect(second.events.some(event => event.replay === true)).toBe(false);
     expect(second.events[0]).toMatchObject({ type: 'lifecycle', phase: 'ready' });
   });
@@ -111,10 +112,16 @@ test('after a session switch, what the new framework replays from its create() r
     const restored = client.events.find(event => event.agentName === 'fixture.reader-9')!;
     expect(restored.replay).toBeUndefined();
     expect(restored.timestamp).toBe(1_700_000_000_020);
+    writeFileSync(join(dir, 'live'), '');
     client.send({ type: 'describe', corrId: 'd2' });
     await until(() => client.events.some(event => event.type === 'snapshot'), 'snapshot');
     const snapshot = client.events.find(event => event.type === 'snapshot') as { tree: { nodes: Array<Record<string, unknown>> } };
     expect(snapshot.tree.nodes.find(node => node.name === 'fixture.reader-9')).toMatchObject({ status: 'cancelled' });
+    expect(client.events.filter(event => event.agentName === 'fixture.reader-9')).toHaveLength(1);
+    await until(() => existsSync(join(dir, 'live-emitted')), 'the replaced framework\'s trace');
+    client.send({ type: 'describe', corrId: 'd3' });
+    await until(() => client.events.some(event => event.type === 'snapshot' && event.corrId === 'd3'), 'a later snapshot');
+    expect(client.events.some(event => event.type === 'inference:started')).toBe(false);
   });
 });
 
