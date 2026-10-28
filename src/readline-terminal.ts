@@ -7,6 +7,7 @@ export const READLINE_LOG = 'readline-error.log';
 
 export interface ReadlineTerminal {
   logPath: string;
+  logging(): boolean;
   say(line: string): void;
   end(): void;
 }
@@ -43,19 +44,26 @@ export function openReadlineTerminal(dataDir: string, prompt: ShownPrompt): Read
     say(`[host] ${logPath} can't be written (${describe(error)}), so the host's diagnostics print here instead`);
   }
 
-  function toLog(chunk: string | Uint8Array): void {
-    if (fd !== null) {
-      try {
-        if (typeof chunk === 'string') writeSync(fd, chunk);
-        else writeSync(fd, chunk);
-        return;
-      } catch (error) {
-        try { closeSync(fd); } catch {}
-        fd = null;
-        logFailed(error);
+  function append(chunk: string | Uint8Array): boolean {
+    if (fd === null) return false;
+    const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+    try {
+      for (let at = 0; at < bytes.length;) {
+        const wrote = writeSync(fd, bytes, at);
+        if (wrote <= 0) throw new Error('the log took none of a write');
+        at += wrote;
       }
+      return true;
+    } catch (error) {
+      try { closeSync(fd); } catch {}
+      fd = null;
+      logFailed(error);
+      return false;
     }
-    stderrWrite.call(process.stderr, chunk);
+  }
+
+  function toLog(chunk: string | Uint8Array): void {
+    if (!append(chunk)) stderrWrite.call(process.stderr, chunk);
   }
 
   try {
@@ -63,7 +71,7 @@ export function openReadlineTerminal(dataDir: string, prompt: ShownPrompt): Read
   } catch (error) {
     logFailed(error);
   }
-  if (fd !== null) toLog(`\n${sessionMarker(new Date())}\n`);
+  append(`\n${sessionMarker(new Date())}\n`);
 
   process.stdout.write = function (this: unknown, chunk: string | Uint8Array, ...rest: unknown[]): boolean {
     if (chunk.length > 0) {
@@ -104,5 +112,5 @@ export function openReadlineTerminal(dataDir: string, prompt: ShownPrompt): Read
     }
   }
 
-  return { logPath, say, end };
+  return { logPath, logging: () => fd !== null, say, end };
 }

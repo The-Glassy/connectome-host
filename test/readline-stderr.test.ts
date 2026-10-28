@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,18 +30,15 @@ export function register(api, config) {
     setFramework(framework) {
       let turns = 0;
       let tokens = 0;
-      let pushed = false;
+      if (config.background) {
+        process.on('SIGUSR2', () => framework.pushEvent({
+          type: 'external-message', source: 'cli', content: 'again', metadata: {}, triggerInference: true,
+        }));
+      }
       framework.onTrace((event) => {
         if (event.type === 'inference:started') {
           turns++;
           tokens = 0;
-          return;
-        }
-        if (config.background && !pushed && (event.type === 'inference:completed' || event.type === 'inference:turn_ended')) {
-          pushed = true;
-          setTimeout(() => framework.pushEvent({
-            type: 'external-message', source: 'cli', content: 'again', metadata: {}, triggerInference: true,
-          }), 300);
           return;
         }
         if (event.type !== 'inference:tokens' || turns !== (config.background ? 2 : 1)) return;
@@ -105,6 +102,7 @@ interface Session {
   screen(): string;
   lines(): string[];
   type(text: string): void;
+  signal(name: NodeJS.Signals): void;
   exited: Promise<number>;
   close(): Promise<void>;
 }
@@ -138,6 +136,7 @@ function startReadline(options: { crash?: boolean; background?: boolean; env?: R
     screen: () => screen,
     lines: () => rendered(screen),
     type: (text) => { terminal.write(text); },
+    signal: (name) => { host.kill(name); },
     exited: host.exited,
     async close() {
       if (host.exitCode === null && host.signalCode === null) host.kill('SIGKILL');
@@ -177,6 +176,7 @@ test('in readline mode, what libraries write to stderr goes to readline-error.lo
     expect(shown).not.toContain('[probe-direct]');
     expect(holdsInOrder(session.lines(), REPLY_WITH_ALERTS)).toBe(true);
     expect(session.lines()).toContain(`Error log: ${join(session.dir, 'readline-error.log')}`);
+    expect(statSync(join(session.dir, 'readline-error.log')).mode & 0o777).toBe(0o600);
     const log = readFileSync(join(session.dir, 'readline-error.log'), 'utf-8');
     expect(log).toMatch(/--- session \S+ ---\n/);
     expect(log).toContain('[probe-console] a library line mid-reply\n');
@@ -235,6 +235,7 @@ test('in readline mode, a reply streaming while the prompt waits keeps its text 
   const session = startReadline({ background: true });
   try {
     await converse(session);
+    session.signal('SIGUSR2');
     await until(() => holdsInOrder(session.lines(), REPLY_WITH_ALERTS), 30_000, 'the second reply with its alerts', session.screen);
     session.type('/quit\r');
     expect(await session.exited).toBe(0);
@@ -243,16 +244,28 @@ test('in readline mode, a reply streaming while the prompt waits keeps its text 
   }
 }, 120_000);
 
-test('in readline mode, when readline-error.log can\'t be written, the session goes on and says so, and library lines show as before', async () => {
-  const session = startReadline({ prepare: (dir) => { mkdirSync(join(dir, 'readline-error.log')); } });
-  try {
-    await converse(session);
-    expect(session.lines().some((line) => line.startsWith(`[host] ${join(session.dir, 'readline-error.log')} can't be written (`))).toBe(true);
-    expect(session.lines().join('\n')).toContain('[probe-console] a library line mid-reply');
-    expect(session.lines()).toContain(ALERT_LINE);
-    session.type('/quit\r');
-    expect(await session.exited).toBe(0);
-  } finally {
-    await session.close();
-  }
-}, 120_000);
+const UNWRITABLE: Array<{ how: string; prepare: (dir: string) => void; on?: NodeJS.Platform }> = [
+  { how: 'can\'t be opened', prepare: (dir) => { mkdirSync(join(dir, 'readline-error.log')); } },
+  { how: 'opens but takes no write', prepare: (dir) => { symlinkSync('/dev/full', join(dir, 'readline-error.log')); }, on: 'linux' },
+];
+
+for (const { how, prepare, on } of UNWRITABLE) {
+  test.skipIf(on !== undefined && process.platform !== on)(`in readline mode, when readline-error.log ${how}, the session goes on and says so, and library lines show as before`, async () => {
+    const session = startReadline({ prepare });
+    try {
+      await converse(session);
+      expect(session.lines().some((line) => line.startsWith(`[host] ${join(session.dir, 'readline-error.log')} can't be written (`))).toBe(true);
+      expect(session.lines().some((line) => line.startsWith('Error log:'))).toBe(false);
+      expect(session.lines().some((line) => line.startsWith('--- session'))).toBe(false);
+      const shown = session.lines().join('\n');
+      expect(shown).toContain('[probe-console] a library line mid-reply');
+      expect(shown).toContain('[probe-warn] a library warning mid-reply');
+      expect(shown).toContain('[probe-direct] a library write mid-reply');
+      expect(session.lines()).toContain(ALERT_LINE);
+      session.type('/quit\r');
+      expect(await session.exited).toBe(0);
+    } finally {
+      await session.close();
+    }
+  }, 120_000);
+}

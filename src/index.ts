@@ -796,7 +796,7 @@ async function runPiped(app: AppContext) {
     let restarting = false;
     hostUpdate.attachStop({ supervised: false, stop: () => { restarting = true; setTimeout(() => { rl.close(); }, 0); } });
     console.log('connectome-host (readline mode). Type /help for commands.');
-    terminal.say(`Error log: ${terminal.logPath}`);
+    if (terminal.logging()) terminal.say(`Error log: ${terminal.logPath}`);
     const credentials = app.credentials?.snapshot();
     if (credentials && credentials.kind !== 'ok') {
       showAlert({ kind: credentials.kind, agent: app.agentName, message: credentials.message + credentialActionHint(credentials) });

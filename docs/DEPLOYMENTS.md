@@ -124,20 +124,20 @@ the working directory):
   [`webui-live-surgery.md`](./webui-live-surgery.md)) and
   `mcpl-stderr/<server>.log` (each MCPL server's stderr plus connect/close/error
   lines; rolls to `.1` at 10 MB).
-- Readline mode (`--no-tui` with stdin on a terminal): `data/readline-error.log`.
-  From readline mode's banner until the host has stopped, it takes what the
-  process writes through `process.stderr.write`, `console.error` and
-  `console.warn`: library diagnostics, `[routeSpeech]`, `[routing]` and
-  `[inference-failed]` among them. It is created readable by its owner
-  alone, and each line is written to it as it comes. What the person at the
-  terminal needs still prints there, each on a line of its own: a turn's
-  failure and how it ended, a slash command's failure, ops alerts (as the
-  TUI words them), the credential state at start when it isn't ok, an
+- Readline mode (`--no-tui` with stdin on a terminal):
+  `data/readline-error.log`. From readline mode's banner until the host has
+  stopped, it takes what the process writes through `process.stderr.write`,
+  `console.error` and `console.warn`: library diagnostics, `[routeSpeech]`,
+  `[routing]` and `[inference-failed]` among them. It is created readable by
+  its owner alone, and each line is written to it as it comes. What the person
+  at the terminal needs still prints there, each on a line of its own: a
+  turn's failure and how it ended, a slash command's failure, ops alerts (as
+  the TUI words them), the credential state at start when it isn't ok, an
   update notice, a self-restart's failure to close the Web UI's server, and
-  the log's path at start. A crash prints on the terminal too. If the log
-  can't be opened or written, the host says so, and from then on the lines
-  it would have taken print on the terminal as before. Batch mode keeps
-  stderr as it is.
+  the log's path at start when it opened. A crash prints on the terminal too.
+  If the log can't be opened or written, the host says so, and from then on
+  the lines it would have taken print on the terminal as before. Batch mode
+  keeps stderr as it is.
 - TUI mode: `data/tui-error.log`. Fleet children: `startup.log` in the
   child's data dir (default `./data/<child>/` under the parent's working
   directory) — the child's stdio, opened by the parent at spawn.
