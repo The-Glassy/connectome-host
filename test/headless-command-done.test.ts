@@ -13,6 +13,11 @@ async function until(check: () => boolean, label: string): Promise<void> {
   }
 }
 
+function linesWritten(path: string) {
+  if (!existsSync(path)) return [];
+  return readFileSync(path, 'utf8').split('\n').slice(0, -1).map((line) => JSON.parse(line));
+}
+
 async function withChild(
   body: (send: (command: object) => void, events: Array<Record<string, unknown>>, dir: string, closed: () => boolean) => Promise<void>,
   env: Record<string, string> = {},
@@ -155,9 +160,7 @@ test('a command without a corrId gets exactly the lines it got before, and no co
 
 test('a text from a console reaches the agent as a console line, with no IPC note; one without reaches it with the note', async () => {
   await withChild(async (send, _events, dir) => {
-    const pushed = () => existsSync(join(dir, 'pushed.jsonl'))
-      ? readFileSync(join(dir, 'pushed.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line))
-      : [];
+    const pushed = () => linesWritten(join(dir, 'pushed.jsonl'));
     send({ type: 'text', content: 'from a console', from: 'console' });
     await until(() => pushed().length === 1, 'the console line');
     send({ type: 'text', content: 'from a fleet parent' });
@@ -167,4 +170,19 @@ test('a text from a console reaches the agent as a console line, with no IPC not
     expect(parent[0]).toEqual({ type: 'text', text: 'from a fleet parent' });
     expect(parent[1].text).toContain('A plain-prose reply will NOT reach the sender');
   });
+});
+
+test('a line the fixture is still writing isn\'t read: a file with no line ended yet reads as none, and one with a line after the last ended one reads as those ended', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'headless-command-done-lines-'));
+  try {
+    const path = join(dir, 'pushed.jsonl');
+    writeFileSync(path, '');
+    expect(linesWritten(path)).toEqual([]);
+    writeFileSync(path, '[{"type":"te');
+    expect(linesWritten(path)).toEqual([]);
+    writeFileSync(path, '[{"type":"text","text":"whole"}]\n[{"type":"te');
+    expect(linesWritten(path)).toEqual([[{ type: 'text', text: 'whole' }]]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
