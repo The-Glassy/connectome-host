@@ -174,7 +174,44 @@ describe('subagents are Dendrite agents', () => {
     } finally { await h.cleanup(); }
   }, 30_000);
 
-  test("under orientation 'none' a fork is handed its task alone — no launch description, no 'two parallel streams of you'", async () => {
+  test('a resumed run is created with the thinking binding, window and summary voice its launch was created with', async () => {
+    const cases = [
+      { provider: 'anthropic', model: undefined, binding: { binds: true, dropBlock: true } },
+      { provider: 'bedrock', model: undefined, binding: { binds: true, dropBlock: false } },
+      { provider: 'anthropic', model: 'claude-opus-4-8', binding: undefined },
+    ] as const;
+    for (const { provider, model, binding } of cases) {
+      let calls = 0;
+      const h = await harness(
+        { responseGenerator: () => { calls++; if (calls === 1) throw new Error('the provider is unavailable'); return 'resumed and finished'; } },
+        { provider, defaultModel: 'claude-opus-5-5' },
+      );
+      try {
+        const configs: Array<Record<string, unknown>> = [];
+        const fw = h.framework as unknown as Record<string, (...args: unknown[]) => unknown>;
+        for (const [method, at] of [['createEphemeralAgent', 0], ['resumeAgent', 1]] as const) {
+          const original = fw[method]!.bind(h.framework);
+          fw[method] = (...args: unknown[]) => { configs.push(args[at] as Record<string, unknown>); return original(...args); };
+        }
+        const first = await h.call('spawn', { name: 'bound-1', systemPrompt: 'p', task: 'first pass', sync: true, ...(model ? { model } : {}) });
+        expect(first.success).toBe(false);
+        expect((await h.call('resume', { name: 'bound-1' })).success).toBe(true);
+        await h.until(() => (h.recordOf('bound-1')?.incarnation ?? 0) === 2 && h.recordOf('bound-1')!.ended !== undefined, 'the second incarnation ends');
+        expect(configs).toHaveLength(2);
+        const view = (config: Record<string, unknown>) => ({
+          thinkingBinding: config.thinkingBinding,
+          physicalWindowTokens: config.physicalWindowTokens,
+          summaryParticipant: (config.strategy as { config?: Record<string, unknown> }).config?.summaryParticipant,
+        });
+        const [launched, resumed] = configs as [Record<string, unknown>, Record<string, unknown>];
+        expect(launched.thinkingBinding).toEqual(binding);
+        expect(view(launched).summaryParticipant).toBe(h.recordOf('bound-1')!.name);
+        expect(view(resumed)).toEqual(view(launched));
+      } finally { await h.cleanup(); }
+    }
+  }, 30_000);
+
+  test("under orientation 'none' a fork is handed its task after one line saying it is the forked stream — no launch description, no 'two parallel streams of you'", async () => {
     const h = await harness({ responseGenerator: () => 'ok' }, { orientation: 'none' });
     try {
       const cm = h.framework.getAgent('parent')!.getContextManager();
