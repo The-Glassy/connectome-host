@@ -5,5 +5,3 @@
   which it leaves as it was. While it stands, `/auth status` says so and
   `/auth recheck` writes the credential to the file again; the next write
   that succeeds clears it. The notices module tells it in status channels.
-  The `[anthropic-credentials] credential rotated in memory but not written
-  to …` line on stderr is gone.
