@@ -428,6 +428,52 @@ describe('the lifecycle tools keep the module\'s rules', () => {
   }, 30_000);
 });
 
+describe('a resume that ends before its run starts', () => {
+  type Internals = {
+    registry: { register(spec: ReturnType<typeof workerSpec>): unknown; end(name: string, reason: string, by?: string): unknown };
+  };
+  const failedRecord = (h: Awaited<ReturnType<typeof harness>>, agent: string, subagent: string) => {
+    const internals = h.framework as unknown as Internals;
+    internals.registry.register(workerSpec(agent, { spawnedBy: 'parent', metadata: { subagent, task: 'again', launch: { kind: 'spawn', model: 'mock', systemPrompt: 'p', maxTokens: 64, allowedTools: 'all', strategy: {} } } }));
+    internals.registry.end(agent, 'failed', 'test');
+  };
+  const said = (h: Awaited<ReturnType<typeof harness>>, text: string) => h.parentMessages().some((m) => m.content.some((b) => b.text?.includes(text)));
+
+  test('a resume stopped while it waits for a slot ends as a stop, not a failure', async () => {
+    const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, responseGenerator: (r) => (r.model === 'mock-slow' ? 'x'.repeat(1_200) : 'ok') }, { maxConcurrent: 1 });
+    try {
+      const busy = await h.call('spawn', { name: 'busy-1', systemPrompt: 'p', task: 'take your time', model: 'mock-slow' });
+      expect(busy.success).toBe(true);
+      await h.until(() => h.recordOf('busy-1') !== undefined && !h.recordOf('busy-1')!.ended, 'the slot is taken');
+      failedRecord(h, 'spawn-queued-1', 'queued-1');
+      const resumed = await h.call('resume', { name: 'queued-1' });
+      expect(resumed.success).toBe(true);
+      await h.until(() => h.subagent.getConcurrencyStatus().queued === 1, 'the resume waits for the slot');
+      const stopped = await h.call('stop', { name: 'queued-1', reason: 'not now' });
+      expect(stopped.success).toBe(true);
+      await h.until(() => said(h, "[Subagent 'queued-1'"), "the resume's end reaches the parent");
+      expect(said(h, "[Subagent 'queued-1' returned]")).toBe(true);
+      expect(said(h, "[Subagent 'queued-1' failed]")).toBe(false);
+      expect(h.subagent.getConcurrencyStatus().queued).toBe(0);
+      await h.call('stop', { name: 'busy-1' });
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
+  test('a resume whose context fails to reopen is reported failed and leaves no run listed as running', async () => {
+    const h = await harness();
+    try {
+      failedRecord(h, 'spawn-reopen-1', 'reopen-1');
+      h.framework.resumeAgent = (async () => { throw new Error("the store can't reopen its context"); }) as typeof h.framework.resumeAgent;
+      const resumed = await h.call('resume', { name: 'reopen-1' });
+      expect(resumed.success).toBe(true);
+      await h.until(() => said(h, "[Subagent 'reopen-1' failed]"), 'the failure reaches the parent');
+      const entries = (h.subagent as unknown as { activeSubagents: Map<string, { name: string; status: string }> }).activeSubagents;
+      expect([...entries.values()].filter((e) => e.name === 'reopen-1' && e.status === 'running')).toEqual([]);
+      expect(h.subagent.getConcurrencyStatus().active).toBe(0);
+    } finally { await h.cleanup(); }
+  }, 30_000);
+});
+
 describe("the host's stop and a live run's record", () => {
   test("a run the host's stop cuts off keeps its record live for the next boot: the module's stop, which #454's loop runs for it, writes nothing", async () => {
     const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, defaultResponse: 'x'.repeat(1_200) });

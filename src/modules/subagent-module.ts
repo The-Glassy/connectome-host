@@ -2948,6 +2948,7 @@ export class SubagentModule implements Module {
       acquired = await this.acquireSlot(launch.kind, undefined, cancel.promise);
     } catch (err) {
       cancel.dispose();
+      if (err instanceof SubagentTerminated) return this.endQueued(name, err);
       throw this.failedRun(name, launch.kind, err, run);
     }
     const { waitedMs, slot } = acquired;
@@ -2957,10 +2958,21 @@ export class SubagentModule implements Module {
       this.activeSubagents.set(name, entry);
       this.slotOf.set(entry, slot);
       this.persistState();
-      const created = await Promise.race([
-        framework.resumeAgent(record.name, this.resumedAgentConfig(launch, record.name)),
-        cancel.promise,
-      ]);
+      let resuming: ReturnType<AgentFramework['resumeAgent']> | undefined;
+      let created: Awaited<ReturnType<AgentFramework['resumeAgent']>>;
+      try {
+        resuming = framework.resumeAgent(record.name, this.resumedAgentConfig(launch, record.name));
+        created = await Promise.race([resuming, cancel.promise]);
+      } catch (err) {
+        if (err instanceof SubagentTerminated) {
+          if (resuming) giveBackWhenCreated(resuming, name);
+          return this.endTerminated(name, entry, err, waitedMs, run);
+        }
+        entry.status = 'failed';
+        entry.completedAt = Date.now();
+        entry.statusMessage = err instanceof Error ? err.message : String(err);
+        throw this.failedRun(name, launch.kind, err, run);
+      }
       const { agent, contextManager, cleanup } = created;
       run.agentName = record.name;
       this.agentDepths.set(record.name, (record.metadata as { depth?: number }).depth ?? 1);
@@ -2998,6 +3010,7 @@ export class SubagentModule implements Module {
     } finally {
       cancel.dispose();
       this.releaseSlot(slot);
+      this.forgetAttempts(name);
       this.persistState();
     }
   }
