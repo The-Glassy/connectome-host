@@ -3391,10 +3391,11 @@ export class SubagentModule implements Module {
         let created: Awaited<ReturnType<AgentFramework['createEphemeralAgent']>>;
         // The fork is a Dendrite task-fork on the registry: its record names
         // its parent, where its result goes (the awaiting call for a sync
-        // run, a message for an async one, so a caller that has ended gets
-        // it as held mail) and, while it runs under that parent, that it
-        // inherited the parent's context as a copy — which this module makes below, as #213 shaped it: cut at
-        // the fork call, sibling fork calls removed. A shared branch would
+        // run, a message for an async one; a caller that has ended gets
+        // either as held mail) and, while it runs under that parent, that it
+        // inherited the parent's context as a copy — which this module makes
+        // below, as #213 shaped it: cut at the fork call, sibling fork calls
+        // removed. A shared branch would
         // need the fork to run the parent's strategy class; a subagent runs
         // its own, so the copy stays, and `deriveAgent` is for later.
         const edges = this.attemptEdges(run, parentAgent?.name, input.sync);

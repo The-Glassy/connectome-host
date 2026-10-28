@@ -9,10 +9,12 @@
   always made. (Deriving the fork's context through `deriveAgent` is the
   next step, not this one.) A spawn is a registered worker. Both records
   name who spawned the subagent and where its result goes, and carry the
-  launch (`metadata`). An async result returns by that route — attributed
-  mail under the subagent's own name, held for a caller that has ended until
-  it is adopted, never lost — where before it was a line in the primary's
-  context whatever became of the caller; a failure now follows the same path,
+  launch (`metadata`). A result returns by that route: to the awaiting call
+  for a sync run, otherwise as attributed mail under the subagent's own
+  name, and once the caller has ended, a sync run's as well as an async
+  one's is held as mail for that caller until it is adopted, never lost.
+  Before, an async result was a line in the primary's context whatever
+  became of the caller. A failure now follows the same path,
   except one whose route is the live primary, which is still told to it as a
   line in its context. A launch whose caller ended before it registered, as
   one waiting for a slot or a retry can, registers under the caller's
@@ -48,4 +50,5 @@
   held results never move to a stranger; `adopt` takes the framework name
   the offer gives as well as the display name. A resume says where the
   result will go when the record's route is to someone else who is still
-  running (a resume keeps the route).
+  running: a resume keeps a route whose recipient is still running, and
+  without one the result goes to the agent that resumed it.
