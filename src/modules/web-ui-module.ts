@@ -382,6 +382,8 @@ export class WebUiModule implements Module {
 
   private readonly staticRoot: string;
 
+  private observerPollMs: number | undefined;
+
   constructor(config: WebUiModuleConfig = {}) {
     this.config = {
       ...config,
@@ -413,7 +415,7 @@ export class WebUiModule implements Module {
       allowedOrigins: this.config.allowedOrigins ?? defaultAllowedOrigins(port),
       clients: new Map(),
       nextClientId: 1,
-      observers: this.config.observersPath ? new ObserverRegistry(this.config.observersPath) : null,
+      observers: this.config.observersPath ? new ObserverRegistry(this.config.observersPath, this.observerPollMs) : null,
       observerSessions: new ObserverSessions(),
       latestUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       parentUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

@@ -1026,6 +1026,7 @@ describe('WebUiModule observer flow (e2e)', () => {
       staticDir: staticRoot,
       observersPath,
     });
+    (mod as unknown as { observerPollMs: number }).observerPollMs = 50;
     await mod.start({} as ModuleContext);
     port = __getSharedServerPortForTests()!;
   });
