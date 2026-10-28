@@ -2465,78 +2465,54 @@ export class SubagentModule implements Module {
   private deliverAsyncResult(name: string, result: SubagentResult, launcher: string | undefined, launcherShown = launcher): void {
     this.asyncHandles.delete(name);
     if (!this.ctx) return;
-
-    // A run with a registry record and a message route returns through it:
-    // attributed mail under the subagent's own name, held for a caller that
-    // has ended until it is adopted, never lost (Dendrite). A run without
-    // one (no parent) is written to its launcher's window (addForLauncher).
-    const parentAgentName = launcher ?? UNNAMED_LAUNCHER;
-    const fw = this.framework;
-    if (result.frameworkAgentName && fw) {
-      const record: AgentRecord | null = fw.getAgentRecord(result.frameworkAgentName);
-      const content = [{ type: 'text' as const, text: `[Subagent '${name}' returned]\n\n${result.summary}` }];
-      try {
-        if (record?.relationships.resultTo?.as === 'message') {
-          const delivered = fw.deliverAgentResult(result.frameworkAgentName, content);
-          if (delivered.delivered) {
-            this.ctx.pushEvent({ type: 'inference-request', agentName: delivered.to, reason: `subagent-completed:${name}`, source: 'subagent' });
-          }
-          return;
-        }
-        if (record && fw.getAgentRecord(parentAgentName)) {
-          // A run whose route was the awaiting call, with no call awaiting
-          // it now (a sync run moved to the background; a resumed run): its
-          // words go to the caller as a message under the subagent's own
-          // name, attributed, rather than as an unmarked line.
-          fw.sendAgentMessage(result.frameworkAgentName, parentAgentName, content, { wake: true });
-          return;
-        }
-      } catch (err) {
-        console.error(`[subagent] ${name}'s result by its route: ${err instanceof Error ? err.message : String(err)}; delivering to ${parentAgentName} directly`);
-      }
-    }
-    const wake = this.addForLauncher(launcher, launcherShown, name, 'returned', result.summary);
-    if (wake === null) return;
-    this.ctx.pushEvent({
-      type: 'inference-request',
-      agentName: wake,
-      reason: `subagent-completed:${name}`,
-      source: 'subagent',
-    });
+    this.deliverOutcome(name, 'returned', result.summary, result.frameworkAgentName, launcher, launcherShown);
   }
 
   private deliverAsyncError(name: string, err: unknown, launcher: string | undefined, launcherShown = launcher): void {
     this.asyncHandles.delete(name);
     if (!this.ctx) return;
-
     const message = err instanceof Error ? err.message : String(err);
-    // A failure follows the same path as a success: to a caller that is a
-    // subagent, or one that has ended, as attributed mail from the run's own
-    // agent (held for an ended caller until it is adopted), not a line in
-    // the primary's context. Only the primary's own, live, is told directly
-    // — or a run that never had an agent to speak as.
+    this.deliverOutcome(name, 'failed', `Error: ${message}`, err instanceof RunFailed ? err.frameworkAgentName : undefined, launcher, launcherShown);
+  }
+
+  private deliverOutcome(
+    name: string,
+    outcome: 'returned' | 'failed',
+    body: string,
+    from: string | undefined,
+    launcher: string | undefined,
+    launcherShown: string | undefined,
+  ): void {
+    const ctx = this.ctx!;
+    const reason = `subagent-${outcome === 'returned' ? 'completed' : 'failed'}:${name}`;
     const parentAgentName = launcher ?? UNNAMED_LAUNCHER;
     const fw = this.framework;
-    const callerRecord = fw?.getAgentRecord(parentAgentName) ?? null;
-    if (fw && callerRecord && (parentAgentName !== this.config.parentAgentName || callerRecord.ended)) {
-      const from = err instanceof RunFailed && err.frameworkAgentName !== undefined && fw.getAgentRecord(err.frameworkAgentName) ? err.frameworkAgentName : undefined;
-      if (from) {
-        try {
-          fw.sendAgentMessage(from, parentAgentName, [{ type: 'text', text: `[Subagent '${name}' failed]\n\nError: ${message}` }], { wake: true });
+    const record: AgentRecord | null = from !== undefined && fw ? fw.getAgentRecord(from) : null;
+    const route = record?.relationships.resultTo;
+    const to = route?.to ?? parentAgentName;
+    const toRecord: AgentRecord | null = fw ? fw.getAgentRecord(to) : null;
+    const primaryLive = to === this.config.parentAgentName && toRecord !== null && toRecord.ended === undefined;
+    if (fw && record && !(outcome === 'failed' && primaryLive)) {
+      const content = [{ type: 'text' as const, text: `[Subagent '${name}' ${outcome}]\n\n${body}` }];
+      try {
+        if (route?.as === 'message') {
+          const delivered = fw.deliverAgentResult(record.name, content);
+          if (delivered.delivered) ctx.pushEvent({ type: 'inference-request', agentName: delivered.to, reason, source: 'subagent' });
           return;
-        } catch (routeErr) {
-          console.error(`[subagent] ${name}'s failure by its route: ${routeErr instanceof Error ? routeErr.message : String(routeErr)}; telling ${parentAgentName} directly`);
         }
+        if (toRecord) {
+          fw.sendAgentMessage(record.name, to, content, { wake: true });
+          return;
+        }
+      } catch (err) {
+        console.error(`[subagent] ${name}'s ${outcome === 'returned' ? 'result' : 'failure'} by its route: ${err instanceof Error ? err.message : String(err)}; telling ${to} directly`);
       }
     }
-    const wake = this.addForLauncher(launcher, launcherShown, name, 'failed', `Error: ${message}`);
+    const wake = to === parentAgentName
+      ? this.addForLauncher(launcher, launcherShown, name, outcome, body)
+      : this.addForLauncher(to, this.shownName(to), name, outcome, body);
     if (wake === null) return;
-    this.ctx.pushEvent({
-      type: 'inference-request',
-      agentName: wake,
-      reason: `subagent-failed:${name}`,
-      source: 'subagent',
-    });
+    ctx.pushEvent({ type: 'inference-request', agentName: wake, reason, source: 'subagent' });
   }
 
   private addForLauncher(launcher: string | undefined, launcherShown: string | undefined, name: string, outcome: 'returned' | 'failed', body: string): string | null {

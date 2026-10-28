@@ -453,6 +453,7 @@ describe("the host's stop and a live run's record", () => {
 
 describe('what a run that ends without a result says, and to whom', () => {
   const caller = { name: 'caller', model: 'mock', systemPrompt: 'caller prompt', maxTokens: 256 };
+  const bob = { name: 'bob', model: 'mock', systemPrompt: 'bob prompt', maxTokens: 256 };
   const heldFor = (h: Awaited<ReturnType<typeof harness>>, to: string, said: string) =>
     h.framework.listHeldMail({ to }).filter((m) => JSON.stringify(m.content).includes(said));
 
@@ -490,6 +491,41 @@ describe('what a run that ends without a result says, and to whom', () => {
       expect(mail!.from.agent).toBe(run.name);
       expect(JSON.stringify(mail!.content)).toContain('Stopped');
       expect(h.parentMessages().some((m) => m.content.some((b) => b.text?.includes("[Subagent 'stopped-1'")))).toBe(false);
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
+  test("a resumed run's failure goes where its record's route goes, as its result would, not to whoever resumed it", async () => {
+    const h = await harness({ responseGenerator: (r) => { if (r.model === 'mock-fail') throw new Error('the provider is unavailable'); return 'ok'; } }, {}, [bob]);
+    try {
+      const internals = h.framework as unknown as { registry: { register(spec: ReturnType<typeof workerSpec>): unknown; end(name: string, reason: string, by?: string): unknown } };
+      internals.registry.register(workerSpec('spawn-for-bob-1', { spawnedBy: 'parent', resultTo: { to: 'bob', as: 'message' }, metadata: { subagent: 'for-bob', task: 'for bob', launch: { kind: 'spawn', model: 'mock-fail', systemPrompt: 'p', maxTokens: 64, allowedTools: 'all', strategy: {} } } }));
+      internals.registry.end('spawn-for-bob-1', 'failed', 'test');
+      const resumed = await h.call('resume', { name: 'for-bob' });
+      expect(resumed.success).toBe(true);
+      expect((resumed.data as { resultTo: string }).resultTo).toBe('bob');
+      const bobMail = () => h.framework.getAgent('bob')!.getContextManager().getAllMessages() as unknown as Array<{ participant: string; content: Array<{ text?: string }> }>;
+      await h.until(() => bobMail().some((m) => m.content.some((b) => b.text?.includes("[Subagent 'for-bob' failed]"))), 'the failure reaches bob');
+      expect(bobMail().find((m) => m.content.some((b) => b.text?.includes("[Subagent 'for-bob' failed]")))!.participant).toBe('spawn-for-bob-1');
+      // The residents share one message slot, so the parent's store holds bob's mail too: what must not be there is a host line for the parent.
+      expect(h.parentMessages().filter((m) => m.metadata?.kind !== 'agent-result' && m.content.some((b) => b.text?.includes("[Subagent 'for-bob'")))).toEqual([]);
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
+  test("a sync run moved to the background, whose caller ended and which the primary then adopted, returns to its adopter", async () => {
+    const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, responseGenerator: (r) => (r.model === 'mock-slow' ? 'the adopted answer ' + 'x'.repeat(1_200) : 'ok') }, {}, [caller]);
+    try {
+      const moved = await h.callAs('caller', 'spawn', { name: 'moved-1', systemPrompt: 'p', task: 'take your time', model: 'mock-slow', sync: true, timeoutMs: 500 });
+      expect(moved.success).toBe(true);
+      expect(String(moved.data)).toContain('moved to background');
+      const run = h.recordOf('moved-1')!;
+      expect(run.relationships.resultTo).toEqual({ to: 'caller', as: 'tool-result' });
+      h.framework.stopAgent('caller', { by: 'test' });
+      await h.until(() => h.recordOf('moved-1')?.orphaned !== undefined, 'the run is orphaned');
+      const adopted = await h.call('adopt', { name: 'moved-1' });
+      expect(adopted.success).toBe(true);
+      await h.until(() => h.parentMessages().some((m) => m.content.some((b) => b.text?.includes("[Subagent 'moved-1' returned]"))), 'the result reaches the adopter', 20_000);
+      expect(h.parentMessages().find((m) => m.content.some((b) => b.text?.includes("[Subagent 'moved-1' returned]")))!.participant).toBe(run.name);
+      expect(h.framework.listHeldMail({ to: 'caller' }).some((m) => JSON.stringify(m.content).includes("[Subagent 'moved-1'"))).toBe(false);
     } finally { await h.cleanup(); }
   }, 30_000);
 });
