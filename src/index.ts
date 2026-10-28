@@ -689,10 +689,11 @@ async function runPiped(app: AppContext) {
   const { handleCommand } = await import('./commands.js');
 
   let say = (line: string): void => { console.error(line); };
+  let atPrompt = false;
   let onAlert: ((event: Record<string, unknown>) => void) | null = null;
   const turns = createPipedTurns(app.agentName, {
-    write: (text) => { process.stdout.write(text); },
-    log: (line) => { console.log(line); },
+    write: (text) => { atPrompt = false; process.stdout.write(text); },
+    log: (line) => { atPrompt = false; console.log(line); },
     error: (line) => { say(line); },
   }, failureHint(app.recipe, process.env, app.credentials));
   const traces = traceFollower((event) => {
@@ -767,7 +768,6 @@ async function runPiped(app: AppContext) {
   }
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: '> ' });
-  let atPrompt = false;
   let fleetAlertsOff = null as (() => void) | null;
   const terminal = openReadlineTerminal(config.dataDir, { showing: () => atPrompt, redraw: () => { rl.prompt(true); } });
   try {
@@ -801,27 +801,29 @@ async function runPiped(app: AppContext) {
     if (credentials && credentials.kind !== 'ok') {
       showAlert({ kind: credentials.kind, agent: app.agentName, message: credentials.message + credentialActionHint(credentials) });
     }
+    let closed = false;
+    rl.on('close', () => { closed = true; atPrompt = false; });
     rl.prompt();
     atPrompt = true;
     rl.on('line', async (line: string) => {
       atPrompt = false;
       if (await processLine(line)) { rl.close(); return; }
+      if (closed) return;
       rl.prompt();
       atPrompt = true;
     });
     await new Promise<void>(r => rl.on('close', r));
-    atPrompt = false;
     console.log('\nShutting down...');
     await app.framework.stop();
     if (restarting) {
       await stopWebUiServer().catch((error: unknown) => {
-        console.error(`[webui] closing the Web UI's server for the restart failed: ${error instanceof Error ? error.message : String(error)}`);
+        terminal.say(`[webui] closing the Web UI's server for the restart failed: ${error instanceof Error ? error.message : String(error)}`);
       });
     }
   } finally {
     fleetAlertsOff?.();
     onAlert = null;
-    await terminal.end();
+    terminal.end();
   }
 }
 

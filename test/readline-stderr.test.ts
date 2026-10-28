@@ -8,6 +8,15 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const INDEX_PATH = join(ROOT, 'src', 'index.ts');
 const RUNNING = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8')) as { version: string }).version;
 const ALERT_LINE = '⚠ [agent] probe-alert: the person should see this';
+const REPLY_WITH_ALERTS = [
+  'Hell',
+  ALERT_LINE,
+  'o th',
+  '⚠ [agent] probe-alert (×2): the person should see this',
+  'ere,',
+  '✓ [agent] probe-alert-clear: cleared',
+  ' person.',
+];
 
 const EXTENSION = `
 export function register(api, config) {
@@ -19,13 +28,35 @@ export function register(api, config) {
     async handleToolCall() { return { success: false, error: 'no tools' }; },
     async onProcess() { return {}; },
     setFramework(framework) {
+      let turns = 0;
       let tokens = 0;
+      let pushed = false;
       framework.onTrace((event) => {
-        if (event.type !== 'inference:tokens' || ++tokens !== 2) return;
-        if (config.crash) setTimeout(() => { throw new Error('probe crash mid-reply'); }, 0);
-        console.error('[probe-console] a library line mid-reply');
-        process.stderr.write('[probe-direct] a library write mid-reply\\n');
-        framework.notifyOpsAlert('probe-alert', event.agentName, 'the person should see this');
+        if (event.type === 'inference:started') {
+          turns++;
+          tokens = 0;
+          return;
+        }
+        if (config.background && !pushed && (event.type === 'inference:completed' || event.type === 'inference:turn_ended')) {
+          pushed = true;
+          setTimeout(() => framework.pushEvent({
+            type: 'external-message', source: 'cli', content: 'again', metadata: {}, triggerInference: true,
+          }), 300);
+          return;
+        }
+        if (event.type !== 'inference:tokens' || turns !== (config.background ? 2 : 1)) return;
+        tokens++;
+        if (tokens === 2) {
+          if (config.crash) setTimeout(() => { throw new Error('probe crash mid-reply'); }, 0);
+          console.error('[probe-console] a library line mid-reply');
+          console.warn('[probe-warn] a library warning mid-reply');
+          process.stderr.write('[probe-direct] a library write mid-reply\\n');
+          framework.notifyOpsAlert('probe-alert', event.agentName, 'the person should see this');
+        } else if (tokens === 3) {
+          framework.notifyOpsAlert('probe-alert', event.agentName, 'the person should see this');
+        } else if (tokens === 4) {
+          framework.notifyOpsAlert('probe-alert-clear', event.agentName, 'cleared');
+        }
       });
     },
   }));
@@ -78,7 +109,7 @@ interface Session {
   close(): Promise<void>;
 }
 
-function startReadline(options: { crash?: boolean; env?: Record<string, string>; prepare?: (dir: string) => void } = {}): Session {
+function startReadline(options: { crash?: boolean; background?: boolean; env?: Record<string, string>; prepare?: (dir: string) => void } = {}): Session {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'readline-stderr-')));
   options.prepare?.(dir);
   const extension = join(dir, 'probe.ts');
@@ -91,7 +122,7 @@ function startReadline(options: { crash?: boolean; env?: Record<string, string>;
       mock: { echoMode: false, defaultResponse: 'Hello there, person.', streamChunkSize: 4, streamChunkDelayMs: 40 },
     },
     modules: { subagents: false, lessons: false, retrieval: false, wake: false, workspace: false },
-    extensions: { probe: { kind: 'module', path: extension, config: { crash: options.crash === true } } },
+    extensions: { probe: { kind: 'module', path: extension, config: { crash: options.crash === true, background: options.background === true } } },
   }));
   let screen = '';
   const decoder = new TextDecoder();
@@ -117,6 +148,10 @@ function startReadline(options: { crash?: boolean; env?: Record<string, string>;
   };
 }
 
+function holdsInOrder(rows: string[], wanted: string[]): boolean {
+  return rows.some((_row, at) => wanted.every((line, i) => rows[at + i] === line));
+}
+
 async function prompted(session: Session): Promise<void> {
   await until(() => session.lines().some((line) => line.includes('Type /help')), 30_000, 'readline prompt', session.screen);
 }
@@ -130,7 +165,7 @@ async function converse(session: Session): Promise<void> {
   }, 30_000, 'the reply and the prompt after it', session.screen);
 }
 
-test('in readline mode, what libraries write to stderr goes to readline-error.log, and an alert mid-reply has a line of its own', async () => {
+test('in readline mode, what libraries write to stderr goes to readline-error.log, and alerts mid-reply each have a line of their own', async () => {
   const session = startReadline();
   try {
     await converse(session);
@@ -138,19 +173,21 @@ test('in readline mode, what libraries write to stderr goes to readline-error.lo
     expect(await session.exited).toBe(0);
     const shown = session.lines().join('\n');
     expect(shown).not.toContain('[probe-console]');
+    expect(shown).not.toContain('[probe-warn]');
     expect(shown).not.toContain('[probe-direct]');
-    expect(session.lines()).toContain(ALERT_LINE);
+    expect(holdsInOrder(session.lines(), REPLY_WITH_ALERTS)).toBe(true);
     expect(session.lines()).toContain(`Error log: ${join(session.dir, 'readline-error.log')}`);
     const log = readFileSync(join(session.dir, 'readline-error.log'), 'utf-8');
     expect(log).toMatch(/--- session \S+ ---\n/);
     expect(log).toContain('[probe-console] a library line mid-reply\n');
+    expect(log).toContain('[probe-warn] a library warning mid-reply\n');
     expect(log).toContain('[probe-direct] a library write mid-reply\n');
   } finally {
     await session.close();
   }
 }, 120_000);
 
-test('in readline mode, a notice of a newer release that comes while the prompt waits is shown, each line whole', async () => {
+test('in readline mode, a notice of a newer release that comes while the prompt waits is shown, each line whole, and what was typed is kept', async () => {
   let promptShown: () => void = () => {};
   const shown = new Promise<void>((done) => { promptShown = done; });
   const registry = Bun.serve({
@@ -163,11 +200,14 @@ test('in readline mode, a notice of a newer release that comes while the prompt 
   const session = startReadline({ env: { CONNECTOME_UPDATE_CHECK: '1', npm_config_registry: `http://127.0.0.1:${registry.port}` } });
   try {
     await prompted(session);
+    session.type('ab');
+    await until(() => session.lines().at(-1) === '> ab', 10_000, 'the typed text', session.screen);
     promptShown();
     await until(() => session.lines().some((line) => line.startsWith('[update] Notes:')), 20_000, 'the notice', session.screen);
     expect(session.lines()).toContain(`[update] connectome-host 99.0.0 is out; this host runs ${RUNNING}.`);
     expect(session.lines()).toContain('[update] Breaking: 99.0.0. Read its notes before updating.');
-    session.type('/quit\r');
+    await until(() => session.lines().at(-1) === '> ab', 10_000, 'the prompt drawn again with what was typed', session.screen);
+    session.type('\x15/quit\r');
     expect(await session.exited).toBe(0);
   } finally {
     await session.close();
@@ -175,13 +215,28 @@ test('in readline mode, a notice of a newer release that comes while the prompt 
   }
 }, 120_000);
 
-test('in readline mode, a crash mid-reply is shown on the terminal', async () => {
+test('in readline mode, a crash mid-reply is shown on the terminal, and the log keeps what was written before it', async () => {
   const session = startReadline({ crash: true });
   try {
     await prompted(session);
     session.type('hello\r');
+    await until(() => session.lines().join('\n').includes('probe crash mid-reply'), 30_000, 'the crash', session.screen);
     expect(await session.exited).not.toBe(0);
-    expect(session.lines().join('\n')).toContain('probe crash mid-reply');
+    const log = readFileSync(join(session.dir, 'readline-error.log'), 'utf-8');
+    expect(log).toContain('[probe-console] a library line mid-reply\n');
+    expect(log).toContain('[probe-direct] a library write mid-reply\n');
+  } finally {
+    await session.close();
+  }
+}, 120_000);
+
+test('in readline mode, a reply streaming while the prompt waits keeps its text when an alert comes mid-reply', async () => {
+  const session = startReadline({ background: true });
+  try {
+    await converse(session);
+    await until(() => holdsInOrder(session.lines(), REPLY_WITH_ALERTS), 30_000, 'the second reply with its alerts', session.screen);
+    session.type('/quit\r');
+    expect(await session.exited).toBe(0);
   } finally {
     await session.close();
   }
