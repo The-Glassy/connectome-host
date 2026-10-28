@@ -933,6 +933,22 @@ describe('mcpl_restart', () => {
 });
 
 describe('mcpl_list', () => {
+  test('shows a closed tab as such, and each server\'s configured presentation: the agent\'s own entry, else the operator\'s, else full', async () => {
+    const { stub, servers } = makeStubFramework();
+    const mod = makeModule(stub);
+    await call(mod, 'mcpl_deploy', { id: 'mine', command: 'node', presentation: 'tab' });
+    const base = servers.get('mine')!;
+    servers.set('games', { ...base, id: 'games', connected: false, toolPrefix: 'games', toolCount: 0, closedTab: true } as never);
+    servers.set('plain', { ...base, id: 'plain', toolPrefix: 'mcpl--plain' });
+    mod.setOperatorServers([{ id: 'games', url: 'wss://games.example/mcpl', presentation: 'closed-tab' }, { id: 'plain', command: 'node' }]);
+
+    const text = String((await call(mod, 'mcpl_list')).data ?? '');
+    expect(text).toContain('games: CLOSED TAB (disconnected until it\'s opened: toolsets--open {"server": "games"}, or mcpl-admin--mcpl_restart connects it)');
+    expect(text).toMatch(/games: [^\n]*presentation=closed-tab/);
+    expect(text).toMatch(/mine: CONNECTED[^\n]*presentation=tab/);
+    expect(text).toMatch(/plain: CONNECTED[^\n]*presentation=full/);
+  });
+
   test('says no server is loaded when none is and the overlay holds nothing', async () => {
     const { stub } = makeStubFramework();
     const mod = makeModule(stub);

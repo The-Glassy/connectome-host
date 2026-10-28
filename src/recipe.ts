@@ -535,7 +535,7 @@ export interface RecipeMcpServer {
   /** Feature-set deny-list; wins over enabledFeatureSets on overlap. */
   disabledFeatureSets?: string[];
   /**
-   * MCPL RFC-014 opt-in: whether this host advertises `toolHints` to the
+   * MCPL RFC-014: whether this host advertises `toolHints` to the
    * server, so it lists every tool with its hints (static or dynamic,
    * visible or not, which toolset) and its toolsets can be opened and
    * closed, instead of tailoring its list to a host that reads no hints.

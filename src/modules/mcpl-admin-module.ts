@@ -154,6 +154,16 @@ export class McplAdminModule implements Module {
     this.operatorServers = new Map(servers.map((server) => [server.id, serverProvisions(server)]));
   }
 
+  /** How agents are shown a server at first, as configured: by the agent's own
+   *  overlay entry where it defines the server, else by the operator's
+   *  definition, else in full. Each agent's own switch since isn't shown. */
+  private configuredPresentation(id: string, overlay: Record<string, AgentOverlayEntry> | null): string {
+    const own = overlay ? entryOf(overlay, id) : undefined;
+    if (own && overlayEntryReplaces(own) && isServerPresentation(own.presentation)) return own.presentation;
+    const operator = this.operatorDefinitions.find((d) => d.id === id)?.presentation;
+    return isServerPresentation(operator) ? operator : 'full';
+  }
+
   private replacement(id: string, overlay: Record<string, AgentOverlayEntry>): { lost: string | null } | null {
     const entry = entryOf(overlay, id);
     const operator = this.operatorServers.get(id);
@@ -276,8 +286,9 @@ export class McplAdminModule implements Module {
               enum: ['full', 'tab', 'closed-tab'],
               description: 'How you are shown this server. "full" (the default): its tools in your tool list. "tab": ' +
                 'connected and its events still arrive, but none of its tools is in your list until you ' +
-                'toolsets--open {server}; toolsets--close {server} hides them again. "closed-tab": disconnected until ' +
-                'you toolsets--open {server}. A tab suits a server you use now and then; you can switch later with ' +
+                'toolsets--open {server}; toolsets--close {server} hides them again. "closed-tab": like a tab, and it ' +
+                'starts disconnected whenever the host starts, until you toolsets--open {server}; the deploy itself ' +
+                'connects it now. A tab suits a server you use now and then; you can switch later with ' +
                 'toolsets--open/--close either way.',
             },
           },
@@ -388,6 +399,8 @@ export class McplAdminModule implements Module {
           lastNegotiatedAt: number | null;
         };
         toolClasses?: ServerToolClass[];
+        /** agent-framework 0.29: kept disconnected as a closed tab until it's opened. */
+        closedTab?: boolean;
       }
     >;
     const notes: string[] = [];
@@ -426,7 +439,9 @@ export class McplAdminModule implements Module {
         source = fileServers === null ? 'unknown' : Object.hasOwn(fileServers, s.id) ? 'file/recipe' : 'recipe';
       }
       const target = s.command ?? s.url ?? '?';
-      const connectionState = s.connected ? 'CONNECTED' : s.retrying ? 'RETRYING' : 'DISCONNECTED';
+      const connectionState = s.closedTab
+        ? `CLOSED TAB (disconnected until it's opened: toolsets--open {"server": "${s.id}"}, or ${RESTART} connects it)`
+        : s.connected ? 'CONNECTED' : s.retrying ? 'RETRYING' : 'DISCONNECTED';
       const policyState = s.policyEstablished === undefined
         ? 'unknown'
         : s.policyEstablished ? 'established' : 'not-established';
@@ -441,6 +456,7 @@ export class McplAdminModule implements Module {
         `hostCommands=${hostCommands}, ` +
         `manifest=${formatManifestState(s.manifestState)}; ${s.toolCount} tools, ` +
         `classes=${formatServerToolClasses(s.toolClasses)}, ` +
+        `presentation=${this.configuredPresentation(s.id, overlay)}, ` +
         `prefix=${s.toolPrefix}, source=${source}, ${target}`,
       );
     }

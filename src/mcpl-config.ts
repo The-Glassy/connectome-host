@@ -56,7 +56,7 @@ export interface ServerFileEntry {
   access?: string;
   /** MCPL tool lifecycle (RFC-007) policy — see RecipeMcpServer.toolLifecycle. */
   toolLifecycle?: RecipeToolLifecycle;
-  /** MCPL RFC-014 opt-in — see RecipeMcpServer.toolHints. */
+  /** MCPL RFC-014 tool hints (on by default from agent-framework 0.29.0) — see RecipeMcpServer.toolHints. */
   toolHints?: boolean;
   /** How the server is presented to agents at first — see RecipeMcpServer.presentation. */
   presentation?: ServerPresentation;
