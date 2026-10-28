@@ -783,6 +783,7 @@ describe('a resume that ends before its run starts', () => {
       expect(stopped.success).toBe(true);
       await h.until(() => said(h, "[Subagent 'queued-1'"), "the resume's end reaches the parent");
       expect(said(h, "[Subagent 'queued-1' returned]")).toBe(true);
+      expect(said(h, '[Stopped by parent: not now] (no output: it was still waiting for a concurrency slot, and never started)')).toBe(true);
       expect(said(h, "[Subagent 'queued-1' failed]")).toBe(false);
       expect(h.subagent.getConcurrencyStatus().queued).toBe(0);
       await h.call('stop', { name: 'busy-1' });
