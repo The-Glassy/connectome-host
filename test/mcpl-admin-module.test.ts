@@ -150,6 +150,31 @@ describe('mcpl_deploy', () => {
     expect(readAgentOverlay(overlayPath).mytool).toEqual({ command: 'node', args: ['tool.js'] });
   });
 
+  test('presentation is saved and connected as given, and another value refuses the deploy, naming the values', async () => {
+    const { stub, connected, calls } = makeStubFramework();
+    const mod = makeModule(stub);
+
+    const tab = await call(mod, 'mcpl_deploy', { id: 'games', command: 'node', presentation: 'tab' });
+    expect(tab.success).toBe(true);
+    expect(readAgentOverlay(overlayPath).games).toEqual({ command: 'node', presentation: 'tab' });
+    expect((connected.find((c) => c.id === 'games') as { presentation?: string } | undefined)?.presentation).toBe('tab');
+
+    const odd = await call(mod, 'mcpl_deploy', { id: 'other', command: 'node', presentation: 'hidden' });
+    expect(odd.success).toBe(false);
+    expectSays(odd.error, 'Nothing was deployed or saved', '`presentation` is "hidden", which isn\'t "full", "tab" or "closed-tab"');
+    expect(readAgentOverlay(overlayPath).other).toBeUndefined();
+    expect(calls).toEqual(['connect:games']);
+  });
+
+  test('presentation left out or empty is the default: nothing saved for it', async () => {
+    const { stub } = makeStubFramework();
+    const mod = makeModule(stub);
+    expect((await call(mod, 'mcpl_deploy', { id: 'a', command: 'node' })).success).toBe(true);
+    expect((await call(mod, 'mcpl_deploy', { id: 'b', command: 'node', presentation: '' })).success).toBe(true);
+    expect(readAgentOverlay(overlayPath).a).toEqual({ command: 'node' });
+    expect(readAgentOverlay(overlayPath).b).toEqual({ command: 'node' });
+  });
+
   test('redeploying a loaded server restarts it with the new config', async () => {
     const { stub, calls } = makeStubFramework();
     const mod = makeModule(stub);
@@ -320,7 +345,7 @@ describe('mcpl_deploy', () => {
     const result = String((await call(mod, 'mcpl_deploy', { id: 'chat', command: 'node', disabledTool: ['post'], persist: true })).error);
     expectSays(
       result, 'Nothing was deployed or saved: "disabledTool", "persist" aren\'t fields of mcpl-admin--mcpl_deploy, which takes ' +
-      'id, command, args, env, url,', 'enabledTools, disabledTools.',
+      'id, command, args, env, url,', 'enabledTools, disabledTools, presentation.',
     );
     expect(String((await call(mod, 'mcpl_deploy', { id: 'chat', command: 'node', disabledTool: ['post'] })).error))
       .toContain('"disabledTool" isn\'t a field of mcpl-admin--mcpl_deploy');
@@ -1727,15 +1752,12 @@ describe('a restart of an id that isn\'t loaded', () => {
 });
 
 describe('a failed call says what changed and what to do', () => {
-  test('a tool the module lacks is answered with the tools it has, as tools or as utilities, by the recipe surface', async () => {
+  test('a tool the module lacks is answered with the tools it has, in the built-in settings toolset', async () => {
     const { stub } = makeStubFramework();
     const all = ['mcpl-admin--mcpl_list', 'mcpl-admin--mcpl_deploy', 'mcpl-admin--mcpl_restart', 'mcpl-admin--mcpl_unload'];
-    const asTools = (await call(makeModule(stub), 'mcpl_status')).error;
-    expectSays(asTools, 'There\'s no tool "mcpl-admin--mcpl_status", so nothing ran', 'tools are', ...all);
-    expect(asTools).not.toContain('utils');
-    const utilities = new McplAdminModule({ overlayPath, configPath: join(dir, 'mcpl-servers.json'), surface: 'utilities' });
-    utilities.setFramework(stub);
-    expectSays((await call(utilities, 'mcpl_status')).error, 'no tool "mcpl-admin--mcpl_status"', 'utilities are', ...all, 'utils');
+    const said = (await call(makeModule(stub), 'mcpl_status')).error;
+    expectSays(said, 'There\'s no tool "mcpl-admin--mcpl_status", so nothing ran', 'in the built-in "settings" toolset', ...all, 'toolsets--act');
+    expect(said).not.toContain('utils');
   });
 
   test('after the module stops, each tool says the tools have stopped and nothing changed, with no retry advice', async () => {

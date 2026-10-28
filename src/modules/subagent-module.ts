@@ -1156,7 +1156,7 @@ export class SubagentModule implements Module {
             tools: {
               type: 'array',
               items: { type: 'string' },
-              description: 'Tool names the subagent can use (default: inherit the caller\'s allowed tools). An explicit list can only narrow the caller\'s tools. To give the subagent a utility, list `utils` and the utility\'s own name (module--name). Note: subagent--return is always included automatically.',
+              description: 'Tool names the subagent can use (default: inherit the caller\'s allowed tools). An explicit list can only narrow the caller\'s tools. To give the subagent a tool from the built-in "settings" toolset, list toolsets--open, toolsets--act and the tool\'s own name (module--name). Note: subagent--return is always included automatically.',
             },
             sync: { type: 'boolean', description: 'If true, block until subagent completes (default: false)' },
             timeoutMs: { type: 'number', description: `Milliseconds. A sync task still running then moves to the background and delivers its result as a message when it ends (default ${this.maxExecutionMs}). An async task is stopped once it has run that long, counted from when it starts after any wait for a concurrency slot, retries included; async tasks have no limit by default, so set one only for a hard deadline.` },
@@ -2075,17 +2075,25 @@ export class SubagentModule implements Module {
   }
 
   /**
-   * agent-framework builds an agent's tool surface from the shared board
-   * filtered by its permissions, leaving out `utils` when they permit no
-   * utility, plus prose_help under explicit prose routing when they allow it
-   * (availableToolsForPresentation). It reads the board again when it
+   * agent-framework builds an agent's tool list from the shared board filtered
+   * by its permissions, less what its own toolsets present out of the list
+   * (the built-in "settings" toolset and servers shown as tabs, from 0.29.0;
+   * presentedTools), plus prose_help under explicit prose routing when they
+   * allow it (availableToolsForPresentation). It reads the board again when it
    * assembles the first request, and it lists an ephemeral agent only once its
    * run starts, so listToolClasses can't be asked yet.
    */
-  private streamSurface(agent: { canUseTool(name: string): boolean; proseRouting: ProseRouting }): string[] {
-    const names = this.getFramework().getAllTools()
-      .filter((t) => agent.canUseTool(t.name))
-      .map((t) => t.name);
+  private streamSurface(agent: { name?: string; canUseTool(name: string): boolean; proseRouting: ProseRouting }): string[] {
+    const framework = this.getFramework();
+    let tools = framework.getAllTools().filter((t) => agent.canUseTool(t.name));
+    const present = (framework as AgentFramework & {
+      presentedTools?: (agentName: string, tools: ToolDefinition[], canUseMeta?: boolean) => ToolDefinition[];
+    }).presentedTools;
+    if (typeof present === 'function' && agent.name) {
+      const canUseMeta = agent.canUseTool('toolsets--open') && agent.canUseTool('toolsets--act');
+      tools = present.call(framework, agent.name, tools, canUseMeta);
+    }
+    const names = tools.map((t) => t.name);
     if (agent.proseRouting === 'explicit' && agent.canUseTool('prose_help')) names.push('prose_help');
     return names;
   }

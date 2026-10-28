@@ -35,12 +35,12 @@ import {
 } from '../mcpl-config.js';
 import { unknownToolResult } from './unknown-tool.js';
 import { shown } from './shown.js';
+import { isServerPresentation, SERVER_PRESENTATIONS_TEXT } from '../server-presentation.js';
 
 export interface McplAdminModuleConfig {
   timeZone?: string;
   overlayPath?: string;
   configPath?: string;
-  surface?: 'tools' | 'utilities';
 }
 
 function ok(text: string): ToolResult {
@@ -132,13 +132,10 @@ export class McplAdminModule implements Module {
   private configPath: string;
   private timeZone: string;
 
-  private surface: 'tools' | 'utilities';
-
   constructor(config?: McplAdminModuleConfig) {
     this.overlayPath = config?.overlayPath ?? DEFAULT_AGENT_OVERLAY_PATH;
     this.configPath = config?.configPath ?? DEFAULT_CONFIG_PATH;
     this.timeZone = resolveTimeZone(config?.timeZone);
-    this.surface = config?.surface ?? 'tools';
   }
 
   setFramework(framework: AgentFramework): void {
@@ -219,11 +216,13 @@ export class McplAdminModule implements Module {
   }
 
   getTools(): ToolDefinition[] {
-    return this.surface === 'tools' ? this.definitions() : [];
+    return this.definitions();
   }
 
-  getUtilities(): ToolDefinition[] {
-    return this.surface === 'utilities' ? this.definitions() : [];
+  /** MCPL administration is rare: its tools live in agent-framework's built-in
+   *  toolset ("settings"), out of the tool list. */
+  toolPlacement(_toolName: string): 'builtin' {
+    return 'builtin';
   }
 
   private definitions(): ToolDefinition[] {
@@ -272,6 +271,15 @@ export class McplAdminModule implements Module {
             disabledFeatureSets: { type: 'array', items: { type: 'string' }, description: 'Feature-set deny-list; wins over enabled.' },
             enabledTools: { type: 'array', items: { type: 'string' }, description: 'Tool allow-list (bare names, * wildcard). Omit or pass [] for all offered.' },
             disabledTools: { type: 'array', items: { type: 'string' }, description: 'Tool deny-list; wins over enabledTools.' },
+            presentation: {
+              type: 'string',
+              enum: ['full', 'tab', 'closed-tab'],
+              description: 'How you are shown this server. "full" (the default): its tools in your tool list. "tab": ' +
+                'connected and its events still arrive, but none of its tools is in your list until you ' +
+                'toolsets--open {server}; toolsets--close {server} hides them again. "closed-tab": disconnected until ' +
+                'you toolsets--open {server}. A tab suits a server you use now and then; you can switch later with ' +
+                'toolsets--open/--close either way.',
+            },
           },
           required: ['id'],
         },
@@ -561,6 +569,15 @@ export class McplAdminModule implements Module {
     if (given(input.reconnect)) fields.reconnect = input.reconnect;
     for (const k of ['enabledFeatureSets', 'disabledFeatureSets', 'enabledTools', 'disabledTools']) {
       if (givenList(input[k])) fields[k] = list(input[k]);
+    }
+    if (givenText(input.presentation)) {
+      if (isServerPresentation(input.presentation)) fields.presentation = input.presentation;
+      else {
+        problems.push(
+          `\`presentation\` is ${JSON.stringify(input.presentation)}, which isn't ${SERVER_PRESENTATIONS_TEXT}: leave it out ` +
+          'for "full", the default.',
+        );
+      }
     }
 
     const problem = overlayEntryProblem(fields, { strict: true });
