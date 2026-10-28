@@ -1758,10 +1758,10 @@ export class SubagentModule implements Module {
     for (const [agentName, run] of this.runOfAttempt) if (run === name) this.runOfAttempt.delete(agentName);
   }
 
-  private endQueued(name: string, err: SubagentTerminated): SubagentResult {
+  private endQueued(name: string, err: SubagentTerminated, run?: RunProgress): SubagentResult {
     const summary = `[${stopLabel(err.reason, err.stop)}] (no output: it was still waiting for a concurrency slot, and never started)`;
     this.emit(name, { type: 'done', summary });
-    return { summary, findings: [], issues: [], toolCallsCount: 0 };
+    return { summary, findings: [], issues: [], toolCallsCount: 0, ...(run?.agentName !== undefined ? { frameworkAgentName: run.agentName } : {}) };
   }
 
   /** agent-framework quotes the ephemeral agent's name in its own messages
@@ -3033,13 +3033,13 @@ export class SubagentModule implements Module {
   private async runResumed(name: string, record: AgentRecord, launch: ResumableLaunch, parentAgentName: string): Promise<SubagentResult> {
     const framework = this.getFramework();
     const cancel = this.cancelFor(name, { record: record.name });
-    const run: RunProgress = { started: false, attempts: 1 };
+    const run: RunProgress = { started: false, attempts: 1, agentName: record.name };
     let acquired: { waitedMs: number; slot: object };
     try {
       acquired = await this.acquireSlot(launch.kind, undefined, cancel.promise);
     } catch (err) {
       cancel.dispose();
-      if (err instanceof SubagentTerminated) return this.endQueued(name, err);
+      if (err instanceof SubagentTerminated) return this.endQueued(name, err, run);
       throw this.failedRun(name, launch.kind, err, run);
     }
     const { waitedMs, slot } = acquired;

@@ -666,6 +666,51 @@ describe('a resume that ends before its run starts', () => {
   };
   const said = (h: Awaited<ReturnType<typeof harness>>, text: string) => h.parentMessages().some((m) => m.content.some((b) => b.text?.includes(text)));
 
+  const bob = { name: 'bob', model: 'mock', systemPrompt: 'bob prompt', maxTokens: 256 };
+  const failedRecordFor = (h: Awaited<ReturnType<typeof harness>>, agent: string, subagent: string, to: string) => {
+    const internals = h.framework as unknown as Internals;
+    internals.registry.register(workerSpec(agent, { spawnedBy: 'parent', resultTo: { to, as: 'message' }, metadata: { subagent, task: 'again', launch: { kind: 'spawn', model: 'mock', systemPrompt: 'p', maxTokens: 64, allowedTools: 'all', strategy: {} } } }));
+    internals.registry.end(agent, 'failed', 'test');
+  };
+  const mailTo = (h: Awaited<ReturnType<typeof harness>>) => {
+    const seen: Array<{ from: string; to: string; kind: string }> = [];
+    h.framework.onTrace((e) => {
+      const event = e as unknown as { type: string; from: string; to: string; kind: string };
+      if (event.type === 'dendrite:mail-delivered') seen.push({ from: event.from, to: event.to, kind: event.kind });
+    });
+    return seen;
+  };
+
+  test("a resume stopped while it waits for a slot tells its record's route, from the record's agent", async () => {
+    const h = await harness({ streamChunkDelayMs: 20, streamChunkSize: 10, responseGenerator: (r) => (r.model === 'mock-slow' ? 'x'.repeat(1_200) : 'ok') }, { maxConcurrent: 1 }, [bob]);
+    try {
+      const delivered = mailTo(h);
+      expect((await h.call('spawn', { name: 'busy-r', systemPrompt: 'p', task: 'take your time', model: 'mock-slow' })).success).toBe(true);
+      await h.until(() => h.recordOf('busy-r') !== undefined && !h.recordOf('busy-r')!.ended, 'the slot is taken');
+      failedRecordFor(h, 'spawn-q-bob-1', 'q-bob', 'bob');
+      expect((await h.call('resume', { name: 'q-bob' })).success).toBe(true);
+      await h.until(() => h.subagent.getConcurrencyStatus().queued === 1, 'the resume waits for the slot');
+      expect((await h.call('stop', { name: 'q-bob' })).success).toBe(true);
+      await h.until(() => delivered.some((m) => m.from === 'spawn-q-bob-1'), "the stop reaches the record's route");
+      expect(delivered.filter((m) => m.from === 'spawn-q-bob-1')).toEqual([{ from: 'spawn-q-bob-1', to: 'bob', kind: 'result' }]);
+      expect(said(h, "[Subagent 'q-bob' returned]")).toBe(true);
+      await h.call('stop', { name: 'busy-r' });
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
+  test("a resume whose context fails to reopen tells its record's route that it failed, from the record's agent", async () => {
+    const h = await harness({}, {}, [bob]);
+    try {
+      const delivered = mailTo(h);
+      failedRecordFor(h, 'spawn-r-bob-1', 'r-bob', 'bob');
+      h.framework.resumeAgent = (async () => { throw new Error("the store can't reopen its context"); }) as typeof h.framework.resumeAgent;
+      expect((await h.call('resume', { name: 'r-bob' })).success).toBe(true);
+      await h.until(() => delivered.some((m) => m.from === 'spawn-r-bob-1'), "the failure reaches the record's route");
+      expect(delivered.filter((m) => m.from === 'spawn-r-bob-1')).toEqual([{ from: 'spawn-r-bob-1', to: 'bob', kind: 'result' }]);
+      expect(said(h, "[Subagent 'r-bob' failed]")).toBe(true);
+    } finally { await h.cleanup(); }
+  }, 30_000);
+
   test('only a run a restart cut off, a time limit stopped, or that failed is resumed; a stop, a completion or any other end is refused with its reason', async () => {
     const h = await harness();
     try {
