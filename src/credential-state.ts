@@ -144,10 +144,13 @@ export class CredentialMonitor {
   }
 
   private current(): CredentialState {
-    if (this.state.kind !== 'ok') return this.state;
     const { expiresAt: _entered, ...state } = this.state;
     const expiresAt = this.expiry();
-    return { ...state, rotatable: this.source.canRefresh(), ...(expiresAt !== undefined ? { expiresAt } : {}) };
+    return {
+      ...state,
+      ...(state.kind === 'auth-login-required' ? {} : { rotatable: this.source.canRefresh() }),
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
+    };
   }
 
   bearer(): string | undefined {
@@ -238,7 +241,7 @@ export class CredentialMonitor {
       return;
     }
     const why = error.trim() ? ` (${trim(error)})` : '';
-    this.unsaved = `${provider} credential couldn't be written to ${file}${why} — the credential in use isn't in that file, which is what a restart reads`;
+    this.unsaved = `${provider} credential couldn't be written to ${file}${why} — the credential in use may not be in that file, which is what a restart reads`;
     this.emit('credential-unsaved', this.unsaved, {
       provider,
       actions: [{ id: 'recheck', label: 'Re-check', hint: 'Writes the credential to its file again, then re-checks it.' }],

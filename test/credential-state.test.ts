@@ -486,6 +486,19 @@ describe('CredentialMonitor — precedence', () => {
     monitor.dispose();
   });
 
+  test("a quota verdict shows the credential's own expiry, as it is when read", async () => {
+    let expiresAt = 3 * HOUR;
+    const meter = fakeMeter([[{ key: 'seven_day', label: 'weekly', utilization: 100, resetsAt: 2 * HOUR }]], () => 0);
+    const { monitor } = harness({ meter, now: () => 0, source: { expiresAt: () => expiresAt, canRefresh: () => true, refresh: async () => {} } });
+    await meter.refresh();
+    expect(monitor.snapshot().kind).toBe('quota-spent');
+    expect(monitor.snapshot().expiresAt).toBe(3 * HOUR);
+    expiresAt = 5 * HOUR;
+    expect(monitor.snapshot().expiresAt).toBe(5 * HOUR);
+    meter.dispose();
+    monitor.dispose();
+  });
+
   test('a pending login still says the host can\'t refresh the credential, whatever the source could do otherwise', () => {
     const { monitor } = harness({ source: { canRefresh: () => true, refresh: async () => {}, login: async () => {} } });
     monitor.loginRequired({ verificationUrl: 'https://example.invalid/device', userCode: 'ABCD-1234' });

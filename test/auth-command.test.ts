@@ -91,7 +91,7 @@ describe('/auth', () => {
     expect(unsaved).toContain('/x/creds.json');
     expect(refreshed.split(unsaved).length - 1).toBe(1);
     writable = true;
-    expect(await answer('/auth recheck')).not.toContain('WARNING');
+    expect(await answer('/auth recheck')).not.toContain(unsaved);
     monitor.dispose();
   });
 
