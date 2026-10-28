@@ -930,8 +930,8 @@ async function residentOf(dataDir: string, read: RecipeRead, loaded?: ExtensionR
       name,
       namespace: `agents/${name}`,
       strategy,
-      // A persistent reader has a re-anchor fraction; reader forks (Dendrite) have none.
-      ...(subconscious?.enabled
+      // Reader forks read the resident's own context and open no subconscious namespace.
+      ...(subconscious?.enabled && subconscious.reader !== 'forks'
         ? {
             subconscious: {
               // agent-framework's default name, as the recipe's doc says.
