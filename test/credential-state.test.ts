@@ -462,6 +462,31 @@ describe('CredentialMonitor — precedence', () => {
     monitor.dispose();
   });
 
+  test('after a rotation the state shows the new expiry, and no auth-expiring comes from the old one', () => {
+    let t = 0;
+    let expiresAt = 20 * 60_000;
+    const { monitor, alerts } = harness({ now: () => t, expiryWarningMs: 10 * 60_000, source: { expiresAt: () => expiresAt, canRefresh: () => true, refresh: async () => {} } });
+    expect(monitor.snapshot().expiresAt).toBe(20 * 60_000);
+    expiresAt = 3 * HOUR;
+    monitor.observeSuccess();
+    expect(monitor.snapshot().expiresAt).toBe(3 * HOUR);
+    t = 15 * 60_000;
+    (monitor as unknown as { checkExpiry(): void }).checkExpiry();
+    expect(monitor.snapshot().kind).toBe('ok');
+    expect(alerts).toEqual([]);
+    monitor.dispose();
+  });
+
+  test('after a pasted token replaces a refreshable one, the state says the host can no longer refresh it', async () => {
+    let refreshable = true;
+    const { monitor } = harness({ source: { canRefresh: () => refreshable, setToken: () => { refreshable = false; }, probe: async () => {} } });
+    expect(monitor.snapshot().rotatable).toBe(true);
+    const s = await monitor.runAction('set-token', { token: 'pasted' });
+    expect(s.kind).toBe('ok');
+    expect(s.rotatable).toBe(false);
+    monitor.dispose();
+  });
+
   test('a passed expiry on an idle host becomes auth-expired without waiting for a 401', () => {
     let t = 0;
     const { monitor, alerts } = harness({ now: () => t, expiryWarningMs: 10 * 60_000, source: { expiresAt: () => 5 * 60_000 } });

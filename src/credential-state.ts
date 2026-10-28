@@ -136,7 +136,15 @@ export class CredentialMonitor {
   }
 
   snapshot(): CredentialState {
-    return { ...this.state, actions: [...this.state.actions], ...(this.unsaved !== undefined ? { unsaved: this.unsaved } : {}) };
+    const { expiresAt: _entered, ...state } = this.state;
+    const expiresAt = this.expiry();
+    return {
+      ...state,
+      rotatable: this.source.canRefresh(),
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
+      actions: [...state.actions],
+      ...(this.unsaved !== undefined ? { unsaved: this.unsaved } : {}),
+    };
   }
 
   bearer(): string | undefined {
