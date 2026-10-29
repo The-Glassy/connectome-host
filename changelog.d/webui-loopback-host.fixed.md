@@ -1,0 +1,1 @@
+- A Web UI on loopback without `basicAuth` now answers only a request whose `Host` names loopback: `127.0.0.1`, `localhost` or `[::1]`, with or without a port. A request under any other name, or with a `Host` carrying userinfo, a path or a fragment, gets a 403 before any route, the `/ws` upgrade included.
