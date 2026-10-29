@@ -91,6 +91,13 @@ async function until(check: () => boolean, ms: number, label: string): Promise<v
   }
 }
 
+function lineAfter(text: string, start: string): string {
+  const lines = text.split('\n');
+  const at = lines.findIndex((line) => line.startsWith(start));
+  expect(at).toBeGreaterThanOrEqual(0);
+  return lines[at + 1] ?? '';
+}
+
 function install(): { dir: string; root: string; index: string; fleet: Record<string, unknown> } {
   const dir = mkdtempSync(join(tmpdir(), 'update-commit-e2e-'));
   dirs.push(dir);
@@ -253,8 +260,34 @@ describe('a host started from an install', () => {
     expect(log).toMatchObject({ v: 1, release: '9.9.9', mark: 'm-1' });
     expect(log!.lines.length).toBeGreaterThan(0);
     expect(log!.lines.length).toBeLessThanOrEqual(TRIAL_LOG_LINES);
-    expect(log!.lines.some((line) => line.startsWith("Fatal error: Error: The MCPL server lost wasn't connected when this release went to commit"))).toBe(true);
+    expect(log!.lines.some((line) => line.startsWith("The MCPL server lost wasn't connected when this release went to commit"))).toBe(true);
+    expect(stderr()).not.toContain('Fatal error');
+    expect(lineAfter(stderr(), "The MCPL server lost wasn't connected")).not.toMatch(/^\s+at /);
     expect(statSync(installPaths(root).trialLog).mode & 0o777).toBe(0o600);
+  }, 60_000);
+
+  test("a trial commits with a server the release before hadn't connected either when it stopped, and says so", async () => {
+    const { dir, root, index } = install();
+    onTrial(dir, root);
+    writeJsonAtomic(installPaths(root).mark, { v: 1, id: 'm-1', to: '9.9.9', why: 'update', at: new Date().toISOString(), connected: [] });
+    const { host, stderr, stdout, exit } = startHost(dir, index, root, {}, { mcpServers: { lost: { command: join(dir, 'no-such-server') } } });
+    await until(() => readJournal(root).some(({ step }) => step === 'commit'), 30_000, `the trial commits (stderr: ${stderr().slice(-1500)})`);
+    expect(readCurrent(root)).toBe('9.9.9');
+    expect(stdout()).toContain("[update] The MCPL server lost isn't connected, and 9.9.8 hadn't connected it when it stopped either, so it doesn't hold this release's commit.");
+    const log = join(dir, 'data', 'headless.log');
+    await until(() => existsSync(log) && readFileSync(log, 'utf-8').includes('socket listening at'), 30_000, 'headless listens');
+    host.kill('SIGTERM');
+    expect(await exit).toBe(0);
+  }, 60_000);
+
+  test('an install with no current stops the start with a plain line too', async () => {
+    const { dir, root, index } = install();
+    rmSync(installPaths(root).current);
+    const { stderr, exit } = startHost(dir, index, root);
+    expect(await exit).toBe(1);
+    expect(stderr()).toContain(`The install at ${root} has no \`current\` to say which release it runs on, so this host starts none of its agents. Run setup again.`);
+    expect(stderr()).not.toContain('Fatal error');
+    expect(lineAfter(stderr(), `The install at ${root} has no`)).not.toMatch(/^\s+at /);
   }, 60_000);
 
   test('a host started on its own keeps no children file, though its fleet starts a child', async () => {

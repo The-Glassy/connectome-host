@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readlinkSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as contract from '../src/update/contract.js';
-import { ContractError, installPaths, moveCurrent, readCurrent, readJournal } from '../src/update/contract.js';
+import { ContractError, installPaths, moveCurrent, readCurrent, readJournal, writeJsonAtomic, writeMark } from '../src/update/contract.js';
 import { HOST_ROOT, commitRelease, releaseHere } from '../src/update/host.js';
 
 let dir: string;
@@ -105,6 +105,51 @@ describe('commitRelease', () => {
     ));
     expect(readCurrent(root)).toBe('0.10.2');
     expect(existsSync(installPaths(root).journal)).toBe(false);
+  });
+
+  test('a server the release before had connected when it stopped holds the commit, and one it hadn\'t doesn\'t', () => {
+    moveCurrent(root, '0.10.2');
+    writeMark(root, { to: '0.11.0', why: 'update', connected: ['heartbeat', 'notes'] });
+    expect(() => commitRelease(here, { now: at, unconnectedServers: () => ['discord', 'heartbeat'] })).toThrow(new Error(
+      "The MCPL server heartbeat wasn't connected when this release went to commit, so it starts none of its agents, " +
+      'and the next start goes back to 0.10.2: a release on trial commits only once it has connected every server ' +
+      "0.10.2 had connected when it stopped, closed tabs aside. This start's log says why each one failed.",
+    ));
+    expect(readCurrent(root)).toBe('0.10.2');
+    expect(existsSync(installPaths(root).journal)).toBe(false);
+  });
+
+  test("a server the release before hadn't connected either doesn't hold the commit, and the start says so", () => {
+    moveCurrent(root, '0.10.2');
+    writeMark(root, { to: '0.11.0', why: 'update', connected: [] });
+    const logged = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(commitRelease(here, { now: at, unconnectedServers: () => ['discord'] })).toEqual({ from: '0.10.2' });
+      expect(logged.mock.calls).toEqual([[
+        "[update] The MCPL server discord isn't connected, and 0.10.2 hadn't connected it when it stopped either, so " +
+        "it doesn't hold this release's commit.",
+      ]]);
+    } finally {
+      logged.mockRestore();
+    }
+    expect(readCurrent(root)).toBe('0.11.0');
+    expect(readJournal(root).map(({ step }) => step)).toEqual(['commit']);
+  });
+
+  test('a request that records no servers, as a release before the record or a Go back from a shell writes, one for another release, or a mark that can\'t be read, counts every server', () => {
+    moveCurrent(root, '0.10.2');
+    const refusal = new Error(
+      "The MCPL servers discord, heartbeat weren't connected when this release went to commit, so it starts none of " +
+      "its agents, and the next start goes back to 0.10.2: a release on trial commits only once every server it's " +
+      "configured with is connected, closed tabs aside. This start's log says why each one failed.",
+    );
+    writeJsonAtomic(installPaths(root).mark, { v: 1, id: 'm1', to: '0.11.0', why: 'update', at: at.toISOString() });
+    expect(() => commitRelease(here, { now: at, unconnectedServers: () => ['discord', 'heartbeat'] })).toThrow(refusal);
+    writeMark(root, { to: '0.12.0', why: 'update', connected: [] });
+    expect(() => commitRelease(here, { now: at, unconnectedServers: () => ['discord', 'heartbeat'] })).toThrow(refusal);
+    writeFileSync(installPaths(root).mark, 'not json');
+    expect(() => commitRelease(here, { now: at, unconnectedServers: () => ['discord', 'heartbeat'] })).toThrow(refusal);
+    expect(readCurrent(root)).toBe('0.10.2');
   });
 
   test('a start already committed starts whatever its servers did', () => {

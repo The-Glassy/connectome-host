@@ -351,7 +351,12 @@ reasons unless the grant holds `ops` too.
   aren't waited for, and the stop ends them. Then the host stops, and its
   next start, which the service makes, copies the data, starts the new
   release on trial, and commits once that release has opened its stores and
-  connected its servers, closed tabs aside. The host comes back quiesced and resumes once its
+  connected every MCPL server the release before it had connected when it
+  stopped for the switch, closed tabs aside. A server that was already down
+  then doesn't hold the commit, and the new release's log names it. A switch
+  asked by a release that records no servers, as releases before this rule
+  don't, and a Go back asked from a shell, which has no running host to ask,
+  wait for every server instead. The host comes back quiesced and resumes once its
   agents have started; one you'd quiesced yourself stays quiesced. A host
   run in a terminal stops as `/quit` does: once it has stopped, start it
   again.

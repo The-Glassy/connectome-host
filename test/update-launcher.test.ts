@@ -367,6 +367,29 @@ describe('a switch', () => {
     expect(statSync(installPaths(root).copy).mode & 0o777).toBe(0o700);
   });
 
+  test('says what the trial must connect before its commit: the servers the request records, none, or, with no record, every server', async () => {
+    const says = (asked: string) => `[update] Starting 0.11.0 on trial, from 0.10.2. It commits once it has ${asked}; if it ` +
+      'ends before that, the next start goes back to 0.10.2 and its data.';
+    mark({ to: '0.11.0', why: 'update', connected: ['discord', 'heartbeat'] });
+    await decide(root, ops());
+    expect(reports.at(-1)).toBe(says('opened its stores and connected discord, heartbeat, the servers 0.10.2 had ' +
+      'connected when it stopped, closed tabs aside'));
+    for (const [connected, asked] of [
+      [[], 'opened its stores, since 0.10.2 had no server connected when it stopped'],
+      [undefined, 'opened its stores and connected its servers, closed tabs aside'],
+    ] as const) {
+      removeTree(root);
+      mkdirSync(root);
+      release('0.10.2');
+      release('0.11.0');
+      moveCurrent(root, '0.10.2');
+      writeJsonAtomic(installPaths(root).install, { v: 1, dataDir: data, extraState: [] } satisfies InstallRecord);
+      mark({ to: '0.11.0', why: 'update', ...(connected === undefined ? {} : { connected: [...connected] }) });
+      await decide(root, ops());
+      expect(reports.at(-1)).toBe(says(asked));
+    }
+  });
+
   test("a trial that ends before its commit: the next start puts the old data back, keeps the trial's aside, and the mark is spent", async () => {
     mark({ to: '0.11.0', why: 'update' });
     await decide(root, ops());

@@ -22,8 +22,14 @@ const CHECK_EVERY_MS = 24 * 60 * 60 * 1000;
 const RESTART_QUIESCE_MS = 120_000;
 const WAIT_LONGER_MS = 600_000;
 
+/** What a Restart uses of a framework: its switch's quiesce, and which MCPL
+ *  servers it has connected when it writes the mark (Mark.connected). */
+export type SwitchFramework = QuiesceFramework & {
+  listMcplServers(): ReadonlyArray<{ id: string; connected: boolean }>;
+};
+
 export interface UpdateHost {
-  framework(): QuiesceFramework;
+  framework(): SwitchFramework;
   fleet(): SwitchFleet | null;
 }
 
@@ -64,7 +70,7 @@ export class HostUpdate {
   private installing: string | null = null;
   private lastInstall: UpdateStatus['lastInstall'] = null;
   private restart: RestartState | null = null;
-  private quiescedFramework: QuiesceFramework | null = null;
+  private quiescedFramework: SwitchFramework | null = null;
   private endingSwitchQuiesce = false;
   private timer: ReturnType<typeof setInterval> | null = null;
 
@@ -352,7 +358,8 @@ export class HostUpdate {
     const restart = this.restart!;
     let unsynced: Error | null;
     try {
-      ({ unsynced } = writeMark(setup.here!.root, { to: restart.to, why: restart.why, keepData: restart.keepData }, this.now()));
+      const connected = this.quiescedFramework!.listMcplServers().filter((server) => server.connected).map((server) => server.id);
+      ({ unsynced } = writeMark(setup.here!.root, { to: restart.to, why: restart.why, keepData: restart.keepData, connected }, this.now()));
     } catch (error) {
       return this.callOff(`its mark couldn't be written: ${said(error)}`);
     }
