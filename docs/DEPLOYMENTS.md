@@ -358,10 +358,10 @@ reasons unless the grant holds `ops` too.
   instead, as before: a request asked by a release that doesn't record its
   servers, as releases before this rule don't; one to such a release, whose
   own check ignores the record; a Go back asked from a shell, which has no
-  running host to ask; and one whose record can't be read. The host comes back quiesced and resumes once its
-  agents have started; one you'd quiesced yourself stays quiesced. A host
-  run in a terminal stops as `/quit` does: once it has stopped, start it
-  again.
+  running host to ask; and one whose record can't be read. The host comes
+  back quiesced and resumes once its agents have started; one you'd quiesced
+  yourself stays quiesced. A host run in a terminal stops as `/quit` does:
+  once it has stopped, start it again.
 - **A release that ends before its commit** is undone at the next start: the
   copy is restored, what the new release changed is kept aside, and the
   release before starts. `/update` then says why, and shows the last 40

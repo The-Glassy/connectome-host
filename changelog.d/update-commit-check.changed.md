@@ -7,9 +7,9 @@
   new release is configured with but can't connect, where the old one had it
   connected, still sends the next start back to the old release. The old
   release records its servers in the request it writes as it stops, so these
-  still wait for every server, as before: the first update onto this
-  release, asked by a release that doesn't record its servers; a switch or Go
-  back to a release from before this one, whose own check ignores the
-  record; a Go back asked from a shell with `start.js --go-back`, which has
-  no running host to ask; and a request whose record can't be read. The
-  refusal then says that no readable record named the servers.
+  still wait for every server, as before: the first update onto this release,
+  asked by a release that doesn't record its servers; a Go back to a release
+  from before this one, whose own check ignores the record; a Go back asked
+  from a shell with `start.js --go-back`, which has no running host to ask;
+  and a request whose record can't be read. The refusal then says that no
+  readable record named the servers.

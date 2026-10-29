@@ -6,9 +6,11 @@
   another and no switch or Go back is under way; a trial that can't tell
   which places its fallback puts back, can't open its active session's
   store, or can't open every other store it would open after its commit;
-  and a trial whose MCPL server didn't connect. Each of these but the first
-  comes after the trial's log has started, so for a release on trial that
-  went back, `/update` shows it among the trial's last lines too. Before,
+  and a trial whose MCPL server didn't connect. When a release on trial
+  refuses after its trial's log has started, `/update` also shows the
+  refusal among the trial's last lines once it has gone back; a refusal
+  about the install's releases, or about a `current` already missing or
+  unreadable when the start begins, comes before that log starts. Before,
   each came as `Fatal error:` with a stack, which read as a crash.
 - Installing a release where the copy's label is missing and the journal
   records no copy taken no longer says the label "was lost".
