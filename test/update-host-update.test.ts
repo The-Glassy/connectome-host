@@ -382,6 +382,28 @@ describe('Restart', () => {
     expect(readMark(back.root)).toMatchObject({ to: '0.12.1', why: 'go-back', connected: ['heartbeat'] });
   });
 
+  test('the mark records the servers connected when the host stops, after the wait for turns or at stop now, not those connected when the restart was asked', async () => {
+    for (const stop of ['after the wait', 'stop now'] as const) {
+      const servers = [
+        { id: 'heartbeat', connected: true, closedTab: false },
+        { id: 'discord', connected: false, closedTab: false },
+      ];
+      const { root, dataDir } = install('0.12.1', ['0.13.0']);
+      const { framework, drain } = fakeFramework({ holders: ['alice'], drainAfter: Infinity, servers });
+      const { update } = hostUpdate({ root, dataDir, framework }, { supervised: true });
+      expect((await update.restartToInstalled()).done).toBe(false);
+      servers[0]!.connected = false;
+      servers[1]!.connected = true;
+      if (stop === 'after the wait') {
+        drain();
+        expect((await update.waitLonger()).done).toBe(true);
+      } else {
+        expect((await update.stopNow()).done).toBe(true);
+      }
+      expect(readMark(root)).toMatchObject({ to: '0.13.0', why: 'update', connected: ['discord'] });
+    }
+  });
+
   test("an unsupervised host stops as /quit does, and says to start it again", async () => {
     const { root, dataDir } = install('0.12.1', ['0.13.0']);
     const { update, stops } = hostUpdate({ root, dataDir }, { supervised: false });

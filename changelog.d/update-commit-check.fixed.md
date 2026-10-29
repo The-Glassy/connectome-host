@@ -1,13 +1,14 @@
 - When the self-update refuses an installed host's start, before any agent
-  starts, the host now gives the refusal as the plain sentence it is: in its
-  log, and, for a release on trial that went back, in the trial's lines
-  `/update` shows. That covers an install none or several of whose releases
-  hold the host, or whose releases can't be read; a `current` that is
-  missing or couldn't be read, moved or synced; a release started where
-  `current` names another and no switch or Go back is under way; a trial
-  that can't tell which places its fallback puts back, can't open its
-  active session's store, or can't open every other store it would open
-  after its commit; and a trial whose MCPL server didn't connect. Before,
+  starts, the host now gives the refusal as the plain sentence it is, in its
+  log. That covers an install none or several of whose releases hold the
+  host, or whose releases can't be read; a `current` that is missing or
+  couldn't be read, moved or synced; a release started where `current` names
+  another and no switch or Go back is under way; a trial that can't tell
+  which places its fallback puts back, can't open its active session's
+  store, or can't open every other store it would open after its commit;
+  and a trial whose MCPL server didn't connect. Each of these but the first
+  comes after the trial's log has started, so for a release on trial that
+  went back, `/update` shows it among the trial's last lines too. Before,
   each came as `Fatal error:` with a stack, which read as a crash.
 - Installing a release where the copy's label is missing and the journal
   records no copy taken no longer says the label "was lost".

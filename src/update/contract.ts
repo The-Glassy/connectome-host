@@ -247,11 +247,11 @@ export interface Mark {
   /** A Go back that keeps the newer data instead of restoring the copy. */
   keepData?: boolean;
   /** The ids of the MCPL servers the host had connected when it wrote this
-   *  mark. Only these hold the commit of the release it asks for
-   *  (commitRelease). The launcher's Go back from a shell has no host to ask
-   *  and writes none, and a release before this field wrote none; then every
-   *  server the release on trial is configured with holds its commit, closed
-   *  tabs aside. */
+   *  mark. A release that reads this field holds its commit only for these
+   *  (commitRelease); one from before the field ignores it. The launcher's
+   *  Go back from a shell has no host to ask and writes none, and a release
+   *  before this field wrote none; then every server the release on trial is
+   *  configured with holds its commit, closed tabs aside. */
   connected?: string[];
 }
 

@@ -165,7 +165,11 @@ describe('commitRelease', () => {
     const start = () => commitRelease(here, { now: at, unconnectedServers: () => ['discord', 'heartbeat'] });
     writeJsonAtomic(installPaths(root).mark, { v: 1, id: 'm1', to: '0.11.0', why: 'update', at: at.toISOString() });
     expect(refusal(start)).toBe(every);
+    writeJsonAtomic(installPaths(root).mark, { v: 1, id: 'm1', to: '0.11.0', why: 'go-back', at: at.toISOString(), keepData: true });
+    expect(refusal(start)).toBe(every);
     writeJsonAtomic(installPaths(root).mark, { v: 1, id: 'm1', to: '0.11.0', why: 'update', at: at.toISOString(), connected: [42] });
+    expect(refusal(start)).toBe(every);
+    writeJsonAtomic(installPaths(root).mark, { v: 1, id: 'm1', to: '0.11.0', why: 'update', at: at.toISOString(), connected: 'heartbeat' });
     expect(refusal(start)).toBe(every);
     writeMark(root, { to: '0.12.0', why: 'update', connected: [] });
     expect(refusal(start)).toBe(every);
