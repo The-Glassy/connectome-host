@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'bun:test';
 import { isClientMessage } from '../src/web/protocol.js';
 
-/** The session the page showed, which every message acting on this process carries. */
 const S = { sessionId: 's1' };
 
 describe('settings messages — wire validation', () => {

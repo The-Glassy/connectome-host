@@ -14,12 +14,11 @@
  *
  * v3: the seven messages that change a session (`rollback`, `suppress`,
  * `pin-add`, `pin-remove`, `settings-update`, `settings-reset` and
- * `settings-cancel-transition`) carry `sessionId`, the `welcome.session.id`
- * the page showed when the operator prepared them. It's required whenever
- * the message acts on this process, and the server refuses one prepared
- * against a session that is no longer the open one. A message that names a
- * fleet child in `scope` carries none, since the page knows no child's
- * session.
+ * `settings-cancel-transition`) carry `sessionId`, the session whose data the
+ * operator chose the change from, and the server refuses one chosen in a
+ * session that isn't the open one. Rollback and suppress always carry it. A
+ * pin or settings change carries it unless its `scope` names a fleet child,
+ * whose session the page doesn't know, and then carries none.
  */
 
 import type { Line } from '../output-line.js';
@@ -930,7 +929,6 @@ export interface PinAddMessage {
   type: 'pin-add';
   /** Fleet child name, or 'local'/undefined for the parent process. */
   scope?: string;
-  /** The session the page showed; required unless `scope` names a fleet child. */
   sessionId?: string;
   agent?: string;
   kind?: 'pin' | 'document';
@@ -946,7 +944,6 @@ export interface PinRemoveMessage {
   type: 'pin-remove';
   /** Fleet child name, or 'local'/undefined for the parent process. */
   scope?: string;
-  /** The session the page showed; required unless `scope` names a fleet child. */
   sessionId?: string;
   agent?: string;
   pinId: string;
@@ -984,7 +981,6 @@ export interface SettingsUpdateMessage {
   type: 'settings-update';
   /** Fleet child name, or 'local'/undefined for the parent process. */
   scope?: string;
-  /** The session the page showed; required unless `scope` names a fleet child. */
   sessionId?: string;
   agent?: string;
   contextBudgetTokens?: number;
@@ -1025,7 +1021,6 @@ export interface SettingsResetMessage {
   type: 'settings-reset';
   /** Fleet child name, or 'local'/undefined for the parent process. */
   scope?: string;
-  /** The session the page showed; required unless `scope` names a fleet child. */
   sessionId?: string;
   agent?: string;
   keys?: string[];
@@ -1038,7 +1033,6 @@ export interface SettingsCancelTransitionMessage {
   type: 'settings-cancel-transition';
   /** Fleet child name, or 'local'/undefined for the parent process. */
   scope?: string;
-  /** The session the page showed; required unless `scope` names a fleet child. */
   sessionId?: string;
   agent?: string;
   persist?: boolean;
@@ -1103,7 +1097,6 @@ export interface ObserverHelloMessage {
 export interface RollbackMessage {
   type: 'rollback';
   messageId: string;
-  /** The session the page showed when the operator chose `messageId`. */
   sessionId: string;
   /** Agent name; defaults to the recipe's primary agent. */
   agent?: string;
@@ -1117,7 +1110,6 @@ export interface RollbackMessage {
 export interface SuppressMessage {
   type: 'suppress';
   messageIds: string[];
-  /** The session the page showed when the operator chose `messageIds`. */
   sessionId: string;
   agent?: string;
   note?: string;
@@ -1367,7 +1359,6 @@ function isOptionalScope(v: unknown): v is string | undefined {
   return v === undefined || typeof v === 'string';
 }
 
-/** True when `scope` names a fleet child rather than this process. */
 export function isChildScope(scope: string | undefined): scope is string {
   return scope !== undefined && scope !== '' && scope !== 'local';
 }

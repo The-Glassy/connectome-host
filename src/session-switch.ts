@@ -64,16 +64,30 @@ export function refusedWhileSwitching(app: { switching?: boolean }, what: string
     : null;
 }
 
-/** The refusal of an action prepared against `prepared` when `open` is the
- *  session open now, or null when they're the same. */
+type NamedSession = { id: string; name: string };
+
 export function refusedForAnotherSession(
-  open: string | undefined,
-  prepared: string,
+  sessions: {
+    getActiveSession(): NamedSession | null;
+    findSession(nameOrId: string): NamedSession | null | undefined;
+  },
+  chosenIn: string,
   what: string,
 ): string | null {
-  return open === prepared
-    ? null
-    : `${what} refused: it was prepared in a session that isn't the open one now. Nothing changed; choose again in the open session.`;
+  let open: NamedSession | null;
+  try {
+    open = sessions.getActiveSession();
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return `${what} refused: the host couldn't read which session is open (${reason}). Nothing changed.`;
+  }
+  if (open?.id === chosenIn) return null;
+  const chosen = sessions.findSession(chosenIn);
+  const label = (s: NamedSession | null | undefined, id: string) => s ? `session "${s.name}"` : `session ${id}`;
+  if (!open) {
+    return `${what} refused: it was chosen in ${label(chosen, chosenIn)}, and no session is open now. Nothing changed.`;
+  }
+  return `${what} refused: it was chosen in ${label(chosen, chosenIn)}, and ${label(open, open.id)} is open now. Nothing changed; choose again in ${label(open, open.id)}.`;
 }
 
 const running = new WeakMap<object, Map<symbol, string>>();

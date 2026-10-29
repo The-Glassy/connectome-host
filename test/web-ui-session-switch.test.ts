@@ -179,50 +179,92 @@ describe("the web UI's own entry during a session switch", () => {
   }, TEST_MS);
 });
 
-describe('a change the page prepared in one session, sent once another is open', () => {
+describe('a change chosen in one session, sent once another is open', () => {
   const other = (what: string) =>
-    `${what} refused: it was prepared in a session that isn't the open one now. Nothing changed; choose again in the open session.`;
+    `${what} refused: it was chosen in session "first", and session "second" is open now. Nothing changed; choose again in session "second".`;
 
-  test("a rollback chosen in the session before a switch is refused, and the open session's branch isn't moved", async () => {
-    const rollbacks: unknown[] = [];
-    const rollbackToMessage = async (...args: unknown[]) => {
-      rollbacks.push(args);
-      return { sourceBranch: 'main', targetBranch: 'b2', messagesRemoved: 1, lastVisible: null };
+  function recordingApp(reached: string[]) {
+    const framework = {
+      rollbackToMessage: async (_agent: string, opts: { messageId: string }) => {
+        reached.push(`rollback ${opts.messageId}`);
+        return { sourceBranch: 'main', targetBranch: 'b2', messagesRemoved: 1, lastVisible: null };
+      },
+      suppressMessages: async (_agent: string, opts: { messageIds: string[] }) => {
+        reached.push(`suppress ${opts.messageIds.join(',')}`);
+        return { sourceBranch: 'main', targetBranch: 'b3', messagesRemoved: 1 };
+      },
+      updateAgentRuntimeSettings: () => { reached.push('settings-update'); },
+      resetAgentRuntimeSettings: () => { reached.push('settings-reset'); },
+      cancelAgentRuntimeSettingsTransition: () => { reached.push('settings-cancel-transition'); },
     };
-    webUiModule.setApp(hostApp({ rollbackToMessage }, false, [], { open: 's2' }) as never);
+    const cm = {
+      pinRange: (first: string) => { reached.push(`pin-add ${first}`); return 'pin-1'; },
+      markDocument: (first: string) => { reached.push(`document ${first}`); return 'pin-1'; },
+      unpin: (id: string) => { reached.push(`pin-remove ${id}`); return true; },
+      listPins: () => [],
+    };
+    return hostApp(framework, false, [], { open: 's2', cm });
+  }
+
+  const changes: Array<[Record<string, unknown>, (r: Reply) => boolean, Reply]> = [
+    [
+      { type: 'rollback', corrId: 'rb', messageId: 'm1' },
+      (r) => r.corrId === 'rb',
+      { type: 'surgery-result', corrId: 'rb', op: 'rollback', ok: false, error: other('rollback') },
+    ],
+    [
+      { type: 'suppress', corrId: 'sp', messageIds: ['m1'] },
+      (r) => r.corrId === 'sp',
+      { type: 'surgery-result', corrId: 'sp', op: 'suppress', ok: false, error: other('suppress') },
+    ],
+    ...(['pin-add', 'pin-remove', 'settings-update', 'settings-reset', 'settings-cancel-transition'] as const).map(
+      (type): [Record<string, unknown>, (r: Reply) => boolean, Reply] => [
+        { type, ...{ 'pin-add': { firstMessageId: 'm1' }, 'pin-remove': { pinId: 'pin-0' }, 'settings-update': { tailTokens: 4000 } }[type as string] },
+        (r) => r.type === 'error' && String(r.message).startsWith(type),
+        { type: 'error', message: other(type) },
+      ],
+    ),
+  ];
+
+  for (const [change, isAnswer, refusal] of changes) {
+    test(`${change.type} chosen in the session before a switch is refused in its own reply form, and reaches nothing of the open session`, async () => {
+      const reached: string[] = [];
+      webUiModule.setApp(recordingApp(reached) as never);
+      const client = await connect();
+      try {
+        client.send({ ...change, sessionId: 's1' });
+        const answer = await client.next(`the stale ${change.type}'s answer`, (r) => isAnswer(r) || r.type === 'pins-list' || r.type === 'settings-state');
+        expect(reached).toEqual([]);
+        expect(answer).toEqual(refusal);
+      } finally {
+        client.close();
+      }
+    }, TEST_MS);
+  }
+
+  test('a rollback and a pin removal chosen in the open session go through', async () => {
+    const reached: string[] = [];
+    webUiModule.setApp(recordingApp(reached) as never);
     const client = await connect();
     try {
-      client.send({ type: 'rollback', corrId: 'stale', messageId: 'm1', sessionId: 's1' });
-      expect(await client.next("the stale rollback's surgery-result", (r) => r.corrId === 'stale')).toEqual({
-        type: 'surgery-result', corrId: 'stale', op: 'rollback', ok: false, error: other('rollback'),
-      });
-      expect(rollbacks).toEqual([]);
-
       client.send({ type: 'rollback', corrId: 'shown', messageId: 'm1', sessionId: 's2' });
       expect((await client.next("the open session's rollback", (r) => r.corrId === 'shown')).ok).toBe(true);
-      expect(rollbacks).toHaveLength(1);
+      client.send({ type: 'pin-remove', pinId: 'pin-0', sessionId: 's2' });
+      await client.next('the pins list after the removal', (r) => r.type === 'pins-list');
+      expect(reached).toEqual(['rollback m1', 'pin-remove pin-0']);
     } finally {
       client.close();
     }
   }, TEST_MS);
 
-  test("a pin removal chosen in the session before a switch is refused, and the open session's pin of that id stays", async () => {
-    const unpinned: string[] = [];
-    const cm = {
-      pinRange: () => 'pin-1',
-      unpin: (id: string) => { unpinned.push(id); return true; },
-      listPins: () => [],
-    };
-    webUiModule.setApp(hostApp({}, false, [], { open: 's2', cm }) as never);
+  test("a change that doesn't say which session it was chosen in is refused as malformed and reaches nothing", async () => {
+    const reached: string[] = [];
+    webUiModule.setApp(recordingApp(reached) as never);
     const client = await connect();
     try {
-      client.send({ type: 'pin-remove', pinId: 'pin-0', sessionId: 's1' });
-      const answer = await client.next(
-        "the stale removal's answer",
-        (r) => (r.type === 'error' && String(r.message).startsWith('pin-remove')) || r.type === 'pins-list',
-      );
-      expect(unpinned).toEqual([]);
-      expect(answer).toEqual({ type: 'error', message: other('pin-remove') });
+      client.send({ type: 'rollback', corrId: 'unstamped', messageId: 'm1' });
+      expect(await client.next('the malformed answer', (r) => r.type === 'error')).toEqual({ type: 'error', message: 'unknown message shape' });
+      expect(reached).toEqual([]);
     } finally {
       client.close();
     }

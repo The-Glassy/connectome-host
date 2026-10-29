@@ -72,11 +72,13 @@ function kindOf(c: unknown): 'tool_use' | 'tool_result' | null {
 
 export function ContextDocument(props: {
   scope?: string;
+  session: string | null;
   scrollRoot?: () => HTMLElement | undefined;
   canRollback?: boolean;
-  onRollback?: (messageId: string, preview: string) => void;
+  onRollback?: (messageId: string, preview: string, chosenIn: string | null) => void;
 }) {
   const [msgs, setMsgs] = createSignal<Msg[]>([]);
+  const [msgsSession, setMsgsSession] = createSignal<string | null>(null);
   const [stats, setStats] = createSignal<Stats | null>(null);
   const [exact, setExact] = createSignal<number | null>(null);
   const [err, setErr] = createSignal<string | null>(null);
@@ -88,6 +90,8 @@ export function ContextDocument(props: {
 
   const load = async () => {
     const scopeAtStart = props.scope;
+    const sessionAtStart = props.session;
+    const moved = () => props.scope !== scopeAtStart || props.session !== sessionAtStart;
     setLoading(true); setErr(null);
     try {
       const q = query();
@@ -100,16 +104,17 @@ export function ContextDocument(props: {
         throw new Error(body?.error ?? `context HTTP ${ctxRes.status}`);
       }
       const ctx = await ctxRes.json();
-      if (props.scope !== scopeAtStart) return;
+      if (moved()) return;
       setMsgs((ctx?.request?.messages ?? []) as Msg[]);
+      setMsgsSession(sessionAtStart);
       if (mkRes.ok) { const mk = await mkRes.json(); setStats(mk.stats); setExact(mk.exactTotalTokens); }
     } catch (e) {
-      if (props.scope !== scopeAtStart) return;
+      if (moved()) return;
       setErr(e instanceof Error ? e.message : String(e));
     } finally { setLoading(false); }
   };
-  createEffect(on(() => props.scope, () => {
-    setMsgs([]); setStats(null); setExact(null); setErr(null);
+  createEffect(on(() => [props.scope, props.session], () => {
+    setMsgs([]); setMsgsSession(null); setStats(null); setExact(null); setErr(null);
     void load();
   }));
 
@@ -204,7 +209,7 @@ export function ContextDocument(props: {
                           type="button"
                           class="opacity-40 group-hover:opacity-100 focus:opacity-100 px-1.5 py-0.5 rounded border border-neutral-700 text-neutral-400 hover:border-amber-700 hover:text-amber-200 transition-opacity"
                           title="roll back: make this message the tail of the live branch"
-                          onClick={() => props.onRollback?.(m.sourceMessageId!, `${who}: ${t.replace(/\s+/g, ' ').slice(0, 90)}`)}
+                          onClick={() => props.onRollback?.(m.sourceMessageId!, `${who}: ${t.replace(/\s+/g, ' ').slice(0, 90)}`, msgsSession())}
                         >⏪ roll back to here</button>
                       </Show>
                       <span class="text-neutral-600">~{fmt(estTokens(t) + images.length * 1600)} tok</span>

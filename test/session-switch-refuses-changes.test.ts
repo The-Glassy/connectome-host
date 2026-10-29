@@ -87,13 +87,13 @@ describe('while a session switch is under way, a read answers as it does without
 });
 
 describe('a session switch is not started while a command that changes the session, given earlier, is still running', () => {
-  const aMacrotask = () => new Promise((resolve) => setTimeout(resolve, 0));
-
-  function appWithCheckout(): { app: App; finish: () => void; created: string[]; moves: string[] } {
+  function appWithCheckout(): { app: App; finish: () => void; entered: Promise<void>; created: string[]; moves: string[] } {
     const created: string[] = [];
     const moves: string[] = [];
     let finish = () => {};
     const switched = new Promise<void>((resolve) => { finish = resolve; });
+    let enter = () => {};
+    const entered = new Promise<void>((resolve) => { enter = resolve; });
     const agent = {
       name: 'main',
       state: { status: 'idle' },
@@ -107,6 +107,7 @@ describe('a session switch is not started while a command that changes the sessi
         getStore: () => ({ currentBranch: () => ({ name: 'main' }) }),
         switchBranch: (branch: string) => {
           moves.push(branch);
+          enter();
           return switched;
         },
       } as unknown as AgentFramework,
@@ -122,14 +123,14 @@ describe('a session switch is not started while a command that changes the sessi
       branchState: { checkpoints: new Map(), undoStack: [], redoStack: [] } as never,
       switchSession: async () => {},
     };
-    return { app, finish, created, moves };
+    return { app, finish, entered, created, moves };
   }
 
   test('/session switch and /session new name the command and start nothing until it has finished', async () => {
-    const { app, finish, created, moves } = appWithCheckout();
+    const { app, finish, entered, created, moves } = appWithCheckout();
     const checkout = handleCommand('/checkout side', app);
     expect(checkout.asyncWork).toBeDefined();
-    await aMacrotask();
+    await entered;
     expect(moves).toEqual(['side']);
 
     for (const command of ['/session switch second', '/session new third']) {
@@ -149,9 +150,9 @@ describe('a session switch is not started while a command that changes the sessi
   });
 
   test("while work is running, /session switch still answers its own usage, not-found and already-on lines", async () => {
-    const { app, finish } = appWithCheckout();
+    const { app, finish, entered } = appWithCheckout();
     const checkout = handleCommand('/checkout side', app);
-    await aMacrotask();
+    await entered;
     const said = (command: string) => handleCommand(command, app).lines.map((line) => line.text);
     expect(said('/session switch second')).toEqual([
       "/checkout is still running, so the switch isn't started; try again once it has finished.",
@@ -183,17 +184,19 @@ describe('a session switch is not started while a command that changes the sessi
 
   test("a command that changes no session, such as /auth login, doesn't hold a switch off while its work runs", async () => {
     const sessions = [{ id: 's1', name: 'first' }, { id: 's2', name: 'second' }];
+    let enter = () => {};
+    const entered = new Promise<void>((resolve) => { enter = resolve; });
     const app: App = {
       ...readableApp(false),
       sessionManager: {
         findSession: (nameOrId: string) => sessions.find((s) => s.id === nameOrId || s.name === nameOrId),
         getActiveSession: () => sessions[0],
       } as never,
-      credentials: { runAction: () => new Promise(() => {}) } as never,
+      credentials: { runAction: () => { enter(); return new Promise(() => {}); } } as never,
     };
     const login = handleCommand('/auth login', app);
     expect(login.asyncWork).toBeDefined();
-    await aMacrotask();
+    await entered;
     expect(handleCommand('/session switch second', app).switchToSessionId).toBe('s2');
   });
 });
@@ -343,40 +346,62 @@ describe("the web UI's actions that change the session are refused while a sessi
   });
 });
 
-describe('a web UI change prepared in one session is never made in another', () => {
+describe('a web UI change chosen in one session is never made in another', () => {
+  const named = [{ id: 's1', name: 'first' }, { id: 's2', name: 'second' }];
+  const sessions = (open: string | null) => ({
+    getActiveSession: () => named.find((s) => s.id === open) ?? null,
+    findSession: (nameOrId: string) => named.find((s) => s.id === nameOrId || s.name === nameOrId) ?? null,
+  });
   const other = (what: string) =>
-    `${what} refused: it was prepared in a session that isn't the open one now. Nothing changed; choose again in the open session.`;
-  const changes: Array<[WebUiClientMessage, unknown]> = [
+    `${what} refused: it was chosen in session "first", and session "second" is open now. Nothing changed; choose again in session "second".`;
+  const changes: Array<[WebUiClientMessage, (text: string) => unknown]> = [
     [
       { type: 'rollback', corrId: 'c1', messageId: 'm1', sessionId: 's1' },
-      { type: 'surgery-result', corrId: 'c1', op: 'rollback', ok: false, error: other('rollback') },
+      (error) => ({ type: 'surgery-result', corrId: 'c1', op: 'rollback', ok: false, error }),
     ],
     [
       { type: 'suppress', corrId: 'c2', messageIds: ['m1'], sessionId: 's1' },
-      { type: 'surgery-result', corrId: 'c2', op: 'suppress', ok: false, error: other('suppress') },
+      (error) => ({ type: 'surgery-result', corrId: 'c2', op: 'suppress', ok: false, error }),
     ],
-    [{ type: 'pin-add', firstMessageId: 'm1', sessionId: 's1' }, { type: 'error', message: other('pin-add') }],
-    [{ type: 'pin-remove', pinId: 'pin-0', sessionId: 's1' }, { type: 'error', message: other('pin-remove') }],
-    [{ type: 'settings-update', tailTokens: 4000, sessionId: 's1' }, { type: 'error', message: other('settings-update') }],
-    [{ type: 'settings-reset', sessionId: 's1' }, { type: 'error', message: other('settings-reset') }],
-    [{ type: 'settings-cancel-transition', sessionId: 's1' }, { type: 'error', message: other('settings-cancel-transition') }],
+    [{ type: 'pin-add', firstMessageId: 'm1', sessionId: 's1' }, (message) => ({ type: 'error', message })],
+    [{ type: 'pin-remove', pinId: 'pin-0', sessionId: 's1' }, (message) => ({ type: 'error', message })],
+    [{ type: 'settings-update', tailTokens: 4000, sessionId: 's1' }, (message) => ({ type: 'error', message })],
+    [{ type: 'settings-reset', sessionId: 's1' }, (message) => ({ type: 'error', message })],
+    [{ type: 'settings-cancel-transition', sessionId: 's1' }, (message) => ({ type: 'error', message })],
   ];
   for (const [message, reply] of changes) {
-    test(`${message.type} prepared in another session is answered in its own reply form, saying nothing changed`, () => {
+    test(`${message.type} chosen in another session is answered in its own reply form, naming both sessions and saying nothing changed`, () => {
       expect(isClientMessage(message)).toBe(true);
-      expect(sessionRefusalFor('s2', message)).toEqual(reply as never);
-      expect(sessionRefusalFor(undefined, message)).toEqual(reply as never);
-      expect(sessionRefusalFor('s1', message)).toBeNull();
+      expect(sessionRefusalFor(sessions('s2'), message)).toEqual(reply(other(message.type)) as never);
+      expect(sessionRefusalFor(sessions('s1'), message)).toBeNull();
     });
 
-    test(`${message.type} that doesn't say which session it was prepared in isn't a message the server takes`, () => {
-      const { sessionId: _shown, ...unstamped } = message as WebUiClientMessage & { sessionId: string };
-      expect(isClientMessage(unstamped)).toBe(false);
-      expect(isClientMessage({ ...unstamped, sessionId: '' })).toBe(false);
+    test(`${message.type} that doesn't say which session it was chosen in isn't a message the server takes, whatever its scope says`, () => {
+      const { sessionId: _chosenIn, ...unstamped } = message as WebUiClientMessage & { sessionId: string };
+      for (const scope of [undefined, 'local', '']) {
+        const local = scope === undefined ? unstamped : { ...unstamped, scope };
+        if (scope !== undefined && (message.type === 'rollback' || message.type === 'suppress')) continue;
+        expect(isClientMessage(local)).toBe(false);
+        expect(isClientMessage({ ...local, sessionId: '' })).toBe(false);
+        expect(isClientMessage({ ...local, sessionId: 's1' })).toBe(true);
+      }
     });
   }
 
-  test("a pin or settings change for a fleet child carries no session, since the page knows none of a child's", () => {
+  test('with no session open, or an index that can\'t be read, a change is refused saying so', () => {
+    const message = { type: 'pin-remove', pinId: 'pin-0', sessionId: 's1' } as WebUiClientMessage;
+    expect(sessionRefusalFor(sessions(null), message)).toEqual({
+      type: 'error',
+      message: 'pin-remove refused: it was chosen in session "first", and no session is open now. Nothing changed.',
+    });
+    const unreadable = { getActiveSession: () => { throw new Error('sessions.json is truncated'); }, findSession: () => null };
+    expect(sessionRefusalFor(unreadable, message)).toEqual({
+      type: 'error',
+      message: "pin-remove refused: the host couldn't read which session is open (sessions.json is truncated). Nothing changed.",
+    });
+  });
+
+  test("a pin or settings change for a fleet child carries no session, since the page knows none of a child's, and isn't checked", () => {
     for (const message of [
       { type: 'pin-add', scope: 'child', firstMessageId: 'm1' },
       { type: 'pin-remove', scope: 'child', pinId: 'pin-0' },
@@ -386,19 +411,20 @@ describe('a web UI change prepared in one session is never made in another', () 
     ]) {
       expect(isClientMessage(message)).toBe(true);
       expect(isClientMessage({ ...message, sessionId: 's1' })).toBe(false);
-      expect(sessionRefusalFor('s2', message as WebUiClientMessage)).toBeNull();
+      expect(sessionRefusalFor(sessions('s2'), { ...message, sessionId: 's1' } as WebUiClientMessage)).toBeNull();
     }
   });
 
-  test('a message that changes no session is never refused for its session', () => {
+  test('a message that changes no session is never refused for a session it carries', () => {
     for (const message of [
       { type: 'request-pins' },
       { type: 'request-settings' },
       { type: 'fleet-stop', name: 'child' },
       { type: 'host-quiesce' },
+      { type: 'host-resume' },
       { type: 'user-message', content: 'hello' },
-    ] as WebUiClientMessage[]) {
-      expect(sessionRefusalFor('s2', message)).toBeNull();
+    ]) {
+      expect(sessionRefusalFor(sessions('s2'), { ...message, sessionId: 's1' } as WebUiClientMessage)).toBeNull();
     }
   });
 });

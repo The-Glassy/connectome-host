@@ -191,8 +191,6 @@ const HEALTH_ROUTE_STRINGS: ReadonlyMap<string, KeptStrings> = new Map<string, K
   ['/credential', CREDENTIAL_STRINGS],
 ]);
 
-/** A refusal of `message` in its own reply form, with the text `refusal`
- *  gives for it, or null when `refusal` gives none. */
 function refusalReply(
   message: WebUiClientMessage,
   refusal: (what: string) => string | null,
@@ -229,15 +227,20 @@ export function switchRefusalFor(
   return refusalReply(message, (what) => refusedWhileSwitching(app, what));
 }
 
-/** The refusal of a message prepared against a session other than the open
- *  one, or null for a message that carries no session or names the open one. */
+const CHANGES_STAMPED_WITH_THEIR_SESSION: ReadonlySet<string> = new Set([
+  'rollback',
+  'suppress',
+  ...PANEL_OPS_THAT_CHANGE_THE_SESSION,
+]);
+
 export function sessionRefusalFor(
-  openSessionId: string | undefined,
+  sessions: Pick<SessionManager, 'getActiveSession' | 'findSession'>,
   message: WebUiClientMessage,
 ): WebUiServerMessage | null {
-  const prepared = (message as { sessionId?: string }).sessionId;
-  if (prepared === undefined) return null;
-  return refusalReply(message, (what) => refusedForAnotherSession(openSessionId, prepared, what));
+  if (!CHANGES_STAMPED_WITH_THEIR_SESSION.has(message.type)) return null;
+  const chosenIn = (message as { sessionId?: string }).sessionId;
+  if (chosenIn === undefined) return null;
+  return refusalReply(message, (what) => refusedForAnotherSession(sessions, chosenIn, what));
 }
 
 function panelErrorResponse(err: unknown): Response {
@@ -1636,8 +1639,7 @@ export class WebUiModule implements Module {
       return;
     }
     const app = sharedServer.app;
-    const refused = switchRefusalFor(app, parsed)
-      ?? sessionRefusalFor(app.sessionManager.getActiveSession()?.id, parsed);
+    const refused = switchRefusalFor(app, parsed) ?? sessionRefusalFor(app.sessionManager, parsed);
     if (refused) {
       this.send(client, refused);
       if (parsed.type === 'host-quiesce' || parsed.type === 'host-resume') this.broadcastHostMode();
