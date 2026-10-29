@@ -128,6 +128,7 @@ export async function openSocket(socketPath: string): Promise<HostClient | NoHos
         }
         continue;
       }
+      if (event.replay === true) continue;
       const corrId = typeof event.corrId === 'string' ? event.corrId : null;
       const answer = corrId === null ? undefined : pending.get(corrId);
       if (answer !== undefined) {

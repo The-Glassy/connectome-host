@@ -556,6 +556,25 @@ test('send whose line the agent takes no turn for says so and exits 1', async ()
     'can answer it later. Sending it again won\'t undo a decline, and could deliver it twice.');
 });
 
+test('send to a host that replays its boot to it, as to a first client, takes none of that boot\'s turn for its line\'s', async () => {
+  const { root, data } = install();
+  const { path } = writeInstallCommand(root, '');
+  await fakeHost(data, (message, reply) => {
+    if (message.type === 'connected') {
+      reply({ type: 'inference:started', agentName: 'resident', replay: true });
+      reply({ type: 'inference:failed', agentName: 'resident', error: 'HTTP 500 at boot', replay: true });
+      reply({ type: 'inference:aborted', agentName: 'resident', reason: 'stopped at boot', replay: true });
+      return;
+    }
+    if (message.type !== 'text') return;
+    reply({ type: 'lifecycle', phase: 'turn-work-done', texts: 1 });
+  });
+  const ran = await run(path, ['send', 'hello'], root);
+  expect(ran.status).toBe(1);
+  expect(ran.err).not.toContain('at boot');
+  expect(ran.err).toContain('the host took the message, and the agent started no turn for it before its turn work ended.');
+});
+
 test('send to a host already in a turn hears an end of it that comes right behind ready, and sends', async () => {
   const { root, data } = install();
   const { path } = writeInstallCommand(root, '');
