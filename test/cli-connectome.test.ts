@@ -387,7 +387,9 @@ test('send to a host whose connection closes while it waits for the turn to end 
   const ran = await run(path, ['send', 'hello'], root);
   expect(ran.status).toBe(1);
   expect(asked).not.toContain('text');
-  expect(ran.err).toContain('the connection closed before the agent\'s turn ended, so nothing was sent.');
+  expect(ran.err).toContain('the connection closed before the agent\'s turn ended, so nothing was sent. The host ' +
+    'stopping closes it, and so does another connectome command connecting. The host also closes it when output for ' +
+    'it backs up and stays backed up for 5 minutes, as when this command is suspended.');
 });
 
 test('send that waits for the turn to end keeps waiting past its limit while the host keeps sending events, another agent\'s included', async () => {
@@ -817,12 +819,15 @@ test('send whose connection closes before the agent goes quiet says what was and
   expect(ran.status).toBe(1);
   expect(ran.out).toBe('Starting on it.\n');
   expect(ran.err).toContain('the connection closed before the agent\'s turn ended, so the rest of its reply wasn\'t seen ' +
-    'here. The host stopping closes it, and so does another connectome command connecting.');
+    'here. The host stopping closes it, and so does another connectome command connecting. The host also closes it ' +
+    'when output for it backs up and stays backed up for 5 minutes, as when this command is suspended.');
   speak = false;
   const silent = await run(path, ['send', 'hello'], root);
   expect(silent.status).toBe(1);
   expect(silent.out).toBe('');
   expect(silent.err).toContain('the connection closed before any reply. If the host hadn\'t read the message yet, it never reached');
+  expect(silent.err).toContain('the host drops what it hadn\'t read. The host also closes it when output for it ' +
+    'backs up and stays backed up for 5 minutes, as when this command is suspended.');
   start = true;
   const begun = await run(path, ['send', 'hello'], root);
   expect(begun.status).toBe(1);

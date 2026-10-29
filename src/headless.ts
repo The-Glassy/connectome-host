@@ -39,6 +39,7 @@ import { RESTART_EXIT_CODE } from './update/contract.js';
 import { hostUpdate } from './update/update.js';
 import { traceFollower } from './piped-turns.js';
 import { PANEL_OPS_THAT_CHANGE_THE_SESSION, refusedWhileSwitching, trackRunning } from './session-switch.js';
+import { STOPPED_READING_MS, watchForStall } from './client-stall.js';
 
 interface HeadlessOptions {
   socketPath?: string;
@@ -80,7 +81,7 @@ export function endHeadlessLog(): Promise<void> {
   });
 }
 
-export async function runHeadless(app: AppContext, argv: string[] = []): Promise<void> {
+export async function runHeadless(app: AppContext, argv: string[] = [], testing: { stoppedReadingMs?: number } = {}): Promise<void> {
   const opts = parseHeadlessArgs(argv);
   const dataDir = resolve(process.env.DATA_DIR || './data');
   const socketPath = opts.socketPath ?? join(dataDir, 'ipc.sock');
@@ -154,6 +155,9 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
   let shuttingDown = false;
 
   let currentClient: Socket | null = null;
+  let stalling: (() => void) | null = null;
+  const superseded = new WeakSet<Socket>();
+  const stoppedReadingMs = testing.stoppedReadingMs ?? STOPPED_READING_MS;
   // Framework events from before the first client connected, sent to it on
   // connect so a parent that attaches after the boot still hears it (the
   // restart notices a re-created tune-out epoch or an ended fork leave).
@@ -202,7 +206,7 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
     const type = typeof event.type === 'string' ? event.type : '';
     if (!FILTER_EXEMPT.has(type) && !matchesSubscription(type, subscription)) return;
     try {
-      currentClient.write(JSON.stringify({ ...event, ts: Date.now() }) + '\n');
+      if (!currentClient.write(JSON.stringify({ ...event, ts: Date.now() }) + '\n')) stalling?.();
     } catch (err) {
       log(`emit failed for type=${type}: ${String(err)}`);
     }
@@ -571,9 +575,14 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
   const server: Server = createServer((socket) => {
     if (currentClient) {
       log('new client connecting; closing previous client');
+      superseded.add(currentClient);
       try { currentClient.end(); } catch { }
     }
     currentClient = socket;
+    stalling = watchForStall(socket, stoppedReadingMs, (unsent) => {
+      log(`${superseded.has(socket) ? 'superseded client' : 'client'} hadn't taken what was queued for it within ${stoppedReadingMs / 1000} s; closed with ${unsent} bytes unsent`);
+      socket.destroy();
+    });
     log('client connected');
 
     subscription = new Set<string>(['*']);

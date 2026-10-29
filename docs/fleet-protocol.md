@@ -51,6 +51,18 @@ the recipe.
 **Connection model.** One client at a time; a new connection closes the
 previous one. On every connection the subscription resets to `['*']` and the
 child emits `lifecycle:ready`. A client disconnecting does not stop the child.
+A client must keep reading. The child sees only its own queue for a client:
+once a write to the client is refused, the child gives it five minutes to
+empty that queue, and a client whose queue it still holds then is closed,
+with the child's log saying how much was left unsent. What has gone into the
+socket's buffers is beyond the child's sight, so a client that stops reading
+with no more than that unread isn't closed for it. A client that keeps up is
+never closed; one that reads but can't keep up with the events is. A client
+the child writes nothing more to, because it was superseded or because it
+ended its own side, is watched only while a deadline it already had runs: one
+that stops reading with no deadline running stays open until it closes
+itself, holding no more than its socket's buffers and the child's queue below
+the point where writes are refused.
 Framework events from before the first client ever connected — the boot,
 including what `create()` replays about a restart (a resumed tune-out epoch,
 a fork a stop cut off) — are kept, the first 1,000 of them, and sent to that

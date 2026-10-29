@@ -6,6 +6,7 @@ import { ENTRY_POINT, readCurrent } from '../update/contract.js';
 import { EXACT_VERSION } from '../update/install.js';
 import { KEEP_DATA_FLAG, goBackFromShell, goBackOffer, machineOps, readInstallRecord, shellWord } from '../update/launcher.js';
 import { CLI_WAYS, COMMAND_WAYS, statusLines, type UpdateStatus } from '../web/update-text.js';
+import { STOPPED_READING_MS } from '../client-stall.js';
 import { openHost, type HostClient, type HostEvent, type NoHost } from './host-socket.js';
 import { INSTALL_COMMAND } from './install-command.js';
 
@@ -206,6 +207,9 @@ export const SEND_QUIET_LIMIT_MS = 15 * 60_000;
 
 const SENT = 'connectome: wrote the line to the host\'s socket; what the agent says in reply prints here.';
 
+const UNREAD = ` The host also closes it when output for it backs up and stays backed up for ${STOPPED_READING_MS / 60_000} ` +
+  'minutes, as when this command is suspended.';
+
 export async function send(ctx: CliContext, quietLimitMs = SEND_QUIET_LIMIT_MS): Promise<number> {
   const text = ctx.argv.join(' ');
   if (text.trim() === '') {
@@ -277,7 +281,8 @@ export async function send(ctx: CliContext, quietLimitMs = SEND_QUIET_LIMIT_MS):
   host.close();
   if (!sent) {
     ctx.err(how === 'closed'
-      ? 'connectome: the connection closed before the agent\'s turn ended, so nothing was sent.'
+      ? 'connectome: the connection closed before the agent\'s turn ended, so nothing was sent. The host stopping ' +
+        'closes it, and so does another connectome command connecting.' + UNREAD
       : `connectome: nothing came from the host for ${quietLimitMs / 60_000} minutes while the agent was in a turn, ` +
         'so this stopped waiting, and nothing was sent.');
     return 1;
@@ -285,10 +290,10 @@ export async function send(ctx: CliContext, quietLimitMs = SEND_QUIET_LIMIT_MS):
   if (how === 'closed') {
     ctx.err(spoke || started
       ? `connectome: the connection closed before the agent's turn ended, so ${spoke ? 'the rest of ' : ''}its reply ` +
-        'wasn\'t seen here. The host stopping closes it, and so does another connectome command connecting.'
+        'wasn\'t seen here. The host stopping closes it, and so does another connectome command connecting.' + UNREAD
       : 'connectome: the connection closed before any reply. If the host hadn\'t read the message yet, it never ' +
         'reached the agent: the host stopping closes it, and so does another connectome command connecting, and ' +
-        'the host drops what it hadn\'t read.');
+        'the host drops what it hadn\'t read.' + UNREAD);
     return 1;
   }
   if (how === 'unheard') {
