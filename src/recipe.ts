@@ -1267,15 +1267,24 @@ export interface RecipeWebUi {
   observersSurface?: 'tools' | 'utilities';
   /**
    * Basic-Auth credentials. Required whenever the bind host is non-loopback
-   * (which is the default). `${VAR}`-substitutable from .env.
+   * (which is the default). `${VAR}`-substitutable from .env. When set, both
+   * must be non-empty strings: the host refuses anything else at start. A
+   * null or other falsy basicAuth reads as none.
    */
   basicAuth?: { username: string; password: string };
   /**
    * Override the default Origin allowlist for the WebSocket upgrade. Default
-   * is `http(s)://127.0.0.1:<port>` and `http(s)://localhost:<port>`. Add
-   * your reverse-proxy origin (e.g. `https://admin.example.com`) here when
-   * fronted by Caddy/nginx. Pass `[]` to disable the Origin check entirely
-   * — only sensible when something else upstream is enforcing it.
+   * is `http(s)://127.0.0.1:<port>` and `http(s)://localhost:<port>`. Write
+   * each entry as an `http` or `https` URL the way a browser sends its
+   * Origin (scheme, host and any non-default port, with no path or trailing
+   * slash); without `basicAuth`, only on 127.0.0.1, localhost or [::1], any
+   * port. With `basicAuth`, add your reverse proxy's origin (e.g.
+   * `https://admin.example.com`) if it rewrites `Host`. The host refuses at
+   * start an empty list, a value that isn't a list, and an entry that isn't
+   * an `http` or `https` URL (without `basicAuth`, one on those three
+   * names); a null list reads as absent. Beyond that it doesn't check how an
+   * entry is written, so one with, say, a path, a trailing slash, a default
+   * port or capital letters starts and never matches.
    */
   allowedOrigins?: string[];
 }
