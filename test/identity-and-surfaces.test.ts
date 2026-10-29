@@ -8,7 +8,6 @@ import { WorkspaceModule, WorkspaceReadError } from '@animalabs/agent-framework'
 
 import { IdentityError, IdentityModule } from '../src/modules/identity-module.ts';
 import { McplAdminModule } from '../src/modules/mcpl-admin-module.ts';
-import { ObserversModule } from '../src/modules/observers-module.ts';
 
 // agent-framework's code for a link among a path's directories that stays
 // inside the mount.
@@ -291,8 +290,8 @@ describe('identity module', () => {
     (mod as any).ctx = { getModule: (n: string) => (n === 'workspace' ? workspace : null) };
     await mod.handleToolCall(call('accept_invite', { invite: 'i', name: 'A' }));
 
-    // The framework's `utils run` checks args against the advertised enum
-    // before the handler runs, so the schema has to offer every verb.
+    // toolsets--act checks args against the tool's advertised schema, enum
+    // included, before the handler runs, so the schema has to offer every verb.
     const request = mod.getUtilities().find((u) => u.name === 'request')!;
     const methods = (request.inputSchema.properties as any).method.enum as string[];
     expect(methods).toEqual(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
@@ -1423,12 +1422,15 @@ describe('identity: what the agent reads when a call fails', () => {
     expect(res.error).not.toContain(dir);
   });
 
-  it('answers a utility it lacks with its utilities and how to run them', async () => {
+  it('answers a utility it lacks with its utilities, in the built-in settings toolset, and how to reach them', async () => {
     const { mod } = registeredModule({ register: false });
+    const said = (await mod.handleToolCall(call('nope', {}))).error;
     expectSays(
-      (await mod.handleToolCall(call('nope', {}))).error,
-      'There\'s no tool "identity--nope", so nothing ran', 'identity--status', 'identity--request', 'identity--accept_invite', 'utils',
+      said,
+      'There\'s no tool "identity--nope", so nothing ran', 'identity--status', 'identity--request', 'identity--accept_invite',
+      'the built-in "settings" toolset', 'toolsets--act',
     );
+    expect(said).not.toContain('utils');
   });
 });
 
@@ -1451,28 +1453,6 @@ describe('mcpl-admin access grants', () => {
     expect(refused.error).toContain('identity');
   });
 
-  it('surface flags: default keeps four first-class tools; utilities parks them', () => {
-    const asTools = new McplAdminModule({});
-    expect(asTools.getTools().length).toBe(4);
-    expect(asTools.getUtilities().length).toBe(0);
-
-    const asUtils = new McplAdminModule({ surface: 'utilities' });
-    expect(asUtils.getTools().length).toBe(0);
-    expect(asUtils.getUtilities().map((u) => u.name).sort()).toEqual(
-      ['mcpl_deploy', 'mcpl_list', 'mcpl_restart', 'mcpl_unload'],
-    );
-  });
-});
-
-describe('observers surface flag', () => {
-  it('same definitions on either surface', () => {
-    const dir = tempDir('obs-');
-    const asTools = new ObserversModule({ path: join(dir, 'observers.json') });
-    const asUtils = new ObserversModule({ path: join(dir, 'observers.json'), surface: 'utilities' });
-    expect(asTools.getTools().map((t) => t.name)).toEqual(asUtils.getUtilities().map((u) => u.name));
-    expect(asTools.getUtilities().length).toBe(0);
-    expect(asUtils.getTools().length).toBe(0);
-  });
 });
 
 describe('identity request: fromFile reads only what the mount allows', () => {

@@ -37,10 +37,11 @@ import { parseCommand } from './command-name.js';
 import { OperatorActionError, storedInjectionMarkOf } from '@animalabs/agent-framework';
 import type { Line } from './output-line.js';
 import { fmtTokens } from './tui.js';
+import { modelThinking } from './logging-adapter.js';
 import { formatToolClassRows, readToolClasses } from './tool-lifecycle-config.js';
 import { type FleetModule, formatChildRow } from './modules/fleet-module.js';
 import { EXACT_VERSION } from './update/install.js';
-import { SWITCH_UNDER_WAY } from './session-switch.js';
+import { SWITCH_UNDER_WAY, refusedWhileSwitching, runningNames, trackRunning } from './session-switch.js';
 import { hostUpdate, type UpdateAnswer } from './update/update.js';
 import { goBackLines, goBackUnread, statusLines } from './web/update-text.js';
 
@@ -187,10 +188,45 @@ function moveStore(
     );
 }
 
+const CHANGES_THE_SESSION = new Set(['undo', 'redo', 'checkout', 'branchto', 'newtopic', 'nudge', 'puppet']);
+const CHANGES_THE_SESSION_GIVEN_A_VALUE = new Set(['checkpoint', 'restore', 'budget']);
+const SUBCOMMANDS_THAT_CHANGE_THE_SESSION = new Map([
+  ['session', new Set(['rename', 'delete', 'rm'])],
+  ['fleet', new Set(['stop', 'kill', 'restart'])],
+]);
+
+function sessionChangeNamed(cmd: string, args: string[]): string | null {
+  if (CHANGES_THE_SESSION.has(cmd)) return `/${cmd}`;
+  if (CHANGES_THE_SESSION_GIVEN_A_VALUE.has(cmd) && args.length > 0) return `/${cmd}`;
+  if (SUBCOMMANDS_THAT_CHANGE_THE_SESSION.get(cmd)?.has(args[0] ?? '')) return `/${cmd} ${args[0]}`;
+  return null;
+}
+
+function stillRunning(app: AppContext): CommandResult | null {
+  const names = runningNames(app);
+  if (names.length === 0) return null;
+  const one = names.length === 1;
+  return {
+    lines: [{
+      text: `${names.join(', ')} ${one ? 'is' : 'are'} still running, so the switch isn't started; try again once ${one ? 'it has' : 'they have'} finished.`,
+      style: 'system',
+    }],
+  };
+}
+
 export function handleCommand(command: string, app: AppContext): CommandResult {
-  const parts = command.slice(1).trim().split(/\s+/);
   const cmd = parseCommand(command).name;
+  const change = sessionChangeNamed(cmd, command.slice(1).trim().split(/\s+/).slice(1));
+  const result = dispatchCommand(command, cmd, change, app);
+  if (result.asyncWork && change) result.asyncWork = trackRunning(app, change, result.asyncWork);
+  return result;
+}
+
+function dispatchCommand(command: string, cmd: string, change: string | null, app: AppContext): CommandResult {
+  const parts = command.slice(1).trim().split(/\s+/);
   const args = parts.slice(1);
+  const refused = change ? refusedWhileSwitching(app, change) : null;
+  if (refused) return { lines: [{ text: refused, style: 'system' }] };
   const framework = app.framework;
 
   switch (cmd) {
@@ -554,6 +590,8 @@ const switchUnderWay: CommandResult = {
 
 function handleSessionNew(app: AppContext, name?: string): CommandResult {
   if (app.switching) return switchUnderWay;
+  const running = stillRunning(app);
+  if (running) return running;
   const session = app.sessionManager.createSession(name);
   resetBranchState(app.branchState);
 
@@ -579,6 +617,8 @@ function handleSessionSwitch(app: AppContext, nameOrId?: string): CommandResult 
     return { lines: [{ text: `Already on session "${session.name}".`, style: 'system' }] };
   }
 
+  const running = stillRunning(app);
+  if (running) return running;
   resetBranchState(app.branchState);
 
   return {
@@ -786,6 +826,13 @@ function handleStatus(framework: AgentFramework): CommandResult {
   return { lines };
 }
 
+/** For an agent whose thinking binds and whose window is set, agent-framework
+ *  doesn't break the stream at maxStreamTokens mid-turn, only before a request
+ *  the window can't hold (anima-research/context-manager#155). */
+function windowInsteadOfBudget(agent: { model: string; physicalWindowTokens?: number }): number | undefined {
+  return agent.physicalWindowTokens !== undefined && modelThinking(agent.model).binds ? agent.physicalWindowTokens : undefined;
+}
+
 function handleBudget(framework: AgentFramework, arg?: string): CommandResult {
   const agents = framework.getAllAgents();
   if (agents.length === 0) {
@@ -798,8 +845,12 @@ function handleBudget(framework: AgentFramework, arg?: string): CommandResult {
       const budget = agent.maxStreamTokens;
       const last = agent.lastStreamInputTokens;
       const pct = budget > 0 ? ((last / budget) * 100).toFixed(0) : '—';
+      const window = windowInsteadOfBudget(agent);
       lines.push({
-        text: `  ${agent.name}: ${fmtTokens(budget)} (last: ${fmtTokens(last)}, ${pct}%)`,
+        text: `  ${agent.name}: ${fmtTokens(budget)} (last: ${fmtTokens(last)}, ${pct}%)` +
+          (window !== undefined
+            ? `; its stream doesn't break at this budget mid-turn: for its size, only before a request its ${fmtTokens(window)} window can't hold`
+            : ''),
         style: 'system',
       });
     }
@@ -824,8 +875,18 @@ function handleBudget(framework: AgentFramework, arg?: string): CommandResult {
     agent.maxStreamTokens = tokens;
   }
 
+  const windowed = agents.filter((agent) => windowInsteadOfBudget(agent) !== undefined).map((agent) => agent.name);
   return {
-    lines: [{ text: `Stream budget set to ${fmtTokens(tokens)} tokens for all agents.`, style: 'system' }],
+    lines: [
+      { text: `Stream budget set to ${fmtTokens(tokens)} tokens for all agents.`, style: 'system' },
+      ...(windowed.length > 0
+        ? [{
+          text: `It's kept, but doesn't break the stream mid-turn for ${windowed.join(', ')}, whose thinking binds and ` +
+            "whose window is set: for their size, their streams break only before a request the window can't hold.",
+          style: 'system' as const,
+        }]
+        : []),
+    ],
   };
 }
 

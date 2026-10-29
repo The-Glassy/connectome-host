@@ -182,7 +182,9 @@ conditions are required so the headers can never reach a vendor endpoint.
   L1…L8 memory — just enough to fit the context budget, by a solver that
   weighs budget fit, cache cost and continuity. Memories are written by the agent's own model
   (`compressionModel` defaults to `agent.model`) in the agent's own voice
-  (`summaryParticipant` defaults to `agent.name`). Host defaults:
+  (`summaryParticipant` defaults to the agent's name), each introduced as standing
+  in for earlier conversation whose exact text isn't shown
+  (`summaryContextLabel`). Host defaults:
   `contextBudgetTokens` 300000, or, on a model the host knows a window for (on
   Anthropic's API) with a `maxTokens` that is unset or a positive number, the
   smaller of 300000 and the window less the system prompt and 32000 for the tools,
@@ -366,6 +368,7 @@ Under `$DATA_DIR` (default `./data`):
 | `ipc.sock`, `headless.log`, `headless.pid` | Headless mode. |
 | `mcpl-servers.agent.child.json` | A fleet child's own agent overlay, named to it by `MCPL_AGENT_OVERLAY_FILE`. |
 | `tui-error.log` | TUI-mode stderr. |
+| `readline-error.log` | Readline-mode stderr, on a terminal. |
 
 Relative to the CWD: `mcpl-servers.json`, `mcpl-servers.agent.json`,
 `sleep-privileged.json`, `logs/failures.log`, the default workspace mounts

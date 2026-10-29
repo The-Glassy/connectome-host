@@ -930,15 +930,18 @@ async function residentOf(dataDir: string, read: RecipeRead, loaded?: ExtensionR
       name,
       namespace: `agents/${name}`,
       strategy,
-      ...(subconscious?.enabled
+      // Reader forks read the resident's own context and open no subconscious namespace.
+      ...(subconscious?.enabled && subconscious.reader !== 'forks'
         ? {
-          subconscious: {
-            // agent-framework's default name, as the recipe's doc says.
-            name: subconscious.name ?? 'Subconscious',
-            namespace: `subconscious/${name}`,
-            reAnchorFraction: subconscious.reAnchorFraction,
-          },
-        }
+            subconscious: {
+              // agent-framework's default name, as the recipe's doc says.
+              name: ('name' in subconscious ? subconscious.name : undefined) ?? 'Subconscious',
+              namespace: `subconscious/${name}`,
+              ...('reAnchorFraction' in subconscious && subconscious.reAnchorFraction !== undefined
+                ? { reAnchorFraction: subconscious.reAnchorFraction }
+                : {}),
+            },
+          }
         : {}),
     }),
   };
