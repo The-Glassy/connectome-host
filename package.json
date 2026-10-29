@@ -27,10 +27,10 @@
     "relock:web": "rm -rf web/node_modules web/package-lock.json && npm --prefix web install"
   },
   "dependencies": {
-    "@animalabs/agent-framework": "^0.30.0",
+    "@animalabs/agent-framework": "file:./vendor/animalabs-agent-framework-0.30.0-speculative-e489edef.tgz",
     "@animalabs/chronicle": "^0.5.0",
     "@animalabs/context-manager": "^0.24.0",
-    "@animalabs/membrane": "^0.8.0",
+    "@animalabs/membrane": "file:./vendor/animalabs-membrane-0.8.0-speculative-f91d8e1.tgz",
     "@opentui/core": "^0.1.82"
   },
   "engines": {
@@ -52,5 +52,8 @@
   },
   "connectomeRelease": {
     "breaking": true
+  },
+  "overrides": {
+    "@animalabs/membrane": "file:./vendor/animalabs-membrane-0.8.0-speculative-f91d8e1.tgz"
   }
 }
