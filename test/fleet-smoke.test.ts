@@ -1268,10 +1268,9 @@ describe('FleetModule — Phase 4 autoStart + allowlist', () => {
 
     await fleet.handleToolCall({ id: 't-filt-cmd', name: 'command', input: { name: 'filt', command: '/help' } });
 
-    await new Promise((r) => setTimeout(r, 500));
+    await waitFor(() => allEvents.includes('command-output'), 10_000, "/help's output");
 
     expect(allEvents.some((t) => t === 'lifecycle')).toBe(true);
-    expect(allEvents.some((t) => t === 'command-output')).toBe(true);
     expect(filteredEvents.some((t) => t === 'lifecycle')).toBe(true);
     expect(filteredEvents.every((t) => t === 'lifecycle')).toBe(true);
 
