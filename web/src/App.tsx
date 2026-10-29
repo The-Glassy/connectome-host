@@ -487,6 +487,8 @@ export function App() {
     pendingHistoryCorr = null;
     setHistoryLoading(false);
     setBulkRemaining(0);
+    setBranches([]);
+    setBranchesCurrentId(null);
     if (isChildScope(panelScope())) return;
     setSettingsLoaded(false);
     setSettingsState(null);

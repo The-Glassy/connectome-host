@@ -16,11 +16,11 @@
   session beside the old session's messages.
 - On a session switch the page now drops an open rollback or suppress dialog,
   its pending retry and result, the selected messages, a pending history
-  page, and this process's pin and settings panels' state and forms (a
-  selected fleet child's panels are kept), asks for the panels again, and
-  reloads the Context view. It keeps a history page, and this process's pins
-  list, settings state and Context view, only when the session stamped on it
-  is the one it shows.
+  page, the branch list, and this process's pin and settings panels' state
+  and forms (a selected fleet child's panels are kept), asks again for the
+  panel that's open, and reloads the Context view. It keeps a history page,
+  and this process's pins list, settings state and Context view, only when
+  the session stamped on it is the one it shows.
 - The Web UI protocol is now v3. `rollback` and `suppress` require
   `sessionId`. `pin-add`, `pin-remove`, `settings-update`, `settings-reset`
   and `settings-cancel-transition` require it unless their `scope` names a
