@@ -502,12 +502,21 @@ describe('FleetModule — unresolved launch artifacts', () => {
     const executable = join(dir, 'node');
     writeFileSync(executable, '#!/bin/sh\nexec /bin/sleep 30\n');chmodSync(executable, 0o700);
     const fleet = makeFleet();const previous = process.env.PATH;
+    const helpers = (): number[] => execFileSync('/bin/ps', ['-A', '-o', 'pid=,ppid=,args='], { encoding: 'utf8' }).split('\n')
+      .map((line) => line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/))
+      .filter((m): m is RegExpMatchArray => m !== null && Number(m[2]) === process.pid && (m[3]!.includes(dir) || m[3] === '/bin/sleep 30'))
+      .map((m) => Number(m[1]));
     const start = Date.now();
     try {
       process.env.PATH = dir;
-      expect(await (fleet as any).socketRefusesConnection('/unused-test-socket')).toBe(false);
+      expect(await (fleet as any).socketRefusesConnection('/unused-test-socket', 200)).toBe(false);
+      expect(Date.now() - start).toBeGreaterThanOrEqual(198);
       expect(Date.now() - start).toBeLessThan(5_000);
-    } finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
+      expect(helpers()).toEqual([]);
+    } finally {
+      if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous;
+      for (const pid of helpers()) try { process.kill(pid, 'SIGKILL'); } catch { }
+    }
   }, 6_000);
 
   test('the fleet\'s socket probe is the one the exhaustion test below checks', () => {
@@ -1259,10 +1268,9 @@ describe('FleetModule — Phase 4 autoStart + allowlist', () => {
 
     await fleet.handleToolCall({ id: 't-filt-cmd', name: 'command', input: { name: 'filt', command: '/help' } });
 
-    await new Promise((r) => setTimeout(r, 500));
+    await waitFor(() => allEvents.includes('command-output'), 10_000, "/help's output");
 
     expect(allEvents.some((t) => t === 'lifecycle')).toBe(true);
-    expect(allEvents.some((t) => t === 'command-output')).toBe(true);
     expect(filteredEvents.some((t) => t === 'lifecycle')).toBe(true);
     expect(filteredEvents.every((t) => t === 'lifecycle')).toBe(true);
 

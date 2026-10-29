@@ -18,7 +18,16 @@ await runHeadless({
   agentName: 'fixture',
   framework: {
     getAllAgents: () => [{ name: 'fixture', state: { status: 'idle' } }],
-    getAllModules: () => [],
+    getAllModules: () => [{
+      name: 'workspace',
+      handleToolCall: async () => {
+        const dir = process.env.DATA_DIR!;
+        writeFileSync(join(dir, 'started'), 'yes');
+        while (!existsSync(join(dir, 'release'))) await Bun.sleep(10);
+        setTimeout(() => writeFileSync(join(dir, 'done'), 'settled'), 0);
+        return { success: true, data: { entries: [{ path: 'ORIGINAL-CALLER-RESULT', size: 1 }] } };
+      },
+    }],
     getHostModeStatus: () => ({ drained: true, activeTurnAgents: [], parkedAdmissions: 0, gatedRequests: 0, backgroundScripts: 0 }),
     getQueueDepth: () => 0,
     pushEvent: async (event: unknown) => {
