@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FleetModule, type AutoStartChild } from '../src/modules/fleet-module.js';
+import { socketRefusesConnection } from '../src/modules/fleet-socket-probe.js';
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(TEST_DIR, '..');
@@ -509,15 +510,19 @@ describe('FleetModule — unresolved launch artifacts', () => {
     } finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
   }, 6_000);
 
+  test('the fleet\'s socket probe is the one the exhaustion test below checks', () => {
+    expect((makeFleet() as any).socketRefusesConnection).toBe(socketRefusesConnection);
+  });
+
   test('resource exhaustion cannot turn a live Unix listener into stale evidence', async () => {
     const path = join(tmpDir, 'resource-probe.sock');
     const server = createServer(socket => socket.destroy());
     await new Promise<void>(resolve => server.listen(path, resolve));
     const script = `import {openSync,closeSync} from 'node:fs';
-      import {FleetModule} from ${JSON.stringify(join(REPO_ROOT, 'src/modules/fleet-module.ts'))};
-      const fleet=new FleetModule({});const fds=[];let exhausted=false;
+      import {socketRefusesConnection} from ${JSON.stringify(join(REPO_ROOT, 'src/modules/fleet-socket-probe.ts'))};
+      const fds=[];let exhausted=false;
       try{for(let i=0;i<512;i++)fds.push(openSync('/dev/null','r'));}catch(e){exhausted=e.code==='EMFILE';}
-      let refused;try{refused=await fleet.socketRefusesConnection(process.argv[2]);}
+      let refused;try{refused=await socketRefusesConnection(process.argv[2]);}
       finally{for(const fd of fds)closeSync(fd);}
       console.log(JSON.stringify({exhausted,refused}));process.exitCode=exhausted && refused===false?0:1;`;
     const file = join(tmpDir, 'resource-probe.ts');writeFileSync(file, script);

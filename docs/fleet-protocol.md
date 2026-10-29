@@ -469,6 +469,6 @@ Behavior of the code as it stands, worth knowing before relying on it:
 ---
 
 **Sources.** `src/headless.ts`, `src/index.ts`, `src/recipe.ts`,
-`src/commands.ts`, `src/tui.ts`, `src/modules/{fleet-types,fleet-module,tui-module,web-ui-module}.ts`,
+`src/commands.ts`, `src/tui.ts`, `src/modules/{fleet-types,fleet-module,fleet-socket-probe,tui-module,web-ui-module}.ts`,
 `src/state/{agent-tree-reducer,fleet-tree-aggregator}.ts`, `src/web/panel-data.ts`.
 Behavior is pinned by the `test/headless-*` and `test/fleet-*` suites.
