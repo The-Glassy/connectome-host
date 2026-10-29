@@ -12,23 +12,26 @@
  * as in its welcome, and a `stream-ended` frame in place of a stream-end trace
  * its scopes don't cover, which a page has to handle to end a streamed turn.
  *
- * v3: the eight messages that act on a session (`rollback`, `suppress`,
- * `pin-add`, `pin-remove`, `settings-update`, `settings-reset`,
- * `settings-cancel-transition` and `cancel-subagent`) carry `sessionId`, the
- * session whose data the operator chose the change from, and the server
- * refuses one chosen in a session other than the one whose framework is open.
- * Rollback and suppress always carry it. A pin or settings change carries it
- * unless its `scope` names a fleet child, and a `cancel-subagent` unless its
- * `childName` does, since the page doesn't know a child's session, and then
- * carries none. The data they're chosen from says whose it is: the welcome's
- * `session`, and `sessionId` on a `history-page`, on this process's
- * `pins-list` and `settings-state`, and on the `/debug/context` answer, each
- * the session whose framework produced it. A push such as `message-appended`
- * carries no stamp: it goes only to a client welcomed for the framework that
- * sent it, so it belongs to the welcome before it. The one exception is a
- * switch whose new framework fails to start: the clients keep the welcome of
- * the framework before it, and a push from the new one, such as the
- * `branch-changed` after a command, reaches them before their next welcome.
+ * v3: the eight messages whose target the operator chose from a session's data
+ * (`rollback`, `suppress`, `pin-add`, `pin-remove`, `settings-update`,
+ * `settings-reset`, `settings-cancel-transition` and `cancel-subagent`) carry
+ * `sessionId`, the session whose data the operator chose the change from, and
+ * the server refuses one chosen in a session other than the one whose
+ * framework is open. Rollback and suppress always carry it. A pin or settings
+ * change carries it unless its `scope` names a fleet child, and a
+ * `cancel-subagent` unless its `childName` does, since the page doesn't know a
+ * child's session, and then carries none. The data they're chosen from says
+ * whose it is: the welcome's `session`, and `sessionId` on a `history-page`,
+ * on this process's `pins-list` and `settings-state`, and on the
+ * `/debug/context` answer, each the session whose framework produced it. A
+ * push such as `message-appended` carries no stamp: it goes only to a client
+ * welcomed for the framework that sent it, so it belongs to the welcome before
+ * it. The one exception is a switch whose new framework fails to start: the
+ * clients keep the welcome of the framework before it, and a frame the server
+ * sends from the new one in answer to an action, such as the `branch-changed`
+ * after a command, reaches them before their next welcome. The new framework's
+ * traces and stored messages don't, since the server follows a framework's
+ * events only once it has started.
  */
 
 import type { Line } from '../output-line.js';
