@@ -24,7 +24,10 @@
  * `pins-list` and `settings-state`, and on the `/debug/context` answer, each
  * the session whose framework produced it. A push such as `message-appended`
  * carries no stamp: it goes only to a client welcomed for the framework that
- * sent it, so it belongs to the welcome before it.
+ * sent it, so it belongs to the welcome before it. The one exception is a
+ * switch whose new framework fails to start: the clients keep the welcome of
+ * the framework before it, and a push from the new one, such as the
+ * `branch-changed` after a command, reaches them before their next welcome.
  */
 
 import type { Line } from '../output-line.js';

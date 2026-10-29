@@ -308,7 +308,7 @@ describe('a change chosen in one session, sent once another is open', () => {
     }, TEST_MS);
   }
 
-  test("the pins list a change sends every client afterwards carries the session whose framework made the change", async () => {
+  test("the pins list a change sends afterwards carries the session whose framework made the change", async () => {
     const rec = recorder();
     webUiModule.setApp(recordingApp(rec, { open: 's1', index: 's2' }) as never);
     const client = await connect();
@@ -372,20 +372,30 @@ describe('what the page chooses a change from says whose session it is', () => {
     webUiModule.setApp(servingApp() as never);
     const client = await connect();
     try {
+      client.send({ type: 'request-pins' });
+      const plain = await client.next('the pins list', (r) => r.type === 'pins-list' || r.type === 'error');
       client.send({ type: 'request-pins', sessionId: 's9' });
-      expect((await client.next('the pins list', (r) => r.type === 'pins-list' || r.type === 'error')).type).toBe('pins-list');
+      const stray = await client.next('the pins list', (r) => r.type === 'pins-list' || r.type === 'error');
+      expect(plain.type).toBe('pins-list');
+      expect(stray).toEqual(plain);
+      expect(stray.sessionId).toBe('s1');
     } finally {
       client.close();
     }
   }, TEST_MS);
 
-  test("the welcome still comes, naming the session by its id, when the session index has no entry for the open framework's session", async () => {
-    webUiModule.setApp(hostApp({}, false, [], { open: 's3', index: 's2' }) as never);
-    const client = await connect();
-    try {
-      expect((await client.next('the welcome', (r) => r.type === 'welcome')).session).toEqual({ id: 's3', name: 's3', autoNamed: true });
-    } finally {
-      client.close();
+  test("the welcome still comes, naming the session by its id, when the session index has no entry for the open framework's session, can't be read, or finds another session for its id", async () => {
+    const missing = hostApp({}, false, [], { open: 's3', index: 's2' });
+    const unreadable = { ...missing, sessionManager: { ...missing.sessionManager, findSession: () => { throw new Error('sessions.json is truncated'); } } };
+    const another = { ...missing, sessionManager: { ...missing.sessionManager, findSession: () => ({ id: 's2', name: 's3', manuallyNamed: true }) } };
+    for (const app of [missing, unreadable, another]) {
+      webUiModule.setApp(app as never);
+      const client = await connect();
+      try {
+        expect((await client.next('the welcome', (r) => r.type === 'welcome')).session).toEqual({ id: 's3', name: 's3', autoNamed: true });
+      } finally {
+        client.close();
+      }
     }
   }, TEST_MS);
 

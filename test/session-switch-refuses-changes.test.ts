@@ -400,6 +400,20 @@ describe('a web UI change chosen in one session is never made in another', () =>
     expect(sessionRefusalFor({ ...unreadable, frameworkSessionId: 's1' }, message)).toBeNull();
   });
 
+  test("a refusal names a session by its id alone when the index has no entry for it or finds another session for its id", () => {
+    const message = { type: 'pin-remove', pinId: 'pin-0', sessionId: 's1' } as WebUiClientMessage;
+    const indexes = [
+      { findSession: () => null },
+      { findSession: (nameOrId: string) => ({ id: nameOrId === 's1' ? 's2' : 's1', name: nameOrId }) },
+    ];
+    for (const sessionManager of indexes) {
+      expect(sessionRefusalFor({ frameworkSessionId: 's3', sessionManager }, message)).toEqual({
+        type: 'error',
+        message: 'pin-remove refused: it was chosen in session s1, and session s3 is open now. Nothing changed; choose again in session s3.',
+      });
+    }
+  });
+
   test("a pin or settings change for a fleet child carries no session, since the page knows none of a child's, and isn't checked", () => {
     for (const message of [
       { type: 'pin-add', scope: 'child', firstMessageId: 'm1' },

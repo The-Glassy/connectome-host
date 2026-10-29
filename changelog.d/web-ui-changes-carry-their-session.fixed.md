@@ -14,10 +14,14 @@
 - The welcome names the session whose framework is open. Before, a welcome
   sent while a switch was making the next session's framework named that next
   session beside the old session's messages.
-- On a session switch the page now drops an open rollback or suppress dialog,
-  its pending retry and result, the selected messages, a pending history
-  page, the branch list, and this process's pin and settings panels' state
-  and forms (a selected fleet child's panels are kept), asks again for the
-  panel that's open, and reloads the Context view. It keeps a history page,
-  and this process's pins list, settings state and Context view, only when
-  the session stamped on it is the one it shows.
+- When a new session's welcome reaches the page, the page now drops an open
+  rollback or suppress dialog, its pending retry and result, the selected
+  messages, a pending history page, the branch list, and this process's pin
+  and settings panels' state and forms (a selected fleet child's panels are
+  kept), closes the open panel, asks again for the settings, pins or MCP tab
+  if it's the one open, and reloads the Context view. Until that welcome
+  arrives the page shows the session before it, and a branch checked out
+  from its list after the switch has finished, like any command then, runs
+  in the session now open. It keeps a history page, and this process's pins
+  list, settings state and Context view, only when the session stamped on it
+  is the one it shows.
