@@ -67,27 +67,20 @@ export function refusedWhileSwitching(app: { switching?: boolean }, what: string
 type NamedSession = { id: string; name: string };
 
 export function refusedForAnotherSession(
-  sessions: {
-    getActiveSession(): NamedSession | null;
-    findSession(nameOrId: string): NamedSession | null | undefined;
-  },
+  open: string,
+  sessions: { findSession(nameOrId: string): NamedSession | null | undefined },
   chosenIn: string,
   what: string,
 ): string | null {
-  let open: NamedSession | null;
-  try {
-    open = sessions.getActiveSession();
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    return `${what} refused: the host couldn't read which session is open (${reason}). Nothing changed.`;
-  }
-  if (open?.id === chosenIn) return null;
-  const chosen = sessions.findSession(chosenIn);
-  const label = (s: NamedSession | null | undefined, id: string) => s ? `session "${s.name}"` : `session ${id}`;
-  if (!open) {
-    return `${what} refused: it was chosen in ${label(chosen, chosenIn)}, and no session is open now. Nothing changed.`;
-  }
-  return `${what} refused: it was chosen in ${label(chosen, chosenIn)}, and ${label(open, open.id)} is open now. Nothing changed; choose again in ${label(open, open.id)}.`;
+  if (chosenIn === open) return null;
+  const label = (id: string): string => {
+    try {
+      const session = sessions.findSession(id);
+      if (session?.id === id) return `session "${session.name}"`;
+    } catch { }
+    return `session ${id}`;
+  };
+  return `${what} refused: it was chosen in ${label(chosenIn)}, and ${label(open)} is open now. Nothing changed; choose again in ${label(open)}.`;
 }
 
 const running = new WeakMap<object, Map<symbol, string>>();

@@ -40,7 +40,7 @@ function hostApp(
   framework: Record<string, unknown>,
   switching: boolean,
   switched: string[] = [],
-  { open = 's1', cm: more = {} }: { open?: string; cm?: Record<string, unknown> } = {},
+  { open = 's1', index = open, cm: more = {} }: { open?: string; index?: string; cm?: Record<string, unknown> } = {},
 ) {
   const sessions = [{ id: 's1', name: 'first', manuallyNamed: true }, { id: 's2', name: 'second', manuallyNamed: true }];
   const cm = { getAllMessages: () => [], currentBranch: () => ({ id: 'b1', name: 'main' }), ...more };
@@ -56,8 +56,9 @@ function hostApp(
       getHostModeStatus: () => ({ quiesced: false }),
       ...framework,
     },
+    frameworkSessionId: open,
     sessionManager: {
-      getActiveSession: () => sessions.find((s) => s.id === open),
+      getActiveSession: () => sessions.find((s) => s.id === index),
       findSession: (nameOrId: string) => sessions.find((s) => s.id === nameOrId || s.name === nameOrId),
     },
     recipe: { name: 'test', agent: { name: 'main' } },
@@ -179,31 +180,47 @@ describe("the web UI's own entry during a session switch", () => {
   }, TEST_MS);
 });
 
+function recorder() {
+  const reached: string[] = [];
+  const waiting: Array<{ entry: string; resolve: () => void }> = [];
+  const record = (entry: string): void => {
+    reached.push(entry);
+    for (const w of waiting.filter((w) => w.entry === entry)) w.resolve();
+  };
+  const when = (entry: string): Promise<void> => reached.includes(entry)
+    ? Promise.resolve()
+    : new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${entry} didn't reach the session within ${GIVE_UP_MS} ms; what did: ${JSON.stringify(reached)}`)), GIVE_UP_MS);
+      waiting.push({ entry, resolve: () => { clearTimeout(timer); resolve(); } });
+    });
+  return { reached, record, when };
+}
+
 describe('a change chosen in one session, sent once another is open', () => {
   const other = (what: string) =>
     `${what} refused: it was chosen in session "first", and session "second" is open now. Nothing changed; choose again in session "second".`;
 
-  function recordingApp(reached: string[]) {
+  function recordingApp({ record: push }: ReturnType<typeof recorder>, sessions: { open?: string; index?: string } = { open: 's2' }) {
     const framework = {
       rollbackToMessage: async (_agent: string, opts: { messageId: string }) => {
-        reached.push(`rollback ${opts.messageId}`);
+        push(`rollback ${opts.messageId}`);
         return { sourceBranch: 'main', targetBranch: 'b2', messagesRemoved: 1, lastVisible: null };
       },
       suppressMessages: async (_agent: string, opts: { messageIds: string[] }) => {
-        reached.push(`suppress ${opts.messageIds.join(',')}`);
+        push(`suppress ${opts.messageIds.join(',')}`);
         return { sourceBranch: 'main', targetBranch: 'b3', messagesRemoved: 1 };
       },
-      updateAgentRuntimeSettings: () => { reached.push('settings-update'); },
-      resetAgentRuntimeSettings: () => { reached.push('settings-reset'); },
-      cancelAgentRuntimeSettingsTransition: () => { reached.push('settings-cancel-transition'); },
+      updateAgentRuntimeSettings: () => { push('settings-update'); },
+      resetAgentRuntimeSettings: () => { push('settings-reset'); },
+      cancelAgentRuntimeSettingsTransition: () => { push('settings-cancel-transition'); },
     };
     const cm = {
-      pinRange: (first: string) => { reached.push(`pin-add ${first}`); return 'pin-1'; },
-      markDocument: (first: string) => { reached.push(`document ${first}`); return 'pin-1'; },
-      unpin: (id: string) => { reached.push(`pin-remove ${id}`); return true; },
+      pinRange: (first: string) => { push(`pin-add ${first}`); return 'pin-1'; },
+      markDocument: (first: string) => { push(`document ${first}`); return 'pin-1'; },
+      unpin: (id: string) => { push(`pin-remove ${id}`); return true; },
       listPins: () => [],
     };
-    return hostApp(framework, false, [], { open: 's2', cm });
+    return hostApp(framework, false, [], { ...sessions, cm });
   }
 
   const changes: Array<[Record<string, unknown>, (r: Reply) => boolean, Reply]> = [
@@ -228,13 +245,13 @@ describe('a change chosen in one session, sent once another is open', () => {
 
   for (const [change, isAnswer, refusal] of changes) {
     test(`${change.type} chosen in the session before a switch is refused in its own reply form, and reaches nothing of the open session`, async () => {
-      const reached: string[] = [];
-      webUiModule.setApp(recordingApp(reached) as never);
+      const rec = recorder();
+      webUiModule.setApp(recordingApp(rec) as never);
       const client = await connect();
       try {
         client.send({ ...change, sessionId: 's1' });
         const answer = await client.next(`the stale ${change.type}'s answer`, (r) => isAnswer(r) || r.type === 'pins-list' || r.type === 'settings-state');
-        expect(reached).toEqual([]);
+        expect(rec.reached).toEqual([]);
         expect(answer).toEqual(refusal);
       } finally {
         client.close();
@@ -242,31 +259,108 @@ describe('a change chosen in one session, sent once another is open', () => {
     }, TEST_MS);
   }
 
-  test('a rollback and a pin removal chosen in the open session go through', async () => {
-    const reached: string[] = [];
-    webUiModule.setApp(recordingApp(reached) as never);
+  const reaches: Record<string, string> = {
+    rollback: 'rollback m1',
+    suppress: 'suppress m1',
+    'pin-add': 'pin-add m1',
+    'pin-remove': 'pin-remove pin-0',
+    'settings-update': 'settings-update',
+    'settings-reset': 'settings-reset',
+    'settings-cancel-transition': 'settings-cancel-transition',
+  };
+
+  for (const [change] of changes) {
+    test(`${change.type} chosen in the open session reaches it`, async () => {
+      const rec = recorder();
+      webUiModule.setApp(recordingApp(rec) as never);
+      const client = await connect();
+      try {
+        client.send({ ...change, sessionId: 's2' });
+        await rec.when(reaches[change.type as string]);
+        expect(rec.reached).toEqual([reaches[change.type as string]]);
+      } finally {
+        client.close();
+      }
+    }, TEST_MS);
+  }
+
+  test("a change is checked against the session whose framework is open, not the one the session index names", async () => {
+    const rec = recorder();
+    webUiModule.setApp(recordingApp(rec, { open: 's1', index: 's2' }) as never);
     const client = await connect();
     try {
-      client.send({ type: 'rollback', corrId: 'shown', messageId: 'm1', sessionId: 's2' });
-      expect((await client.next("the open session's rollback", (r) => r.corrId === 'shown')).ok).toBe(true);
-      client.send({ type: 'pin-remove', pinId: 'pin-0', sessionId: 's2' });
-      await client.next('the pins list after the removal', (r) => r.type === 'pins-list');
-      expect(reached).toEqual(['rollback m1', 'pin-remove pin-0']);
+      for (const type of ['pin-remove', 'settings-update'] as const) {
+        const change = changes.find(([c]) => c.type === type)![0];
+        client.send({ ...change, sessionId: 's2' });
+        const answer = await client.next(`the answer to the ${type} chosen in the session the index names`,
+          (r) => (r.type === 'error' && String(r.message).startsWith(type)) || r.type === 'pins-list' || r.type === 'settings-state');
+        expect(rec.reached).toEqual([]);
+        expect(answer).toEqual({
+          type: 'error',
+          message: `${type} refused: it was chosen in session "second", and session "first" is open now. Nothing changed; choose again in session "first".`,
+        });
+      }
+      expect(rec.reached).toEqual([]);
+      client.send({ type: 'pin-remove', pinId: 'pin-0', sessionId: 's1' });
+      await rec.when('pin-remove pin-0');
+      expect(rec.reached).toEqual(['pin-remove pin-0']);
     } finally {
       client.close();
     }
   }, TEST_MS);
 
   test("a change that doesn't say which session it was chosen in is refused as malformed and reaches nothing", async () => {
-    const reached: string[] = [];
-    webUiModule.setApp(recordingApp(reached) as never);
+    const rec = recorder();
+    webUiModule.setApp(recordingApp(rec) as never);
     const client = await connect();
     try {
       client.send({ type: 'rollback', corrId: 'unstamped', messageId: 'm1' });
       expect(await client.next('the malformed answer', (r) => r.type === 'error')).toEqual({ type: 'error', message: 'unknown message shape' });
-      expect(reached).toEqual([]);
+      expect(rec.reached).toEqual([]);
     } finally {
       client.close();
     }
+  }, TEST_MS);
+});
+
+describe('what the page chooses a change from says whose session it is', () => {
+  function servingApp() {
+    const cm = {
+      listPins: () => [{ id: 'pin-0', firstMessageId: 'm1', lastMessageId: 'm1', kind: 'pin', created: 1 }],
+      getMessageCount: () => 0,
+      getMessageWindow: () => ({ messages: [], startIndex: 0, totalCount: 0 }),
+    };
+    const framework = {
+      getAgentRuntimeSettings: () => ({ contextBudgetTokens: 100_000 }),
+      previewActivation: async () => ({ messages: [] }),
+      getRequestToolPresentation: () => null,
+    };
+    return hostApp(framework, false, [], { open: 's1', index: 's2', cm });
+  }
+
+  test("the welcome, a history page, the pins list and the settings state each carry the session whose framework answered, even while the session index names another", async () => {
+    webUiModule.setApp(servingApp() as never);
+    const client = await connect();
+    try {
+      const welcome = await client.next('the welcome', (r) => r.type === 'welcome');
+      expect((welcome.session as { id: string }).id).toBe('s1');
+      client.send({ type: 'request-history', corrId: 'h1', beforeIndex: 0 });
+      expect((await client.next('the history page', (r) => r.type === 'history-page')).sessionId).toBe('s1');
+      client.send({ type: 'request-pins' });
+      expect((await client.next('the pins list', (r) => r.type === 'pins-list')).sessionId).toBe('s1');
+      client.send({ type: 'request-settings' });
+      expect((await client.next('the settings state', (r) => r.type === 'settings-state')).sessionId).toBe('s1');
+    } finally {
+      client.close();
+    }
+  }, TEST_MS);
+
+  test('the context the Context view shows carries the session whose framework built it', async () => {
+    webUiModule.setApp(servingApp() as never);
+    const res = await fetch(`http://127.0.0.1:${port}/debug/context`, {
+      headers: { authorization: `Basic ${Buffer.from(`${USER}:${PASS}`).toString('base64')}` },
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { sessionId?: string }).sessionId).toBe('s1');
   }, TEST_MS);
 });

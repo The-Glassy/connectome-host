@@ -473,10 +473,10 @@ export function App() {
     setSurgery(null);
     setSurgeryResult(null);
   };
-  const stampFor = (scope: string, chosenIn: string | null): { sessionId?: string } =>
+  const stampFor = (scope: string, chosenIn: string | undefined): { sessionId?: string } =>
     isChildScope(scope) ? {} : { sessionId: chosenIn ?? '' };
-  const panelKey = (dataSession: string | null): string =>
-    isChildScope(panelScope()) ? `child|${panelScope()}` : `local|${dataSession ?? ''}`;
+  const panelKey = (): string =>
+    isChildScope(panelScope()) ? `child|${panelScope()}` : `local|${shownSession() ?? ''}`;
   const dropWhatWasPrepared = (): void => {
     retryAfterQuiesce = null;
     pendingSurgeryCorrId = null;
@@ -484,13 +484,14 @@ export function App() {
     setSurgeryResult(null);
     setSurgeryPending(false);
     clearSelection();
+    pendingHistoryCorr = null;
+    setHistoryLoading(false);
+    setBulkRemaining(0);
     if (isChildScope(panelScope())) return;
     setSettingsLoaded(false);
     setSettingsState(null);
-    setSettingsSession(null);
     setPinsLoaded(false);
     setPinsState(null);
-    setPinsSession(null);
     if (sidebarTab() === 'settings') refreshSettings();
     if (sidebarTab() === 'pins') refreshPins();
   };
@@ -544,7 +545,6 @@ export function App() {
 
   const [settingsState, setSettingsState] = createSignal<SettingsState | null>(null);
   const [settingsLoaded, setSettingsLoaded] = createSignal(false);
-  const [settingsSession, setSettingsSession] = createSignal<string | null>(null);
   const refreshSettings = (): void => {
     setSettingsLoaded(false);
     wire.send({ type: 'request-settings', scope: panelScope() });
@@ -552,7 +552,6 @@ export function App() {
 
   const [pinsState, setPinsState] = createSignal<PinsState | null>(null);
   const [pinsLoaded, setPinsLoaded] = createSignal(false);
-  const [pinsSession, setPinsSession] = createSignal<string | null>(null);
   const refreshPins = (): void => {
     setPinsLoaded(false);
     wire.send({ type: 'request-pins', scope: panelScope() });
@@ -604,10 +603,8 @@ export function App() {
     clearMcpl();
     setSettingsLoaded(false);
     setSettingsState(null);
-    setSettingsSession(null);
     setPinsLoaded(false);
     setPinsState(null);
-    setPinsSession(null);
     setHealth(null);
     setHealthErr(null);
     const tab = sidebarTab();
@@ -863,6 +860,10 @@ export function App() {
     pendingHistoryCorr = null;
     window.clearTimeout(pendingHistoryTimer);
     setHistoryLoading(false);
+    if (msg.sessionId !== shownSession()) {
+      setBulkRemaining(0);
+      return;
+    }
     const fresh = msg.entries.filter((e) => !(e.id && knownIds.has(e.id)));
     for (const e of fresh) if (e.id) knownIds.add(e.id);
     const prevScrollHeight = scrollPane?.scrollHeight ?? 0;
@@ -1108,14 +1109,14 @@ export function App() {
           setMcplToolClasses(toolClasses);
         },
         setSettings: (state) => {
+          if (!isChildScope(panelScope()) && state.sessionId !== shownSession()) return;
           setSettingsLoaded(true);
           setSettingsState(state);
-          setSettingsSession(shownSession());
         },
         setPins: (state) => {
+          if (!isChildScope(panelScope()) && state.sessionId !== shownSession()) return;
           setPinsLoaded(true);
           setPinsState(state);
-          setPinsSession(shownSession());
         },
         setMounts: (loaded, moduleLoaded, list) => {
           setMountsLoaded(loaded);
@@ -1556,22 +1557,22 @@ export function App() {
                 onSetEnv={(id, env) => wire.send({ type: 'mcpl-set-env', id, env })}
               />
             </Show>
-            <Show when={sidebarTab() === 'settings' ? panelKey(settingsSession()) : null} keyed>
+            <Show when={sidebarTab() === 'settings' ? panelKey() : null} keyed>
               {(_shown) => (
                 <SettingsPanel
                   loaded={settingsLoaded()}
                   state={settingsState()}
                   scope={panelScope()}
                   onRefresh={refreshSettings}
-                  onApply={(patch) => wire.send({ type: 'settings-update', scope: panelScope(), ...stampFor(panelScope(), settingsSession()), ...patch })}
+                  onApply={(patch) => wire.send({ type: 'settings-update', scope: panelScope(), ...stampFor(panelScope(), settingsState()?.sessionId), ...patch })}
                   onReset={(keys, persist) =>
-                    wire.send({ type: 'settings-reset', scope: panelScope(), ...stampFor(panelScope(), settingsSession()), ...(keys ? { keys } : {}), persist })}
-                  onCancelTransition={() => wire.send({ type: 'settings-cancel-transition', scope: panelScope(), ...stampFor(panelScope(), settingsSession()) })}
+                    wire.send({ type: 'settings-reset', scope: panelScope(), ...stampFor(panelScope(), settingsState()?.sessionId), ...(keys ? { keys } : {}), persist })}
+                  onCancelTransition={() => wire.send({ type: 'settings-cancel-transition', scope: panelScope(), ...stampFor(panelScope(), settingsState()?.sessionId) })}
                   onDryContext={(ctx) => { setDryContext(ctx as DryContextData); setMainView('dry'); }}
                 />
               )}
             </Show>
-            <Show when={sidebarTab() === 'pins' ? panelKey(pinsSession()) : null} keyed>
+            <Show when={sidebarTab() === 'pins' ? panelKey() : null} keyed>
               {(_shown) => (
                 <PinsPanel
                   loaded={pinsLoaded()}
@@ -1585,8 +1586,8 @@ export function App() {
                         }))
                     : pinsState()?.candidates ?? []}
                   onRefresh={refreshPins}
-                  onAdd={(input) => wire.send({ type: 'pin-add', scope: panelScope(), ...stampFor(panelScope(), pinsSession()), ...input })}
-                  onRemove={(pinId) => wire.send({ type: 'pin-remove', scope: panelScope(), ...stampFor(panelScope(), pinsSession()), pinId })}
+                  onAdd={(input) => wire.send({ type: 'pin-add', scope: panelScope(), ...stampFor(panelScope(), pinsState()?.sessionId), ...input })}
+                  onRemove={(pinId) => wire.send({ type: 'pin-remove', scope: panelScope(), ...stampFor(panelScope(), pinsState()?.sessionId), pinId })}
                 />
               )}
             </Show>

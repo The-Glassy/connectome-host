@@ -125,6 +125,7 @@ import {
 
 export interface WebUiAppRef {
   framework: AgentFramework;
+  frameworkSessionId: string;
   sessionManager: SessionManager;
   recipe: Recipe;
   branchState: BranchState;
@@ -234,13 +235,13 @@ const CHANGES_STAMPED_WITH_THEIR_SESSION: ReadonlySet<string> = new Set([
 ]);
 
 export function sessionRefusalFor(
-  sessions: Pick<SessionManager, 'getActiveSession' | 'findSession'>,
+  app: Pick<WebUiAppRef, 'frameworkSessionId'> & { sessionManager: Pick<SessionManager, 'findSession'> },
   message: WebUiClientMessage,
 ): WebUiServerMessage | null {
   if (!CHANGES_STAMPED_WITH_THEIR_SESSION.has(message.type)) return null;
   const chosenIn = (message as { sessionId?: string }).sessionId;
   if (chosenIn === undefined) return null;
-  return refusalReply(message, (what) => refusedForAnotherSession(sessions, chosenIn, what));
+  return refusalReply(message, (what) => refusedForAnotherSession(app.frameworkSessionId, app.sessionManager, chosenIn, what));
 }
 
 function panelErrorResponse(err: unknown): Response {
@@ -1177,7 +1178,8 @@ export class WebUiModule implements Module {
     const params = panelParamsFromUrl(url);
     const pretty = url.searchParams.get('pretty') !== null && url.searchParams.get('pretty') !== '0';
     try {
-      const payload = await buildDebugContext(app, resolveAgent(app, params.agent), params);
+      const sessionId = sharedServer!.app!.frameworkSessionId;
+      const payload = { sessionId, ...await buildDebugContext(app, resolveAgent(app, params.agent), params) };
       return new Response(
         JSON.stringify(payload, null, pretty ? 2 : undefined),
         { headers: { 'content-type': 'application/json' } },
@@ -1639,7 +1641,7 @@ export class WebUiModule implements Module {
       return;
     }
     const app = sharedServer.app;
-    const refused = switchRefusalFor(app, parsed) ?? sessionRefusalFor(app.sessionManager, parsed);
+    const refused = switchRefusalFor(app, parsed) ?? sessionRefusalFor(app, parsed);
     if (refused) {
       this.send(client, refused);
       if (parsed.type === 'host-quiesce' || parsed.type === 'host-resume') this.broadcastHostMode();
@@ -2602,8 +2604,9 @@ export class WebUiModule implements Module {
     const app = this.panelApp();
     if (!app) return;
     try {
+      const sessionId = sharedServer!.app!.frameworkSessionId;
       const snap = buildPinsSnapshot(app, resolveAgent(app, agentName));
-      this.send(client, { type: 'pins-list', scope: 'local', ...snap });
+      this.send(client, { type: 'pins-list', scope: 'local', sessionId, ...snap });
     } catch (err) {
       this.send(client, {
         type: 'error',
@@ -2640,20 +2643,22 @@ export class WebUiModule implements Module {
     const app = this.panelApp();
     if (!app) return;
     try {
+      const sessionId = sharedServer!.app!.frameworkSessionId;
       const snap = buildPinsSnapshot(app, agentName);
-      this.broadcast({ type: 'pins-list', scope: 'local', ...snap });
+      this.broadcast({ type: 'pins-list', scope: 'local', sessionId, ...snap });
     } catch { }
   }
 
   private sendSettingsState(client: ClientState, agentName?: string): void {
     const app = this.panelApp();
     if (!app) return;
+    const sessionId = sharedServer!.app!.frameworkSessionId;
     const msg = buildSettingsState(app, resolveAgent(app, agentName));
     if (!msg) {
       this.send(client, { type: 'error', message: 'runtime settings unavailable on this build' });
       return;
     }
-    this.send(client, { type: 'settings-state', scope: 'local', ...msg } as WebUiServerMessage);
+    this.send(client, { type: 'settings-state', scope: 'local', sessionId, ...msg } as WebUiServerMessage);
   }
 
   private async sendScopedSettings(client: ClientState, scope: string, agentName?: string): Promise<void> {
@@ -2677,9 +2682,10 @@ export class WebUiModule implements Module {
   private broadcastSettingsState(agentName: string): void {
     const app = this.panelApp();
     if (!app) return;
+    const sessionId = sharedServer!.app!.frameworkSessionId;
     const msg = buildSettingsState(app, agentName);
     if (!msg) return;
-    this.broadcast({ type: 'settings-state', scope: 'local', ...msg } as WebUiServerMessage);
+    this.broadcast({ type: 'settings-state', scope: 'local', sessionId, ...msg } as WebUiServerMessage);
   }
 
   private async requestChildPanel(
@@ -2755,8 +2761,9 @@ export class WebUiModule implements Module {
   }
 
   private handleRequestHistory(client: ClientState, req: RequestHistoryMessage): void {
-    const cm = sharedServer?.app?.framework.getAllAgents()[0]?.getContextManager();
-    if (!cm) {
+    const app = sharedServer?.app;
+    const cm = app?.framework.getAllAgents()[0]?.getContextManager();
+    if (!app || !cm) {
       this.send(client, { type: 'error', corrId: req.corrId, message: 'no context manager' });
       return;
     }
@@ -2770,7 +2777,7 @@ export class WebUiModule implements Module {
     }
     const limit = Math.min(req.limit ?? HISTORY_PAGE_DEFAULT, HISTORY_PAGE_MAX);
     const beforeIndex = Math.min(req.beforeIndex, cmw.getMessageCount());
-    this.send(client, { type: 'history-page', corrId: req.corrId, ...readHistory(cmw, beforeIndex, limit, client.scopes) });
+    this.send(client, { type: 'history-page', corrId: req.corrId, sessionId: app.frameworkSessionId, ...readHistory(cmw, beforeIndex, limit, client.scopes) });
   }
 
   private async loadWelcomeRecipes(): Promise<Map<string, Awaited<ReturnType<WebUiModule['loadChildRecipeInfo']>>>> {
@@ -2793,9 +2800,9 @@ export class WebUiModule implements Module {
     const app = sharedServer?.app!;
     const fw = app.framework;
     const agents = fw.getAllAgents();
-    const session = app.sessionManager.getActiveSession();
-    if (!session) {
-      throw new Error('cannot build welcome: no active session');
+    const session = app.sessionManager.findSession(app.frameworkSessionId);
+    if (session?.id !== app.frameworkSessionId) {
+      throw new Error(`cannot build welcome: session ${app.frameworkSessionId} isn't in the session index`);
     }
 
     const cm = agents[0]?.getContextManager();

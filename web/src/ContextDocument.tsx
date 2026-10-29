@@ -1,4 +1,5 @@
 import { createEffect, createSignal, on, For, Show } from 'solid-js';
+import { isChildScope } from '@conhost/web/protocol';
 import { MediaView } from './Surgery';
 
 interface Msg { participant?: string; role?: string; content: unknown; sourceMessageId?: string }
@@ -88,10 +89,11 @@ export function ContextDocument(props: {
     ? `?scope=${encodeURIComponent(props.scope)}`
     : '';
 
+  let latestLoad = 0;
   const load = async () => {
-    const scopeAtStart = props.scope;
-    const sessionAtStart = props.session;
-    const moved = () => props.scope !== scopeAtStart || props.session !== sessionAtStart;
+    const thisLoad = ++latestLoad;
+    const superseded = () => thisLoad !== latestLoad;
+    const local = !isChildScope(props.scope);
     setLoading(true); setErr(null);
     try {
       const q = query();
@@ -104,14 +106,20 @@ export function ContextDocument(props: {
         throw new Error(body?.error ?? `context HTTP ${ctxRes.status}`);
       }
       const ctx = await ctxRes.json();
-      if (moved()) return;
+      if (superseded()) return;
+      const servedIn = typeof ctx?.sessionId === 'string' ? ctx.sessionId : null;
+      if (local && servedIn !== props.session) return;
       setMsgs((ctx?.request?.messages ?? []) as Msg[]);
-      setMsgsSession(sessionAtStart);
-      if (mkRes.ok) { const mk = await mkRes.json(); setStats(mk.stats); setExact(mk.exactTotalTokens); }
+      setMsgsSession(servedIn);
+      if (mkRes.ok) {
+        const mk = await mkRes.json();
+        if (superseded()) return;
+        setStats(mk.stats); setExact(mk.exactTotalTokens);
+      }
     } catch (e) {
-      if (moved()) return;
+      if (superseded()) return;
       setErr(e instanceof Error ? e.message : String(e));
-    } finally { setLoading(false); }
+    } finally { if (!superseded()) setLoading(false); }
   };
   createEffect(on(() => [props.scope, props.session], () => {
     setMsgs([]); setMsgsSession(null); setStats(null); setExact(null); setErr(null);

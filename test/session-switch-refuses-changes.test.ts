@@ -348,9 +348,11 @@ describe("the web UI's actions that change the session are refused while a sessi
 
 describe('a web UI change chosen in one session is never made in another', () => {
   const named = [{ id: 's1', name: 'first' }, { id: 's2', name: 'second' }];
-  const sessions = (open: string | null) => ({
-    getActiveSession: () => named.find((s) => s.id === open) ?? null,
-    findSession: (nameOrId: string) => named.find((s) => s.id === nameOrId || s.name === nameOrId) ?? null,
+  const sessions = (open: string) => ({
+    frameworkSessionId: open,
+    sessionManager: {
+      findSession: (nameOrId: string) => named.find((s) => s.id === nameOrId || s.name === nameOrId) ?? null,
+    },
   });
   const other = (what: string) =>
     `${what} refused: it was chosen in session "first", and session "second" is open now. Nothing changed; choose again in session "second".`;
@@ -376,11 +378,11 @@ describe('a web UI change chosen in one session is never made in another', () =>
       expect(sessionRefusalFor(sessions('s1'), message)).toBeNull();
     });
 
-    test(`${message.type} that doesn't say which session it was chosen in isn't a message the server takes, whatever its scope says`, () => {
+    const scopes = message.type === 'rollback' || message.type === 'suppress' ? [undefined] : [undefined, 'local', ''];
+    test(`${message.type} that doesn't say which session it was chosen in isn't a message the server takes, at any scope meaning this process`, () => {
       const { sessionId: _chosenIn, ...unstamped } = message as WebUiClientMessage & { sessionId: string };
-      for (const scope of [undefined, 'local', '']) {
+      for (const scope of scopes) {
         const local = scope === undefined ? unstamped : { ...unstamped, scope };
-        if (scope !== undefined && (message.type === 'rollback' || message.type === 'suppress')) continue;
         expect(isClientMessage(local)).toBe(false);
         expect(isClientMessage({ ...local, sessionId: '' })).toBe(false);
         expect(isClientMessage({ ...local, sessionId: 's1' })).toBe(true);
@@ -388,17 +390,14 @@ describe('a web UI change chosen in one session is never made in another', () =>
     });
   }
 
-  test('with no session open, or an index that can\'t be read, a change is refused saying so', () => {
+  test("a change chosen in another session is refused by ids when the session index can't be read for their names", () => {
     const message = { type: 'pin-remove', pinId: 'pin-0', sessionId: 's1' } as WebUiClientMessage;
-    expect(sessionRefusalFor(sessions(null), message)).toEqual({
-      type: 'error',
-      message: 'pin-remove refused: it was chosen in session "first", and no session is open now. Nothing changed.',
-    });
-    const unreadable = { getActiveSession: () => { throw new Error('sessions.json is truncated'); }, findSession: () => null };
+    const unreadable = { frameworkSessionId: 's2', sessionManager: { findSession: () => { throw new Error('sessions.json is truncated'); } } };
     expect(sessionRefusalFor(unreadable, message)).toEqual({
       type: 'error',
-      message: "pin-remove refused: the host couldn't read which session is open (sessions.json is truncated). Nothing changed.",
+      message: 'pin-remove refused: it was chosen in session s1, and session s2 is open now. Nothing changed; choose again in session s2.',
     });
+    expect(sessionRefusalFor({ ...unreadable, frameworkSessionId: 's1' }, message)).toBeNull();
   });
 
   test("a pin or settings change for a fleet child carries no session, since the page knows none of a child's, and isn't checked", () => {
@@ -411,7 +410,7 @@ describe('a web UI change chosen in one session is never made in another', () =>
     ]) {
       expect(isClientMessage(message)).toBe(true);
       expect(isClientMessage({ ...message, sessionId: 's1' })).toBe(false);
-      expect(sessionRefusalFor(sessions('s2'), { ...message, sessionId: 's1' } as WebUiClientMessage)).toBeNull();
+      expect(sessionRefusalFor(sessions('s2'), message as WebUiClientMessage)).toBeNull();
     }
   });
 

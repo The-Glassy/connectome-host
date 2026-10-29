@@ -16,9 +16,13 @@
  * `pin-add`, `pin-remove`, `settings-update`, `settings-reset` and
  * `settings-cancel-transition`) carry `sessionId`, the session whose data the
  * operator chose the change from, and the server refuses one chosen in a
- * session that isn't the open one. Rollback and suppress always carry it. A
- * pin or settings change carries it unless its `scope` names a fleet child,
- * whose session the page doesn't know, and then carries none.
+ * session other than the one whose framework is open. Rollback and suppress
+ * always carry it. A pin or settings change carries it unless its `scope`
+ * names a fleet child, whose session the page doesn't know, and then carries
+ * none. The data they're chosen from says whose it is: the welcome's
+ * `session`, and `sessionId` on a `history-page`, on this process's
+ * `pins-list` and `settings-state`, and on the `/debug/context` answer, each
+ * the session whose framework produced it.
  */
 
 import type { Line } from '../output-line.js';
@@ -504,6 +508,9 @@ export interface PinsListMessage {
   type: 'pins-list';
   /** Process these pins live in ('local' or fleet-child name). */
   scope?: string;
+  /** The session whose framework answered, on this process's list; absent
+   *  on a fleet child's. */
+  sessionId?: string;
   agent: string;
   pins: Array<{
     id: string;
@@ -565,6 +572,9 @@ export interface SettingsStateMessage {
   type: 'settings-state';
   /** Process these settings belong to ('local' or fleet-child name). */
   scope?: string;
+  /** The session whose framework answered, on this process's state; absent
+   *  on a fleet child's. */
+  sessionId?: string;
   agent: string;
   /** Live values. `transition` is 'converging' while a paced descent runs. */
   settings: {
@@ -600,6 +610,8 @@ export interface SettingsStateMessage {
 export interface HistoryPageMessage {
   type: 'history-page';
   corrId: string;
+  /** The session whose framework answered. */
+  sessionId: string;
   /** Entries in store order (oldest first), ending just before the
    *  requested `beforeIndex`, or, for an observer, before the messages
    *  after them that its scopes empty. */
@@ -929,6 +941,9 @@ export interface PinAddMessage {
   type: 'pin-add';
   /** Fleet child name, or 'local'/undefined for the parent process. */
   scope?: string;
+  /** The session of the data the operator chose this from, as the server
+   *  stamped it on that data. Required unless `scope` names a fleet child,
+   *  and then absent. */
   sessionId?: string;
   agent?: string;
   kind?: 'pin' | 'document';
@@ -944,6 +959,9 @@ export interface PinRemoveMessage {
   type: 'pin-remove';
   /** Fleet child name, or 'local'/undefined for the parent process. */
   scope?: string;
+  /** The session of the data the operator chose this from, as the server
+   *  stamped it on that data. Required unless `scope` names a fleet child,
+   *  and then absent. */
   sessionId?: string;
   agent?: string;
   pinId: string;
@@ -981,6 +999,9 @@ export interface SettingsUpdateMessage {
   type: 'settings-update';
   /** Fleet child name, or 'local'/undefined for the parent process. */
   scope?: string;
+  /** The session of the data the operator chose this from, as the server
+   *  stamped it on that data. Required unless `scope` names a fleet child,
+   *  and then absent. */
   sessionId?: string;
   agent?: string;
   contextBudgetTokens?: number;
@@ -1021,6 +1042,9 @@ export interface SettingsResetMessage {
   type: 'settings-reset';
   /** Fleet child name, or 'local'/undefined for the parent process. */
   scope?: string;
+  /** The session of the data the operator chose this from, as the server
+   *  stamped it on that data. Required unless `scope` names a fleet child,
+   *  and then absent. */
   sessionId?: string;
   agent?: string;
   keys?: string[];
@@ -1033,6 +1057,9 @@ export interface SettingsCancelTransitionMessage {
   type: 'settings-cancel-transition';
   /** Fleet child name, or 'local'/undefined for the parent process. */
   scope?: string;
+  /** The session of the data the operator chose this from, as the server
+   *  stamped it on that data. Required unless `scope` names a fleet child,
+   *  and then absent. */
   sessionId?: string;
   agent?: string;
   persist?: boolean;
@@ -1097,6 +1124,8 @@ export interface ObserverHelloMessage {
 export interface RollbackMessage {
   type: 'rollback';
   messageId: string;
+  /** The session of the messages the operator chose this from, as the
+   *  server stamped it on them. */
   sessionId: string;
   /** Agent name; defaults to the recipe's primary agent. */
   agent?: string;
@@ -1110,6 +1139,8 @@ export interface RollbackMessage {
 export interface SuppressMessage {
   type: 'suppress';
   messageIds: string[];
+  /** The session of the messages the operator chose this from, as the
+   *  server stamped it on them. */
   sessionId: string;
   agent?: string;
   note?: string;
