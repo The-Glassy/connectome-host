@@ -525,6 +525,7 @@ agents: [agentConfig],
     // the one field a recipe cannot state.
     ...dendriteCreateOptions(recipe, model, timeZone, extensionRegistry),
     ...(toolClassConfig(recipe) as object),
+    maintenanceIntervalMs: recipe.maintenanceIntervalMs,
   });
 
   // An agent-framework without the heartbeat ignores modules.heartbeat: the

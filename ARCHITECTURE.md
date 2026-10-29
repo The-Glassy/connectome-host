@@ -92,7 +92,8 @@ three, and in practice is how headless residents are operated.
    the module list,
    merge MCP servers, build the memory strategy and agent config, then
    `AgentFramework.create()` with the gate, provider hold, code execution,
-   conversations and subconscious configuration. Post-create hooks bind the
+   conversations and subconscious configuration, and the recipe's
+   maintenance interval. Post-create hooks bind the
    history module, wire the compression-quarantine alarm to ops alerts, and
    hand the framework to modules that need it.
 8. **Start** the framework, the session auto-namer, per-server MCPL stderr
@@ -245,7 +246,9 @@ Built in `createFramework()`. Tools are exposed as `<module>--<tool>`.
 
 Framework features configured by top-level recipe keys rather than modules:
 `conversations` (per-channel conversation forks from a dormant trunk agent),
-`subconscious` (a secondary agent with `tune_out`), `codeExecution`.
+`subconscious` (a secondary agent with `tune_out`), `codeExecution`,
+`maintenanceIntervalMs` (how often the context maintenance pass runs; 0 turns
+it off).
 
 ## MCPL servers
 
