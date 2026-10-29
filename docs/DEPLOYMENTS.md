@@ -113,7 +113,8 @@ the working directory):
   methods, so `console.error`/`console.log` lines — `[inference-failed]`,
   `[routeSpeech]`, `[webui] listening …` — still reach the supervisor's
   stdout/stderr. `headless.log` mostly holds the headless runtime's own lines.
-- routing decisions on stderr: `[routeSpeech] …`, `[routing] …`.
+- routing decisions on stderr: `[routeSpeech] …`, `[routing] …`. In readline
+  mode they go to `data/readline-error.log` instead (below).
 - raw model calls: `data/llm-calls.<iso>.jsonl` — a new file per process start
   (forensic; large).
 - `logs/failures.log` — JSONL failure/ops-alert records (below). Relative to
@@ -123,12 +124,27 @@ the working directory):
   [`webui-live-surgery.md`](./webui-live-surgery.md)) and
   `mcpl-stderr/<server>.log` (each MCPL server's stderr plus connect/close/error
   lines; rolls to `.1` at 10 MB).
+- Readline mode (`--no-tui` with stdin on a terminal):
+  `data/readline-error.log`. From readline mode's banner until the host has
+  stopped, it takes what the process writes through `process.stderr.write`,
+  `console.error` and `console.warn`: library diagnostics, `[routeSpeech]`,
+  `[routing]` and `[inference-failed]` among them. It is created readable by
+  its owner alone, and each line is written to it as it comes. What the person
+  at the terminal needs still prints there, each on a line of its own: a
+  turn's failure and how it ended, a slash command's failure, the host's own
+  ops alerts (as the TUI words them; a fleet child's aren't printed there), an
+  update notice, a self-restart's failure to close the Web UI's server, and
+  the log's path at start when it opened. A crash prints on the terminal too.
+  If the log can't be opened or written, the host says so, and from then on
+  the lines it would have taken print on the terminal as before. Batch mode
+  keeps stderr as it is.
 - TUI mode: `data/tui-error.log`. Fleet children: `startup.log` in the
   child's data dir (default `./data/<child>/` under the parent's working
   directory) — the child's stdio, opened by the parent at spawn.
 - **Inference failures** (agent-framework): when a turn's inference is
   exhausted after retries the framework prints
-  `[inference-failed] agent=… consecutive=N: <reason>` to stderr, appends a
+  `[inference-failed] agent=… consecutive=N: <reason>` to stderr (in readline
+  mode, to `data/readline-error.log`), appends a
   JSONL record to `logs/failures.log`, and adds an `[inference-failed]` marker
   to the agent's chronicle so the agent learns why its turn produced nothing
   (`SUPPRESS_INFERENCE_FAILED_MARKER=1` disables the marker). At 3 consecutive
