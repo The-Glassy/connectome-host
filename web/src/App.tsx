@@ -1025,7 +1025,7 @@ export function App() {
   };
 
   const cancelSubagent = (name: string, childName?: string): void => {
-    wire.send({ type: 'cancel-subagent', name, ...(childName ? { childName } : {}) });
+    wire.send({ type: 'cancel-subagent', name, ...(childName ? { childName } : { sessionId: shownSession() ?? '' }) });
   };
 
   const fleetStop = (name: string): void => {

@@ -339,7 +339,8 @@ describe("the web UI's actions that change the session are refused while a sessi
       { type: 'user-message', content: 'hello' },
       { type: 'route-to-child', childName: 'child', content: 'hello' },
       { type: 'interrupt' },
-      { type: 'cancel-subagent', name: 'helper' },
+      { type: 'cancel-subagent', name: 'helper', sessionId: 's1' },
+      { type: 'cancel-subagent', name: 'helper', childName: 'child' },
     ] as WebUiClientMessage[]) {
       expect(switchRefusalFor(switching, message)).toBeNull();
     }
@@ -412,6 +413,28 @@ describe('a web UI change chosen in one session is never made in another', () =>
         message: 'pin-remove refused: it was chosen in session s1, and session s3 is open now. Nothing changed; choose again in session s3.',
       });
     }
+  });
+
+  test('a subagent cancel chosen in another session is answered as a command result naming the subagent and both sessions, and one chosen in the open session passes', () => {
+    const message = { type: 'cancel-subagent', name: 'helper', sessionId: 's1' } as WebUiClientMessage;
+    expect(isClientMessage(message)).toBe(true);
+    expect(sessionRefusalFor(sessions('s2'), message)).toEqual({
+      type: 'command-result',
+      lines: [{ text: other('cancel-subagent helper'), style: 'tool' }],
+    });
+    expect(sessionRefusalFor(sessions('s1'), message)).toBeNull();
+  });
+
+  test("a subagent cancel for this process that doesn't say which session it was chosen in isn't a message the server takes", () => {
+    expect(isClientMessage({ type: 'cancel-subagent', name: 'helper' })).toBe(false);
+    expect(isClientMessage({ type: 'cancel-subagent', name: 'helper', sessionId: '' })).toBe(false);
+  });
+
+  test("a subagent cancel for a fleet child carries no session, since the page knows none of a child's, and isn't checked", () => {
+    const message = { type: 'cancel-subagent', name: 'helper', childName: 'child' };
+    expect(isClientMessage(message)).toBe(true);
+    expect(isClientMessage({ ...message, sessionId: 's1' })).toBe(false);
+    expect(sessionRefusalFor(sessions('s2'), message as WebUiClientMessage)).toBeNull();
   });
 
   test("a pin or settings change for a fleet child carries no session, since the page knows none of a child's, and isn't checked", () => {

@@ -203,7 +203,8 @@ function refusalReply(
       return error ? { type: 'surgery-result', corrId: message.corrId, op: message.type, ok: false, error } : null;
     }
     case 'fleet-stop':
-    case 'fleet-restart': {
+    case 'fleet-restart':
+    case 'cancel-subagent': {
       const text = refusal(`${message.type} ${message.name}`);
       return text ? { type: 'command-result', lines: [{ text, style: 'tool' }] } : null;
     }
@@ -225,12 +226,14 @@ export function switchRefusalFor(
   app: { switching?: boolean },
   message: WebUiClientMessage,
 ): WebUiServerMessage | null {
+  if (message.type === 'cancel-subagent') return null;
   return refusalReply(message, (what) => refusedWhileSwitching(app, what));
 }
 
 const CHANGES_STAMPED_WITH_THEIR_SESSION: ReadonlySet<string> = new Set([
   'rollback',
   'suppress',
+  'cancel-subagent',
   ...PANEL_OPS_THAT_CHANGE_THE_SESSION,
 ]);
 

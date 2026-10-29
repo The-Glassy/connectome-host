@@ -213,6 +213,7 @@ describe('a change chosen in one session, sent once another is open', () => {
       updateAgentRuntimeSettings: () => { push('settings-update'); },
       resetAgentRuntimeSettings: () => { push('settings-reset'); },
       cancelAgentRuntimeSettingsTransition: () => { push('settings-cancel-transition'); },
+      getAllModules: () => [{ name: 'subagent', cancelSubagent: (name: string) => { push(`cancel-subagent ${name}`); return true; } }],
     };
     const cm = {
       pinRange: (first: string) => { push(`pin-add ${first}`); return 'pin-1'; },
@@ -223,27 +224,37 @@ describe('a change chosen in one session, sent once another is open', () => {
     return hostApp(framework, false, [], { ...sessions, cm });
   }
 
-  const changes: Array<[Record<string, unknown>, (r: Reply) => boolean, Reply]> = [
+  type Change = [Record<string, unknown>, (r: Reply) => boolean, (text: string) => Reply, string];
+  const changes: Change[] = [
     [
       { type: 'rollback', corrId: 'rb', messageId: 'm1' },
       (r) => r.corrId === 'rb',
-      { type: 'surgery-result', corrId: 'rb', op: 'rollback', ok: false, error: other('rollback') },
+      (error) => ({ type: 'surgery-result', corrId: 'rb', op: 'rollback', ok: false, error }),
+      'rollback',
     ],
     [
       { type: 'suppress', corrId: 'sp', messageIds: ['m1'] },
       (r) => r.corrId === 'sp',
-      { type: 'surgery-result', corrId: 'sp', op: 'suppress', ok: false, error: other('suppress') },
+      (error) => ({ type: 'surgery-result', corrId: 'sp', op: 'suppress', ok: false, error }),
+      'suppress',
     ],
     ...(['pin-add', 'pin-remove', 'settings-update', 'settings-reset', 'settings-cancel-transition'] as const).map(
-      (type): [Record<string, unknown>, (r: Reply) => boolean, Reply] => [
+      (type): Change => [
         { type, ...{ 'pin-add': { firstMessageId: 'm1' }, 'pin-remove': { pinId: 'pin-0' }, 'settings-update': { tailTokens: 4000 } }[type as string] },
         (r) => r.type === 'error' && String(r.message).startsWith(type),
-        { type: 'error', message: other(type) },
+        (message) => ({ type: 'error', message }),
+        type,
       ],
     ),
+    [
+      { type: 'cancel-subagent', name: 'helper' },
+      (r) => r.type === 'command-result',
+      (text) => ({ type: 'command-result', lines: [{ text, style: 'tool' }] }),
+      'cancel-subagent helper',
+    ],
   ];
 
-  for (const [change, isAnswer, refusal] of changes) {
+  for (const [change, isAnswer, refusal, what] of changes) {
     test(`${change.type} chosen in the session before a switch is refused in its own reply form, and reaches nothing of the open session`, async () => {
       const rec = recorder();
       webUiModule.setApp(recordingApp(rec) as never);
@@ -252,7 +263,7 @@ describe('a change chosen in one session, sent once another is open', () => {
         client.send({ ...change, sessionId: 's1' });
         const answer = await client.next(`the stale ${change.type}'s answer`, (r) => isAnswer(r) || r.type === 'pins-list' || r.type === 'settings-state');
         expect(rec.reached).toEqual([]);
-        expect(answer).toEqual(refusal);
+        expect(answer).toEqual(refusal(other(what)));
       } finally {
         client.close();
       }
@@ -267,6 +278,7 @@ describe('a change chosen in one session, sent once another is open', () => {
     'settings-update': 'settings-update',
     'settings-reset': 'settings-reset',
     'settings-cancel-transition': 'settings-cancel-transition',
+    'cancel-subagent': 'cancel-subagent helper',
   };
 
   for (const [change] of changes) {
@@ -287,7 +299,7 @@ describe('a change chosen in one session, sent once another is open', () => {
   const chosenInTheIndexes = (what: string) =>
     `${what} refused: it was chosen in session "second" [s2], and session "first" [s1] is open now. Nothing changed; choose again in session "first" [s1].`;
 
-  for (const [change, isAnswer, refusal] of changes) {
+  for (const [change, isAnswer, refusal, what] of changes) {
     test(`${change.type} is checked against the session whose framework is open, not the one the session index names`, async () => {
       const rec = recorder();
       webUiModule.setApp(recordingApp(rec, { open: 's1', index: 's2' }) as never);
@@ -297,8 +309,7 @@ describe('a change chosen in one session, sent once another is open', () => {
         const answer = await client.next(`the answer to the ${change.type} chosen in the session the index names`,
           (r) => isAnswer(r) || r.type === 'pins-list' || r.type === 'settings-state');
         expect(rec.reached).toEqual([]);
-        const text = chosenInTheIndexes(change.type as string);
-        expect(answer).toEqual(refusal.type === 'surgery-result' ? { ...refusal, error: text } : { ...refusal, message: text });
+        expect(answer).toEqual(refusal(chosenInTheIndexes(what)));
         client.send({ ...change, sessionId: 's1' });
         await rec.when(reaches[change.type as string]);
         expect(rec.reached).toEqual([reaches[change.type as string]]);

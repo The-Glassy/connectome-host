@@ -12,14 +12,15 @@
  * as in its welcome, and a `stream-ended` frame in place of a stream-end trace
  * its scopes don't cover, which a page has to handle to end a streamed turn.
  *
- * v3: the seven messages that change a session (`rollback`, `suppress`,
- * `pin-add`, `pin-remove`, `settings-update`, `settings-reset` and
- * `settings-cancel-transition`) carry `sessionId`, the session whose data the
- * operator chose the change from, and the server refuses one chosen in a
- * session other than the one whose framework is open. Rollback and suppress
- * always carry it. A pin or settings change carries it unless its `scope`
- * names a fleet child, whose session the page doesn't know, and then carries
- * none. The data they're chosen from says whose it is: the welcome's
+ * v3: the eight messages that act on a session (`rollback`, `suppress`,
+ * `pin-add`, `pin-remove`, `settings-update`, `settings-reset`,
+ * `settings-cancel-transition` and `cancel-subagent`) carry `sessionId`, the
+ * session whose data the operator chose the change from, and the server
+ * refuses one chosen in a session other than the one whose framework is open.
+ * Rollback and suppress always carry it. A pin or settings change carries it
+ * unless its `scope` names a fleet child, and a `cancel-subagent` unless its
+ * `childName` does, since the page doesn't know a child's session, and then
+ * carries none. The data they're chosen from says whose it is: the welcome's
  * `session`, and `sessionId` on a `history-page`, on this process's
  * `pins-list` and `settings-state`, and on the `/debug/context` answer, each
  * the session whose framework produced it. A push such as `message-appended`
@@ -827,6 +828,10 @@ export interface CancelSubagentMessage {
   type: 'cancel-subagent';
   name: string;
   childName?: string;
+  /** The session shown when the operator chose this cancel, whose subagents
+   *  the page's tree showed. Required unless `childName` is set, and then
+   *  absent. */
+  sessionId?: string;
 }
 
 /** Stop a fleet child gracefully. */
@@ -1264,7 +1269,9 @@ export function isClientMessage(value: unknown): value is WebUiClientMessage {
       return isNonEmptyString(v.childName) && typeof v.content === 'string';
     case 'cancel-subagent':
       return isNonEmptyString(v.name)
-        && (v.childName === undefined || isNonEmptyString(v.childName));
+        && (v.childName === undefined
+          ? isNonEmptyString(v.sessionId)
+          : isNonEmptyString(v.childName) && v.sessionId === undefined);
     case 'fleet-stop':
     case 'fleet-restart':
       return isNonEmptyString(v.name);
