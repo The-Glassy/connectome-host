@@ -550,7 +550,7 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
   }
 
   // An agent's status reads idle while its turn assembles and while it waits
-  // to retry (agent-framework 0.28.0), so turn work also reads what the
+  // to retry (agent-framework 0.30.0), so turn work also reads what the
   // framework counts as alive.
   const turnWorkInFlight = (): boolean => {
     const subagents = subagentModule();
