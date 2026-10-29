@@ -22,7 +22,9 @@
  * none. The data they're chosen from says whose it is: the welcome's
  * `session`, and `sessionId` on a `history-page`, on this process's
  * `pins-list` and `settings-state`, and on the `/debug/context` answer, each
- * the session whose framework produced it.
+ * the session whose framework produced it. A push such as `message-appended`
+ * carries no stamp: it goes only to a client welcomed for the framework that
+ * sent it, so it belongs to the welcome before it.
  */
 
 import type { Line } from '../output-line.js';

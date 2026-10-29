@@ -2800,10 +2800,14 @@ export class WebUiModule implements Module {
     const app = sharedServer?.app!;
     const fw = app.framework;
     const agents = fw.getAllAgents();
-    const session = app.sessionManager.findSession(app.frameworkSessionId);
-    if (session?.id !== app.frameworkSessionId) {
-      throw new Error(`cannot build welcome: session ${app.frameworkSessionId} isn't in the session index`);
-    }
+    const sessionId = app.frameworkSessionId;
+    let indexed: ReturnType<SessionManager['findSession']> = null;
+    try {
+      indexed = app.sessionManager.findSession(sessionId);
+    } catch { }
+    const session = indexed?.id === sessionId
+      ? indexed
+      : { id: sessionId, name: sessionId, manuallyNamed: false };
 
     const cm = agents[0]?.getContextManager();
     let messages: WelcomeMessageEntry[] = [];

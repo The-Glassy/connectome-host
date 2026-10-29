@@ -198,7 +198,7 @@ function recorder() {
 
 describe('a change chosen in one session, sent once another is open', () => {
   const other = (what: string) =>
-    `${what} refused: it was chosen in session "first", and session "second" is open now. Nothing changed; choose again in session "second".`;
+    `${what} refused: it was chosen in session "first" [s1], and session "second" [s2] is open now. Nothing changed; choose again in session "second" [s2].`;
 
   function recordingApp({ record: push }: ReturnType<typeof recorder>, sessions: { open?: string; index?: string } = { open: 's2' }) {
     const framework = {
@@ -284,26 +284,39 @@ describe('a change chosen in one session, sent once another is open', () => {
     }, TEST_MS);
   }
 
-  test("a change is checked against the session whose framework is open, not the one the session index names", async () => {
+  const chosenInTheIndexes = (what: string) =>
+    `${what} refused: it was chosen in session "second" [s2], and session "first" [s1] is open now. Nothing changed; choose again in session "first" [s1].`;
+
+  for (const [change, isAnswer, refusal] of changes) {
+    test(`${change.type} is checked against the session whose framework is open, not the one the session index names`, async () => {
+      const rec = recorder();
+      webUiModule.setApp(recordingApp(rec, { open: 's1', index: 's2' }) as never);
+      const client = await connect();
+      try {
+        client.send({ ...change, sessionId: 's2' });
+        const answer = await client.next(`the answer to the ${change.type} chosen in the session the index names`,
+          (r) => isAnswer(r) || r.type === 'pins-list' || r.type === 'settings-state');
+        expect(rec.reached).toEqual([]);
+        const text = chosenInTheIndexes(change.type as string);
+        expect(answer).toEqual(refusal.type === 'surgery-result' ? { ...refusal, error: text } : { ...refusal, message: text });
+        client.send({ ...change, sessionId: 's1' });
+        await rec.when(reaches[change.type as string]);
+        expect(rec.reached).toEqual([reaches[change.type as string]]);
+      } finally {
+        client.close();
+      }
+    }, TEST_MS);
+  }
+
+  test("the pins list a change sends every client afterwards carries the session whose framework made the change", async () => {
     const rec = recorder();
     webUiModule.setApp(recordingApp(rec, { open: 's1', index: 's2' }) as never);
     const client = await connect();
     try {
-      for (const type of ['pin-remove', 'settings-update'] as const) {
-        const change = changes.find(([c]) => c.type === type)![0];
-        client.send({ ...change, sessionId: 's2' });
-        const answer = await client.next(`the answer to the ${type} chosen in the session the index names`,
-          (r) => (r.type === 'error' && String(r.message).startsWith(type)) || r.type === 'pins-list' || r.type === 'settings-state');
-        expect(rec.reached).toEqual([]);
-        expect(answer).toEqual({
-          type: 'error',
-          message: `${type} refused: it was chosen in session "second", and session "first" is open now. Nothing changed; choose again in session "first".`,
-        });
-      }
-      expect(rec.reached).toEqual([]);
+      await client.next('the welcome', (r) => r.type === 'welcome');
       client.send({ type: 'pin-remove', pinId: 'pin-0', sessionId: 's1' });
       await rec.when('pin-remove pin-0');
-      expect(rec.reached).toEqual(['pin-remove pin-0']);
+      expect((await client.next('the pins list after the removal', (r) => r.type === 'pins-list')).sessionId).toBe('s1');
     } finally {
       client.close();
     }
@@ -350,6 +363,27 @@ describe('what the page chooses a change from says whose session it is', () => {
       expect((await client.next('the pins list', (r) => r.type === 'pins-list')).sessionId).toBe('s1');
       client.send({ type: 'request-settings' });
       expect((await client.next('the settings state', (r) => r.type === 'settings-state')).sessionId).toBe('s1');
+    } finally {
+      client.close();
+    }
+  }, TEST_MS);
+
+  test('a read carrying a stray sessionId is answered as one without it', async () => {
+    webUiModule.setApp(servingApp() as never);
+    const client = await connect();
+    try {
+      client.send({ type: 'request-pins', sessionId: 's9' });
+      expect((await client.next('the pins list', (r) => r.type === 'pins-list' || r.type === 'error')).type).toBe('pins-list');
+    } finally {
+      client.close();
+    }
+  }, TEST_MS);
+
+  test("the welcome still comes, naming the session by its id, when the session index has no entry for the open framework's session", async () => {
+    webUiModule.setApp(hostApp({}, false, [], { open: 's3', index: 's2' }) as never);
+    const client = await connect();
+    try {
+      expect((await client.next('the welcome', (r) => r.type === 'welcome')).session).toEqual({ id: 's3', name: 's3', autoNamed: true });
     } finally {
       client.close();
     }

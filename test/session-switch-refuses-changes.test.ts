@@ -355,7 +355,7 @@ describe('a web UI change chosen in one session is never made in another', () =>
     },
   });
   const other = (what: string) =>
-    `${what} refused: it was chosen in session "first", and session "second" is open now. Nothing changed; choose again in session "second".`;
+    `${what} refused: it was chosen in session "first" [s1], and session "second" [s2] is open now. Nothing changed; choose again in session "second" [s2].`;
   const changes: Array<[WebUiClientMessage, (text: string) => unknown]> = [
     [
       { type: 'rollback', corrId: 'c1', messageId: 'm1', sessionId: 's1' },

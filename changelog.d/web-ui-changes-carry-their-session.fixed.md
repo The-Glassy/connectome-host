@@ -25,8 +25,8 @@
   `sessionId`. `pin-add`, `pin-remove`, `settings-update`, `settings-reset`
   and `settings-cancel-transition` require it unless their `scope` names a
   fleet child, and with such a scope carry none. A client that leaves it out
-  where it's required, or sends one with a fleet child's scope, is answered
-  "unknown message shape". `history-page`, this process's `pins-list` and
-  `settings-state`, and the `/debug/context` answer carry `sessionId`, the
-  session whose framework produced them. A page from before this release
-  shows its protocol mismatch banner.
+  where it's required, or includes one on a change whose scope names a fleet
+  child, is answered "unknown message shape". `history-page`, this process's
+  `pins-list` and `settings-state`, and the `/debug/context` answer carry
+  `sessionId`, the session whose framework produced them. A page from before
+  this release shows its protocol mismatch banner.

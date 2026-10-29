@@ -76,7 +76,7 @@ export function refusedForAnotherSession(
   const label = (id: string): string => {
     try {
       const session = sessions.findSession(id);
-      if (session?.id === id) return `session "${session.name}"`;
+      if (session?.id === id) return `session "${session.name}" [${id}]`;
     } catch { }
     return `session ${id}`;
   };
