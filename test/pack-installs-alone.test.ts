@@ -250,11 +250,14 @@ test("@opentui/core must load in the installed tree, its native package with it"
     "node_modules/@opentui/core/index.js": body,
   });
   const pkg = { dependencies: { "@opentui/core": "1.0.0" }, bundleDependencies: ["@opentui/core"] };
-  const loads = await check(standIn(pkg, HOST, opentui("export const ok = true;\n")));
+  const loads = await check(standIn(pkg, HOST, opentui("export function resolveRenderLib() {}\n")));
   assert.equal(loads.code, 0, loads.stderr);
   assert.match(loads.stdout, /src\/index\.ts's imports resolve, @opentui\/core loads, and the offline smoke run answered\.$/m);
   const missing = await check(standIn(pkg, HOST, opentui(`await import(["@opentui", "core-zz-" + process.arch].join("/"));\n`)));
   assert.equal(missing.code, 1);
+  const unopened = await check(standIn(pkg, HOST, opentui(`export function resolveRenderLib() { throw new Error("Failed to initialize OpenTUI render library"); }\n`)));
+  assert.equal(unopened.code, 1);
+  assert.match(unopened.stderr, /pack-installs-alone: @opentui\/core doesn't load in the installed zz-host-1\.0\.0\.tgz/);
   const optional = { optionalDependencies: { "@opentui/core": "1.0.0" }, bundleDependencies: ["@opentui/core"] };
   const optionalMissing = await check(standIn(optional, HOST, opentui(`await import(["@opentui", "core-zz-" + process.arch].join("/"));\n`)));
   assert.equal(optionalMissing.code, 1);
