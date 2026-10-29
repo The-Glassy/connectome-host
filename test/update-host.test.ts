@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readlinkSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as contract from '../src/update/contract.js';
-import { ContractError, installPaths, moveCurrent, readCurrent, readJournal, writeJsonAtomic, writeMark } from '../src/update/contract.js';
+import { installPaths, moveCurrent, readCurrent, readJournal, writeJsonAtomic, writeMark } from '../src/update/contract.js';
 import { HOST_ROOT, StartRefusal, commitRelease, releaseHere } from '../src/update/host.js';
 
 let dir: string;
@@ -52,24 +52,23 @@ describe('releaseHere', () => {
 
   test('refuses an install none of whose releases holds the host, with or without a releases directory, and a sibling whose name starts with a release\'s is not inside it', () => {
     const env = { CONNECTOME_INSTALL_ROOT: root };
-    const refusal = new ContractError(
-      `CONNECTOME_INSTALL_ROOT names the install at ${root}, but none of its releases holds this host (${realpathSync(HOST_ROOT)}). ` +
-      "Only an install's entry point sets CONNECTOME_INSTALL_ROOT: to run this host on its own, start it without that variable.",
-    );
-    expect(() => releaseHere(env, HOST_ROOT)).toThrow(refusal);
+    const none = `CONNECTOME_INSTALL_ROOT names the install at ${root}, but none of its releases holds this host ` +
+      `(${realpathSync(HOST_ROOT)}). Only an install's entry point sets CONNECTOME_INSTALL_ROOT: to run this host on ` +
+      'its own, start it without that variable.';
+    expect(refusal(() => releaseHere(env, HOST_ROOT))).toBe(none);
     release('0.11.0');
     mkdirSync(join(root, 'releases', '0.11.0-other'));
-    expect(() => releaseHere(env, HOST_ROOT)).toThrow(refusal);
+    expect(refusal(() => releaseHere(env, HOST_ROOT))).toBe(none);
     expect(releaseHere(env, join(root, 'releases', '0.11.0-other'))).toEqual({ root, release: '0.11.0-other' });
   });
 
   test('refuses a host two releases hold, since it could commit the wrong one', () => {
     const host = release('0.11.0');
     symlinkSync(join(root, 'releases', '0.11.0'), join(root, 'releases', 'latest'));
-    expect(() => releaseHere({ CONNECTOME_INSTALL_ROOT: root }, host)).toThrow(new ContractError(
+    expect(refusal(() => releaseHere({ CONNECTOME_INSTALL_ROOT: root }, host))).toBe(
       `CONNECTOME_INSTALL_ROOT names the install at ${root}, and 2 of its releases hold this host (0.11.0, latest), ` +
       `so it can't tell which release it is. Each entry of ${join(root, 'releases')} should be a release of its own.`,
-    ));
+    );
   });
   test('passes over a release entry that is a link to nothing', () => {
     const host = release('0.11.0');
@@ -81,13 +80,13 @@ describe('releaseHere', () => {
     const host = release('0.11.0');
     const env = { CONNECTOME_INSTALL_ROOT: root };
     symlinkSync(join(root, 'releases', 'loop'), join(root, 'releases', 'loop'));
-    expect(() => releaseHere(env, host)).toThrow(new RegExp(
+    expect(refusal(() => releaseHere(env, host))).toMatch(new RegExp(
       `^CONNECTOME_INSTALL_ROOT names the install at ${root}, and the entry loop of ${join(root, 'releases')} can't be ` +
       "read, so this host can't tell which of its releases it is: ELOOP",
     ));
     rmSync(join(root, 'releases'), { recursive: true });
     writeFileSync(join(root, 'releases'), 'not a directory');
-    expect(() => releaseHere(env, HOST_ROOT)).toThrow(new RegExp(
+    expect(refusal(() => releaseHere(env, HOST_ROOT))).toMatch(new RegExp(
       `^CONNECTOME_INSTALL_ROOT names the install at ${root}, and its releases directory ${join(root, 'releases')} ` +
       "can't be read, so this host can't tell which of its releases it is: ENOTDIR",
     ));

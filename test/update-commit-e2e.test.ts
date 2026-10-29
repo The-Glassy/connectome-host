@@ -309,7 +309,7 @@ describe('a host started from an install', () => {
     expect(existsSync(childrenFilePath(join(dir, 'data')))).toBe(false);
   }, 60_000);
 
-  test('a root none of whose releases holds it is refused before anything is written', async () => {
+  test('a root none of whose releases holds it is refused with a plain line before anything is written', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'update-commit-e2e-'));
     dirs.push(dir);
     const root = join(dir, 'install');
@@ -318,6 +318,8 @@ describe('a host started from an install', () => {
     const { stderr, exit } = startHost(dir, join(REPO_ROOT, 'src', 'index.ts'), root);
     expect(await exit).toBe(1);
     expect(stderr()).toContain(`CONNECTOME_INSTALL_ROOT names the install at ${root}, but none of its releases holds this host`);
+    expect(stderr()).not.toContain('Fatal error');
+    expect(lineAfter(stderr(), 'CONNECTOME_INSTALL_ROOT names the install at')).not.toMatch(/^\s+at /);
     expect(existsSync(join(dir, 'data'))).toBe(false);
     expect(readCurrent(root)).toBeNull();
   }, 30_000);

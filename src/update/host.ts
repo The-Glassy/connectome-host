@@ -2,12 +2,14 @@ import { readdirSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  ContractError, INSTALL_ROOT_ENV, appendJournal, connectedWhenMarked, installPaths, installRootFromEnv, moveCurrent,
-  readCurrent, readMark, syncDir,
+  INSTALL_ROOT_ENV, appendJournal, connectedWhenMarked, installPaths, installRootFromEnv, moveCurrent, readCurrent,
+  readMark, syncDir,
 } from './contract.js';
 import { disarmTrialLog } from './trial-log.js';
 
 export const HOST_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+export class StartRefusal extends Error {}
 
 export interface ReleaseHere {
   root: string;
@@ -22,7 +24,7 @@ export function releaseHere(
   if (root === null) return null;
   const { releases } = installPaths(root);
   const host = realpathSync(hostRoot);
-  const unreadable = (what: string, error: unknown): ContractError => new ContractError(
+  const unreadable = (what: string, error: unknown): StartRefusal => new StartRefusal(
     `${INSTALL_ROOT_ENV} names the install at ${root}, and ${what} can't be read, so this host can't tell which ` +
     `of its releases it is: ${error instanceof Error ? error.message : String(error)}`,
   );
@@ -43,14 +45,12 @@ export function releaseHere(
     return host === path || host.startsWith(path + sep);
   }).sort();
   if (holding.length === 1) return { root, release: holding[0]! };
-  throw new ContractError(holding.length === 0
+  throw new StartRefusal(holding.length === 0
     ? `${INSTALL_ROOT_ENV} names the install at ${root}, but none of its releases holds this host (${host}). ` +
       `Only an install's entry point sets ${INSTALL_ROOT_ENV}: to run this host on its own, start it without that variable.`
     : `${INSTALL_ROOT_ENV} names the install at ${root}, and ${holding.length} of its releases hold this host ` +
       `(${holding.join(', ')}), so it can't tell which release it is. Each entry of ${releases} should be a release of its own.`);
 }
-
-export class StartRefusal extends Error {}
 
 export interface CommitCheck {
   /** The MCPL servers the framework is configured with and hasn't connected, closed tabs aside:
