@@ -255,7 +255,6 @@ export interface Mark {
   connected?: string[];
 }
 
-/** A mark's `connected`, or null when it records none this release can read. */
 export function connectedWhenMarked(mark: Mark): string[] | null {
   const { connected } = mark;
   return Array.isArray(connected) && connected.every((id) => typeof id === 'string') ? connected : null;

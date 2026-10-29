@@ -50,8 +50,6 @@ export function releaseHere(
       `(${holding.join(', ')}), so it can't tell which release it is. Each entry of ${releases} should be a release of its own.`);
 }
 
-/** A start this host refuses before any agent starts, in a message written for
- *  its operator: the entry point prints the message alone and exits 1. */
 export class StartRefusal extends Error {}
 
 export interface CommitCheck {
@@ -110,17 +108,6 @@ export function commitRelease(here: ReleaseHere, check: CommitCheck = {}): { fro
   const unconnected = check.unconnectedServers?.() ?? [];
   const asked = unconnected.length > 0 ? connectedWhenAsked(root, release) : null;
   const holding = asked === null ? unconnected : unconnected.filter((id) => asked.includes(id));
-  if (holding.length > 0) {
-    throw new StartRefusal(
-      `The MCPL server${holding.length === 1 ? '' : 's'} ${holding.join(', ')} ` +
-      `${holding.length === 1 ? "wasn't" : "weren't"} connected when this release went to commit, so it starts none ` +
-      `of its agents, and the next start goes back to ${from}: a release on trial commits only once ` +
-      (asked === null
-        ? "every server it's configured with is connected, closed tabs aside."
-        : `it has connected every server ${from} had connected when it stopped, closed tabs aside.`) +
-      " This start's log says why each one failed.",
-    );
-  }
   const passed = unconnected.filter((id) => !holding.includes(id));
   if (passed.length > 0) {
     console.log(
@@ -128,6 +115,18 @@ export function commitRelease(here: ReleaseHere, check: CommitCheck = {}): { fro
       `${passed.length === 1 ? "isn't" : "aren't"} connected, and ${from} hadn't connected ` +
       `${passed.length === 1 ? 'it' : 'them'} when it stopped either, so ` +
       `${passed.length === 1 ? "it doesn't" : "they don't"} hold this release's commit.`,
+    );
+  }
+  if (holding.length > 0) {
+    throw new StartRefusal(
+      `The MCPL server${holding.length === 1 ? '' : 's'} ${holding.join(', ')} ` +
+      `${holding.length === 1 ? "wasn't" : "weren't"} connected when this release went to commit, so it starts none ` +
+      `of its agents, and the next start goes back to ${from}: a release on trial commits only once ` +
+      (asked === null
+        ? "every server it's configured with is connected, closed tabs aside."
+        : `it has connected each server it's configured with that ${from} had connected when it stopped, closed tabs ` +
+          'aside.') +
+      " This start's log says why each one failed.",
     );
   }
   try {

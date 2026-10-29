@@ -22,8 +22,6 @@ const CHECK_EVERY_MS = 24 * 60 * 60 * 1000;
 const RESTART_QUIESCE_MS = 120_000;
 const WAIT_LONGER_MS = 600_000;
 
-/** What a Restart uses of a framework: its switch's quiesce, and which MCPL
- *  servers it has connected when it writes the mark (Mark.connected). */
 export type SwitchFramework = QuiesceFramework & {
   listMcplServers(): ReadonlyArray<{ id: string; connected: boolean }>;
 };

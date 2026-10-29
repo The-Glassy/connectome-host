@@ -98,6 +98,26 @@ function lineAfter(text: string, start: string): string {
   return lines[at + 1] ?? '';
 }
 
+function workingServer(dir: string): string {
+  const server = join(dir, 'working-mcpl.mjs');
+  writeFileSync(server, [
+    "import { createInterface } from 'node:readline';",
+    "const send = (m) => process.stdout.write(JSON.stringify(m) + '\\n');",
+    "createInterface({ input: process.stdin }).on('line', (line) => {",
+    '  let msg; try { msg = JSON.parse(line); } catch { return; }',
+    '  if (msg.id === undefined || msg.method === undefined) return;',
+    "  if (msg.method === 'initialize') {",
+    "    send({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: msg.params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'working', version: '0.0.0' } } });",
+    "  } else if (msg.method === 'tools/list') {",
+    "    send({ jsonrpc: '2.0', id: msg.id, result: { tools: [] } });",
+    '  } else {',
+    "    send({ jsonrpc: '2.0', id: msg.id, result: {} });",
+    '  }',
+    '});',
+  ].join('\n'));
+  return server;
+}
+
 function install(): { dir: string; root: string; index: string; fleet: Record<string, unknown> } {
   const dir = mkdtempSync(join(tmpdir(), 'update-commit-e2e-'));
   dirs.push(dir);
@@ -217,22 +237,7 @@ describe('a host started from an install', () => {
   test('a trial whose MCPL server connects commits, so a working server reads as connected when the commit runs', async () => {
     const { dir, root, index } = install();
     onTrial(dir, root);
-    const server = join(dir, 'working-mcpl.mjs');
-    writeFileSync(server, [
-      "import { createInterface } from 'node:readline';",
-      "const send = (m) => process.stdout.write(JSON.stringify(m) + '\\n');",
-      "createInterface({ input: process.stdin }).on('line', (line) => {",
-      '  let msg; try { msg = JSON.parse(line); } catch { return; }',
-      '  if (msg.id === undefined || msg.method === undefined) return;',
-      "  if (msg.method === 'initialize') {",
-      "    send({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: msg.params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'working', version: '0.0.0' } } });",
-      "  } else if (msg.method === 'tools/list') {",
-      "    send({ jsonrpc: '2.0', id: msg.id, result: { tools: [] } });",
-      '  } else {',
-      "    send({ jsonrpc: '2.0', id: msg.id, result: {} });",
-      '  }',
-      '});',
-    ].join('\n'));
+    const server = workingServer(dir);
     const { host, stderr, exit } = startHost(dir, index, root, {}, { mcpServers: { working: { command: process.execPath, args: [server] } } });
     await until(() => readJournal(root).some(({ step }) => step === 'commit'), 30_000, `the trial commits (stderr: ${stderr().slice(-1500)})`);
     expect(readCurrent(root)).toBe('9.9.9');
@@ -261,6 +266,7 @@ describe('a host started from an install', () => {
     expect(log!.lines.length).toBeGreaterThan(0);
     expect(log!.lines.length).toBeLessThanOrEqual(TRIAL_LOG_LINES);
     expect(log!.lines.some((line) => line.startsWith("The MCPL server lost wasn't connected when this release went to commit"))).toBe(true);
+    expect(log!.lines.filter((line) => line.startsWith('Fatal error') || /^\s+at /.test(line))).toEqual([]);
     expect(stderr()).not.toContain('Fatal error');
     expect(lineAfter(stderr(), "The MCPL server lost wasn't connected")).not.toMatch(/^\s+at /);
     expect(statSync(installPaths(root).trialLog).mode & 0o777).toBe(0o600);
@@ -273,7 +279,8 @@ describe('a host started from an install', () => {
     const { host, stderr, stdout, exit } = startHost(dir, index, root, {}, { mcpServers: { lost: { command: join(dir, 'no-such-server') } } });
     await until(() => readJournal(root).some(({ step }) => step === 'commit'), 30_000, `the trial commits (stderr: ${stderr().slice(-1500)})`);
     expect(readCurrent(root)).toBe('9.9.9');
-    expect(stdout()).toContain("[update] The MCPL server lost isn't connected, and 9.9.8 hadn't connected it when it stopped either, so it doesn't hold this release's commit.");
+    const passed = "[update] The MCPL server lost isn't connected, and 9.9.8 hadn't connected it when it stopped either, so it doesn't hold this release's commit.";
+    await until(() => stdout().includes(passed), 30_000, `the start names the server that didn't hold it (stdout: ${stdout().slice(-1500)})`);
     const log = join(dir, 'data', 'headless.log');
     await until(() => existsSync(log) && readFileSync(log, 'utf-8').includes('socket listening at'), 30_000, 'headless listens');
     host.kill('SIGTERM');
@@ -405,7 +412,7 @@ describe("a host's update, on a real start", () => {
     }
   }, 60_000);
 
-  test('/update restart quiesces a headless host, writes the mark and exits 75, for the next start to switch', async () => {
+  test('/update restart quiesces a headless host, writes the mark with the MCPL servers it had connected, and exits 75, for the next start to switch', async () => {
     const { dir, root, index } = install();
     moveCurrent(root, '9.9.9');
     const placed = join(root, 'releases', '9.9.10', 'node_modules', '@animalabs', 'connectome-host');
@@ -413,14 +420,15 @@ describe("a host's update, on a real start", () => {
     writeFileSync(join(placed, 'package.json'), JSON.stringify({ version: '9.9.10' }));
     writeFileSync(join(placed, 'src', 'index.ts'), '');
     writeFileSync(join(placed, 'src', 'update', 'launcher.ts'), '');
-    const { stderr, exit } = startHost(dir, index, root);
+    const servers = { working: { command: process.execPath, args: [workingServer(dir)] }, lost: { command: join(dir, 'no-such-server') } };
+    const { stderr, exit } = startHost(dir, index, root, {}, { mcpServers: servers });
     const socketPath = join(dir, 'data', 'ipc.sock');
     await until(() => existsSync(socketPath), 20_000, `the host serves its socket (stderr: ${stderr().slice(-1500)})`);
     const socket = await connectWhenAccepting(socketPath);
     socket.write(JSON.stringify({ type: 'command', command: '/update restart' }) + '\n');
     expect(await exit).toBe(75);
     socket.destroy();
-    expect(readRecord<{ to: string; why: string }>(installPaths(root).mark, 'mark')).toMatchObject({ to: '9.9.10', why: 'update' });
+    expect(readRecord<{ to: string; why: string }>(installPaths(root).mark, 'mark')).toMatchObject({ to: '9.9.10', why: 'update', connected: ['working'] });
     expect(hostModeRecord(join(dir, 'data'))).toMatchObject({ quiesced: true, reason: switchQuiesceReason('9.9.10') });
     expect(readCurrent(root)).toBe('9.9.9');
   }, 60_000);

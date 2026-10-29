@@ -372,8 +372,8 @@ describe('a switch', () => {
       'ends before that, the next start goes back to 0.10.2 and its data.';
     mark({ to: '0.11.0', why: 'update', connected: ['discord', 'heartbeat'] });
     await decide(root, ops());
-    expect(reports.at(-1)).toBe(says('opened its stores and connected discord, heartbeat, the servers 0.10.2 had ' +
-      'connected when it stopped, closed tabs aside'));
+    expect(reports.at(-1)).toBe(says("opened its stores and connected whichever of discord, heartbeat it's configured " +
+      'with, the servers 0.10.2 had connected when it stopped, closed tabs aside'));
     for (const [connected, asked] of [
       [[], 'opened its stores, since 0.10.2 had no server connected when it stopped'],
       [undefined, 'opened its stores and connected its servers, closed tabs aside'],
@@ -2522,13 +2522,14 @@ describe('a Go back from a shell', () => {
     expect(reports.at(-1)).toEndWith('Otherwise stop the service, run this again, and start the service.');
   });
 
-  test('takes the lock a host that keeps exiting gives up, writes the mark, gives the lock up, and the next start goes back', async () => {
+  test('takes the lock a host that keeps exiting gives up, writes the mark with no servers recorded, gives the lock up, and the next start goes back', async () => {
     await committedSwitch();
     lockOf(4242);
     alive.add(4242);
     const exiting: LauncherOps = { ...ops(), sleep: (ms) => { clock += ms; slept += ms; alive.delete(4242); } };
     expect(goBackFromShell(root, [KEEP_DATA_FLAG], exiting)).toBe(0);
     expect(readRecord<Mark>(installPaths(root).mark, 'mark')).toMatchObject({ v: 1, to: '0.10.2', why: 'go-back', keepData: true });
+    expect(readRecord<Mark>(installPaths(root).mark, 'mark')!.connected).toBeUndefined();
     expect(existsSync(installPaths(root).lock)).toBe(false);
     expect(reports.at(-1)).toMatch(/^\[update\] The next start goes back to 0\.10\.2, keeping the newer data\. Start the service/);
     expect(await decide(root, ops())).toEqual({ release: '0.10.2', trial: true });
