@@ -253,3 +253,22 @@ describe('/mcp add preserves env on overwrite', () => {
     expect(saved.argtest.args).toBeUndefined();
   });
 });
+
+describe('/newtopic cut short by a stop', () => {
+  const CROSSED = 'Transition summary crossed a branch generation; reinitialize before retrying';
+  test('a reset that fails while the host is stopping says so and gives what the reset said; one that fails otherwise gives the failure', async () => {
+    for (const stopping of [true, false]) {
+      const { cm, app, text } = makeStubWorld('idle');
+      Object.assign(cm, {
+        resetHeadWindow: async () => {
+          if (stopping) app.stopping = true;
+          throw new Error(CROSSED);
+        },
+      });
+      const follow = await handleCommand('/newtopic', app).asyncWork!;
+      expect(text(follow)).toBe(stopping
+        ? `Topic reset stopped: the host is stopping. What the reset said: ${CROSSED}`
+        : `Topic reset failed: ${CROSSED}`);
+    }
+  });
+});

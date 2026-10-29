@@ -88,7 +88,7 @@ import { hostUpdate, hostVersionOf } from './update/update.js';
 import { armTrialLog } from './update/trial-log.js';
 import { PRIVATE_DIR_MODE } from './update/data-swap.js';
 import { HOST_PACKAGE_JSON } from './bun-floor-check.js';
-import { switchSessionSteps } from './session-switch.js';
+import { switchLeftForStop, switchSessionSteps } from './session-switch.js';
 import { resolveAgentName } from './agent-name.js';
 import { generateSessionName, namingSummary } from './synesthete.js';
 import {
@@ -160,18 +160,19 @@ interface AppContext {
   subscriptionUnmetered: boolean;
   /**
    * Headless only: the framework's traces from create() on, held until
-   * runHeadless attaches the sink that feeds the agent tree and the socket.
-   * create() replays its early traces (registry restore, work a stop cut
-   * off, resumed tune-out epochs) only to a listener attached before
-   * start(), and runHeadless runs after start(); this is that listener
-   * (src/boot-traces.ts).
+   * runHeadless attaches the sink that feeds the agent tree, the socket and
+   * the host's idle. create() replays its early traces (registry restore,
+   * work a stop cut off, resumed tune-out epochs) only to a listener
+   * attached before start(), and runHeadless runs after start(); this is
+   * that listener (src/boot-traces.ts).
    */
   bootTraces?: BootTraceHold;
   stopping?: boolean;
   switching?: boolean;
+  switchSettled?: Promise<{ madeStopFailed: boolean }>;
   onFrameworkReplaced?: () => void;
 
-  switchSession(id: string): Promise<void>;
+  switchSession(id: string): Promise<boolean>;
 }
 
 async function resolveRecipe(): Promise<Recipe> {
@@ -741,9 +742,9 @@ async function runPiped(app: AppContext) {
       if (result.switchToSessionId) {
         const sessionId = result.switchToSessionId;
         turns.switched();
-        await switchFollowing(traces, () => app.switchSession(sessionId), () => app.framework);
+        const switched = await switchFollowing(traces, () => app.switchSession(sessionId), () => app.framework);
         afterSwitch();
-        console.log('Session switched.');
+        console.log(switched ? 'Session switched.' : switchLeftForStop(app.sessionManager.getActiveSession()));
       }
     } else {
       app.framework.pushEvent({
@@ -765,6 +766,7 @@ async function runPiped(app: AppContext) {
       console.log(`> ${batchEchoLine(line)}`);
       if (await processLine(line)) break;
     }
+    app.stopping = true;
     console.log('Done.');
     const serverIds = app.framework.listMcplServers().map((s) => s.id);
     console.log(batchTeardownNotice(serverIds));
@@ -809,6 +811,7 @@ async function runPiped(app: AppContext) {
       atPrompt = true;
     });
     await new Promise<void>(r => rl.on('close', r));
+    app.stopping = true;
     console.log('\nShutting down...');
     await app.framework.stop();
     if (restarting) {
@@ -1147,7 +1150,7 @@ async function main() {
 
     async switchSession(id: string) {
       const newStorePath = sessionManager.getStorePath(id);
-      await switchSessionSteps(this, {
+      return switchSessionSteps(this, {
         stopOld: async () => {
           handleExport(this);
           await stopForSessionSwitch(this.framework, id);
