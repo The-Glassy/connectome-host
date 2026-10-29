@@ -58,6 +58,7 @@ const list = (versions: string[]): string => versions.join(', ');
 export class HostUpdate {
   private setup: UpdateSetup | null = null;
   private stopper: HostStop | null = null;
+  private serving: (() => void) | null = null;
   private notices: ((line: string) => void) | null = null;
   private check: Check | null = null;
   private readonly logged = new Set<string>();
@@ -74,6 +75,14 @@ export class HostUpdate {
 
   attachStop(stop: HostStop): void {
     this.stopper = stop;
+    const serve = this.serving;
+    this.serving = null;
+    serve?.();
+  }
+
+  whenStopAttached(serve: () => void): void {
+    if (this.stopper !== null) serve();
+    else this.serving = serve;
   }
 
   attachNotices(log: (line: string) => void): void {
