@@ -47,9 +47,15 @@ const server = createServer((sock) => {
   sock.on('error', () => { });
 
   emit({ type: 'lifecycle', phase: 'ready', pid: process.pid, dataDir, idle: idleSaid });
+  if (bootTurn) {
+    bootTurn = false;
+    emit({ type: 'inference:started', agentName: 'mock', replay: true });
+    emit({ type: 'inference:completed', agentName: 'mock', replay: true });
+  }
 });
 
-let idleSaid = false;
+let bootTurn = process.env.MOCK_BOOT_TURN === '1';
+let idleSaid = bootTurn;
 let textsReceived = 0;
 
 function started(): void {

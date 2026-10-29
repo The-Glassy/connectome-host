@@ -297,6 +297,8 @@ describe('FleetModule — unresolved launch artifacts', () => {
         const wire = subscribes[0].events as string[];
         for (const event of expected) expect(wire).toContain(event);
         const mandatory = ['inference:started', 'inference:tokens', 'inference:tool_calls_yielded',
+          'dendrite:agent-created', 'dendrite:agent-orphaned', 'dendrite:agent-reparented',
+          'dendrite:agent-ended', 'dendrite:agent-interrupted',
           'inference:usage', 'inference:completed', 'inference:failed', 'inference:exhausted',
           'inference:aborted', 'inference:stream_resumed', 'inference:stream_restarted',
           'inference:turn_ended', 'tool:started', 'tool:completed', 'tool:failed', 'usage:updated'];

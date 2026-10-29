@@ -101,13 +101,15 @@ import {
   clearSavedRecipe,
   parseRecipeArg,
   deprecatedConversationsNotices,
+  deprecatedSurfaceNotices,
   resolveProvider,
   recipeModel,
   runningFit,
 } from './recipe.js';
 import { createBranchState, resetBranchState, handleExport, type BranchState } from './commands.js';
 import { buildFrameworkAgentConfig, membraneCachingOverride, autoContinueSupportWarning } from './framework-agent-config.js';
-import { buildFrameworkStrategy, buildConversationsConfig } from './framework-strategy.js';
+import { buildFrameworkStrategy, buildConversationsConfig, dendriteCreateOptions } from './framework-strategy.js';
+import { holdBootTraces, type BootTraceHold } from './boot-traces.js';
 import { AUDIT_STORES_FLAG, auditStoresFromEntry, checkActiveStore, placesOnTrial } from './update/audit-stores.js';
 import { buildWorkspaceMounts } from './workspace-mounts.js';
 import { quarantineAlarm, type QuarantineStatus } from './web/quarantine-alert.js';
@@ -154,6 +156,15 @@ interface AppContext {
   quotaMeter: QuotaMeter | null;
   credentials: CredentialMonitor | null;
   subscriptionUnmetered: boolean;
+  /**
+   * Headless only: the framework's traces from create() on, held until
+   * runHeadless attaches the sink that feeds the agent tree and the socket.
+   * create() replays its early traces (registry restore, work a stop cut
+   * off, resumed tune-out epochs) only to a listener attached before
+   * start(), and runHeadless runs after start(); this is that listener
+   * (src/boot-traces.ts).
+   */
+  bootTraces?: BootTraceHold;
   stopping?: boolean;
   switching?: boolean;
   onFrameworkReplaced?: () => void;
@@ -259,8 +270,11 @@ async function createFramework(
     subagentModule = new SubagentModule({
       parentAgentName: agentName,
       provider: resolveProvider(recipe),
+      formatter: recipe.agent.formatter,
       defaultModel: subagentConfig.defaultModel || model,
       defaultMaxTokens: subagentConfig.defaultMaxTokens,
+      ...(subagentConfig.orientation ? { orientation: subagentConfig.orientation } : {}),
+      ...(subagentConfig.lifecycleReach ? { lifecycleReach: subagentConfig.lifecycleReach } : {}),
       timeZone,
     });
     moduleInstances.push(subagentModule);
@@ -390,8 +404,7 @@ async function createFramework(
 
   let mcplAdminModule: McplAdminModule | null = null;
   if (modules.mcplAdmin === true || typeof modules.mcplAdmin === 'object') {
-    const surface = typeof modules.mcplAdmin === 'object' ? modules.mcplAdmin.surface : undefined;
-    mcplAdminModule = new McplAdminModule({ timeZone, ...(surface ? { surface } : {}) });
+    mcplAdminModule = new McplAdminModule({ timeZone });
     moduleInstances.push(mcplAdminModule);
   }
 
@@ -434,10 +447,7 @@ async function createFramework(
       ...(subscriptionUnmetered ? { subscriptionUnmetered } : {}),
     });
     moduleInstances.push(webUiModule);
-    moduleInstances.push(new ObserversModule({
-      path: observersPath,
-      ...(webuiConfig.observersSurface ? { surface: webuiConfig.observersSurface } : {}),
-    }));
+    moduleInstances.push(new ObserversModule({ path: observersPath }));
   }
 
   if (modules.ttsRelay) {
@@ -479,10 +489,11 @@ async function createFramework(
     return withEnv;
   });
 
-  const strategy = buildFrameworkStrategy(recipe, model, timeZone, extensionRegistry);
+  const strategy = buildFrameworkStrategy(recipe, model, timeZone, extensionRegistry, agentName);
   const agentConfig = buildFrameworkAgentConfig(recipe, agentName, model, strategy);
 
   for (const notice of deprecatedConversationsNotices(recipe.conversations)) console.warn(`[deprecated] ${notice}`);
+  for (const notice of deprecatedSurfaceNotices(recipe.modules)) console.warn(`[deprecated] ${notice}`);
   const conversations = buildConversationsConfig(recipe, agentName, model, timeZone, extensionRegistry);
 
   // The framework's heartbeat (heartbeat-options.ts), with heartbeat-mcpl
@@ -506,9 +517,11 @@ agents: [agentConfig],
     ...(quotaMeter ? { providerHold: quotaProviderHold(quotaMeter, () => model) } : {}),
     ...(recipe.codeExecution ? { codeExecution: recipe.codeExecution } : {}),
     ...(conversations ? { conversations } : {}),
-    // Passed through as written: agent-framework fills in the subconscious's
-    // defaults.
-    ...(recipe.subconscious ? { subconscious: recipe.subconscious } : {}),
+    // Tune-out's reader (agent-framework#77, #232) and the Dendrite options
+    // (`speech`, `tuneOut`, `dendrite`) — recipe opt-ins, typed against the
+    // framework's own config (agent-framework#546); the reader mapping adds
+    // the one field a recipe cannot state.
+    ...dendriteCreateOptions(recipe, model, timeZone, extensionRegistry),
     ...(toolClassConfig(recipe) as object),
     maintenanceIntervalMs: recipe.maintenanceIntervalMs,
   });
@@ -1138,6 +1151,10 @@ async function main() {
     };
   }
 
+  // The headless sink attaches inside runHeadless, after start() has
+  // dropped the traces create() replays; hold them from here (see
+  // AppContext.bootTraces), before startFramework calls start().
+  if (headless) app.bootTraces = holdBootTraces(framework);
   await startFramework(framework, installHere, {
     dataDir: config.dataDir,
     activeStore: storePath,
