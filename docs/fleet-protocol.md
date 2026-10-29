@@ -51,7 +51,13 @@ the recipe.
 **Connection model.** One client at a time; a new connection closes the
 previous one. On every connection the subscription resets to `['*']` and the
 child emits `lifecycle:ready`. A client disconnecting does not stop the child.
-Events emitted while no client is connected are dropped, not buffered.
+Framework events from before the first client ever connected — the boot,
+including what `create()` replays about a restart (a resumed tune-out epoch,
+a fork a stop cut off) — are kept, the first 1,000 of them, and sent to that
+first client after its `ready`, each with `replay: true`; if more were
+emitted, the replay ends with `lifecycle` `replay-truncated` saying how many
+were cut. After that, events emitted while no client is connected are
+dropped, not buffered: a later client sends `describe` for a `snapshot`.
 
 **Shutdown.** Triggered by `{"type":"shutdown"}`, by `/quit` sent as a
 `command`, by SIGTERM or SIGINT, by `--exit-when-idle`, or by an agent's
@@ -113,6 +119,8 @@ subject to the subscription filter: `inference:*`, `tool:*`, `usage:updated`,
 | Event | Payload | When |
 |---|---|---|
 | `lifecycle` (`phase: "ready"`) | `pid, dataDir, recipe, idle` | On every socket accept, sent before the parent's `subscribe` can arrive. `recipe` is the recipe's display name, not a path. `idle` is whether the host has said `lifecycle:idle` since its last `inference:started` or `text` received and is still quiet as that idle reads it: every agent idle, with nothing in flight but a background script. When it has said idle and isn't quiet, the quiet that follows brings a new `lifecycle:idle`. A parent that sends texts on this connection counts them from zero. |
+| any framework trace, with `replay: true` | the trace's own fields | To the first client only, right after its `ready`: the events from before it connected, oldest first. Timestamps are the events' own; `ts` is the send time. |
+| `lifecycle` (`phase: "replay-truncated"`) | `dropped, kept` | After that replay, only when the boot outran the 1,000 kept: how many events were cut after them. |
 | `lifecycle` (`phase: "idle"`) | `texts` | When, after at least one `inference:started` or `text` received (or once a self-restart is armed), every framework agent has read idle with nothing in flight but a background script left running for ≥500 ms. An `inference:started`, a `text` received, arming or cancelling a self-restart, or a client's `ready` that finds the host not quiet after its idle, starts the 500 ms again. `texts` is how many texts the host has received on this connection, all of which this quiet covers. Nothing in flight means no turn the framework counts alive (one assembling, or waiting to retry, included), no gated wake, no event on the framework's queue, no `text` whose processing (every module's `onProcess`) is still under way, and no subagent run. A background script left running doesn't hold it: in agent-framework 0.28.0, a script that ends cleanly wakes no one. A text a recipe's wake-gate debounce holds isn't seen: agent-framework 0.28.0 doesn't count it, so the idle can come before that turn. Fires once, and again only after the next `inference:started` or `text` received, or a client's `ready` that finds the host not quiet. A text a wake gate declines still ends in an idle, once nothing has been in flight for 500 ms after its processing; texts that arrive together share one. |
 | `lifecycle` (`phase: "exiting"`) | `reason` | `shutdown:graceful`, `shutdown:immediate`, `command:/quit`, `SIGTERM`, `SIGINT`, `exit-when-idle`, `self-restart`. A crash emits nothing. |
 | `inference:speech` | `agentName, content` | Primary agent only: the text of an inference round that ended without tool calls. Used by `fleet--relay`. |

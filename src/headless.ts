@@ -29,6 +29,7 @@ import { createWriteStream, mkdirSync, existsSync, unlinkSync, writeFileSync, ty
 import { sessionMarker } from './session-marker.js';
 import { join, resolve } from 'node:path';
 import type { AppContext } from './index.js';
+import type { TraceEvent } from '@animalabs/agent-framework';
 import { type IncomingCommand, matchesSubscription } from './modules/fleet-types.js';
 import { AgentTreeReducer } from './state/agent-tree-reducer.js';
 import { takeRecipeWarnings } from './recipe-warnings.js';
@@ -152,6 +153,15 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
   let shuttingDown = false;
 
   let currentClient: Socket | null = null;
+  // Framework events from before the first client connected, sent to it on
+  // connect so a parent that attaches after the boot still hears it (the
+  // restart notices a re-created tune-out epoch or an ended fork leave).
+  // The FIRST 1,000 are kept — the boot is what they are for — and the
+  // count past that is said. Null once a client has connected: a later
+  // client sends `describe` for a snapshot.
+  let bootEvents: Record<string, unknown>[] | null = [];
+  let bootDropped = 0;
+  const BOOT_EVENT_CAP = 1000;
   let subscription = new Set<string>(['*']);
   let textsReceived = 0;
   const textsProcessing = new Map<unknown, unknown>();
@@ -205,20 +215,47 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
   seedTree();
   const startedAt = Date.now();
 
-  type TraceEvent = Parameters<Parameters<typeof app.framework.onTrace>[0]>[0];
-  const forwardTrace = (traceEvent: unknown): void => {
-    treeReducer.applyEvent(traceEvent as TraceEvent);
-    emit(traceEvent as Record<string, unknown>);
+  // The boot comes first: main() holds what create() replays and what
+  // start() emitted before this sink existed (registry restore, work a stop
+  // cut off, resumed tune-out epochs), so the tree sees the boot whole. No
+  // client is connected yet and emit() would drop them, so until the first
+  // client connects the events are kept for it instead.
+  const forwardTrace = (trace: unknown): void => {
+    const traceEvent = trace as TraceEvent;
+    treeReducer.applyEvent(traceEvent);
+    const event = traceEvent as unknown as Record<string, unknown>;
+    if (bootEvents && !currentClient) {
+      const lost = event.type === 'dendrite:early-traces-dropped' ? event.dropped : undefined;
+      if (typeof lost === 'number') bootDropped += lost;
+      else if (bootEvents.length < BOOT_EVENT_CAP) bootEvents.push(event);
+      else bootDropped++;
+      return;
+    }
+    emit(event);
   };
   let traced = app.framework;
-  const forwarding = traceFollower(forwardTrace);
-  forwarding.follow(traced);
+  const forwarding = traceFollower(forwardTrace, { replay: true });
+  // The hold stays subscribed to the boot framework, so its traces stop
+  // here once a session switch replaces that framework.
+  const bootFramework = traced;
+  if (app.bootTraces) {
+    const lost = app.bootTraces.handOver((traceEvent) => {
+      if (traced === bootFramework) forwardTrace(traceEvent);
+    });
+    bootDropped += lost;
+  } else {
+    forwarding.follow(traced);
+  }
   const followers = [forwarding];
   const followFramework = (): void => {
     if (app.framework === traced) return;
     traced = app.framework;
     treeReducer.reset();
     seedTree();
+    if (bootEvents) {
+      bootEvents = [];
+      bootDropped = 0;
+    }
     for (const follower of followers) follower.follow(traced);
     const carried = [...textsProcessing].filter(([, framework]) => framework !== traced).map(([text]) => text);
     for (const text of carried) {
@@ -558,6 +595,18 @@ export async function runHeadless(app: AppContext, argv: string[] = []): Promise
       recipe: app.recipe.name,
       idle: hadAtLeastOneInference && idleEmitted,
     });
+
+    // The first client then hears the boot it missed, oldest first and each
+    // marked `replay: true`, before anything live; the default subscription
+    // lets all of it through, since the parent's `subscribe` can't have
+    // arrived yet. If the boot outran the caps, the replay ends by saying
+    // how much was cut.
+    if (bootEvents) {
+      const replay = bootEvents;
+      bootEvents = null;
+      for (const event of replay) emit({ ...event, replay: true });
+      if (bootDropped > 0) emit({ type: 'lifecycle', phase: 'replay-truncated', dropped: bootDropped, kept: replay.length });
+    }
   });
 
   server.on('error', (err) => {

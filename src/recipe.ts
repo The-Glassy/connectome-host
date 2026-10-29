@@ -13,7 +13,7 @@
 
 import { readFileSync, writeFileSync, existsSync, lstatSync, statSync, mkdirSync, rmSync, chmodSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
-import { resolveClockConfig, WorkspaceModule, type ClockConfig, type CodeExecutionConfig, type MountConfig } from '@animalabs/agent-framework';
+import { resolveClockConfig, WorkspaceModule, type ClockConfig, type CodeExecutionConfig, type ForkReaderConfig, type FrameworkConfig, type MountConfig, type PersistentReaderConfig } from '@animalabs/agent-framework';
 import { buildWorkspaceMounts } from './workspace-mounts.js';
 import { parseHandWrittenJson } from './hand-written-json.js';
 import { noteRecipeWarning } from './recipe-warnings.js';
@@ -928,7 +928,27 @@ export interface RecipeModules {
    * Subagent forking (spawn/fork parallel agents). OPT-IN — defaults to off
    * and is not part of the standard recipe.
    */
-  subagents?: boolean | { defaultModel?: string; defaultMaxTokens?: number };
+  subagents?: boolean | {
+    defaultModel?: string;
+    defaultMaxTokens?: number;
+    /**
+     * What a forked or spawned stream is told at its start. `'full'`
+     * (default) describes the launch and the stream's place in it, and
+     * gives a fork the "two parallel streams of you" framing; `'none'` hands
+     * a spawn its task alone, and a fork its task after one line saying it
+     * is the forked stream. What a stream is told is the deployment's to
+     * decide, not the host's.
+     */
+    orientation?: 'full' | 'none';
+    /**
+     * How far the lifecycle tools (list, stop, message, adopt, resume)
+     * reach. `'subtree'` (default): a caller sees and acts on the subagents
+     * it started and theirs, as `peek` is scoped; `'all'`: every subagent
+     * the host knows, though an orphan is still adopted only by an agent it
+     * was offered to or in whose tree it hung.
+     */
+    lifecycleReach?: 'subtree' | 'all';
+  };
   /**
    * Lesson library (persistent knowledge store + lesson tools). OPT-IN —
    * defaults to off and is not part of the standard recipe.
@@ -1414,28 +1434,54 @@ const CODE_EXECUTION_NUMBER_KEYS = [
 ] as const;
 
 /**
- * The subconscious resident (agent-framework
- * FrameworkConfig.subconscious): a persistent same-model side-agent that
- * receives traffic from channels the resident has tuned out and reports to
- * them in its own voice. Passed through verbatim; the framework owns the
- * defaults (name `Subconscious`, model = the resident's).
+ * The tune-out reader (agent-framework FrameworkConfig.subconscious, issues
+ * agent-framework#77 and #232): who reads the channels the resident has
+ * tuned out and reports to them. Two readers exist:
+ *
+ * - `reader: 'persistent'` (the default): a persistent side-agent with its
+ *   own window, reading the shared slot through a merged view. Passed
+ *   through verbatim; the framework owns the defaults (name
+ *   `Subconscious`, model = the resident's).
+ * - `reader: 'forks'` (Dendrite): a succession of forks of the resident
+ *   itself, each derived at the resident's head for one look and ended.
+ *   The fork shares the resident's provider prefix. `model` says whose
+ *   weights run the fork and is never defaulted — the resident's own model
+ *   for a copy of the resident, or another by name. `voice` is the reader's
+ *   voice block, delivered to each fork after the fork point with the held
+ *   traffic, never a system prompt. Two of the framework's fields are
+ *   function-valued, so a recipe cannot state them: the host supplies
+ *   `strategyFactory`, a fresh instance of the recipe's strategy per fork
+ *   (the same pattern as `conversations`; see buildSubconsciousConfig), and
+ *   `framing`, how the fork is prompted, stays the framework's default.
+ *
+ * The types are the framework's own, minus those two fields;
+ * agent-framework's src/tune-out/tools.ts documents each field.
  */
-export interface RecipeSubconscious {
-  /** Master switch. Without it the `tune_out` tool is not offered. */
-  enabled: boolean;
-  /** Registry + participant name (default 'Subconscious'). */
-  name?: string;
-  /** Model id (default: the resident's model — same-model side-process). */
-  model?: string;
-  /** The voice/criteria mode block: report-shaped, second person toward the
-   *  resident. Co-authored with the resident; canary before fleet use. */
-  systemPrompt: string;
-  /** Allow `speak_in_channel` (default false until the voice block has
-   *  passed its canary). */
-  allowChannelSpeech?: boolean;
-  /** WindowedPassthroughStrategy re-anchor fraction in (0, 1] (default 0.5). */
-  reAnchorFraction?: number;
-}
+export type RecipeSubconscious = RecipePersistentReader | RecipeForkReader;
+export type RecipePersistentReader = PersistentReaderConfig;
+export type RecipeForkReader = Omit<ForkReaderConfig, 'strategyFactory' | 'framing'>;
+
+/**
+ * Where a turn's plain prose lands when nothing names a destination
+ * (agent-framework FrameworkConfig.speech). `'delivery'` (the framework's
+ * default): only the delivery that woke the turn, a fork's home channel or a
+ * channel the agent opened this turn sets the locus; incoming traffic never
+ * moves it, and a turn without one keeps its prose private.
+ * `'latest-inbound'`: the previous rule, with the most recent delivered
+ * inbound message as a global fallback locus.
+ */
+export type RecipeSpeech = NonNullable<FrameworkConfig['speech']>;
+
+/**
+ * Tune-out without a reader (agent-framework FrameworkConfig.tuneOut): offer
+ * `tune_out` / `focus` to the resident when no `subconscious` is configured.
+ * A hold is then silent — nothing summarizes or wakes the resident; the
+ * backlog is released on cancel or when the duration ends.
+ */
+export type RecipeTuneOut = NonNullable<FrameworkConfig['tuneOut']>;
+
+/** Dendrite lifecycle options (agent-framework FrameworkConfig.dendrite). */
+export type RecipeDendrite = NonNullable<FrameworkConfig['dendrite']>;
 
 /**
  * Per-channel conversation routing (agent-framework ConversationRouter):
@@ -1513,8 +1559,14 @@ export interface Recipe {
    * at startup when it is set.
    */
   conversations?: RecipeConversations;
-  /** Tune-out's subconscious resident. */
+  /** Tune-out's reader: the persistent subconscious or reader forks (agent-framework#77, #232). */
   subconscious?: RecipeSubconscious;
+  /** Where plain prose lands when nothing names a destination (agent-framework `speech`). */
+  speech?: RecipeSpeech;
+  /** Offer `tune_out` without a reader (agent-framework `tuneOut`). */
+  tuneOut?: RecipeTuneOut;
+  /** Dendrite lifecycle options (agent-framework `dendrite`). */
+  dendrite?: RecipeDendrite;
   /**
    * MCPL RFC-008 operator class overrides: tool-name pattern → classes. The
    * highest-precedence source of a tool's class, and the way to class
@@ -1867,7 +1919,7 @@ function validateKvUnifiedConfig(strategy: Record<string, unknown>): void {
 
 const RECIPE_KEYS = [
   'name', 'description', 'version', 'agent', 'mcpServers', 'modules', 'extensions',
-  'sessionNaming', 'codeExecution', 'conversations', 'subconscious', 'toolClassOverrides',
+  'sessionNaming', 'codeExecution', 'conversations', 'subconscious', 'speech', 'tuneOut', 'dendrite', 'toolClassOverrides',
 ] as const;
 const RECIPE_AGENT_KEYS = [
   'allowedTools', 'toolPresentation',
@@ -2950,6 +3002,17 @@ export function validateRecipe(raw: unknown): Recipe {
       }
     }
 
+    const subagents = mods.subagents;
+    if (subagents && typeof subagents === 'object' && !Array.isArray(subagents)) {
+      const options = subagents as Record<string, unknown>;
+      if (options.orientation !== undefined && options.orientation !== 'full' && options.orientation !== 'none') {
+        throw new Error(`Recipe modules.subagents.orientation is ${JSON.stringify(options.orientation)}; it must be "full" or "none".`);
+      }
+      if (options.lifecycleReach !== undefined && options.lifecycleReach !== 'subtree' && options.lifecycleReach !== 'all') {
+        throw new Error(`Recipe modules.subagents.lifecycleReach is ${JSON.stringify(options.lifecycleReach)}; it must be "subtree" or "all".`);
+      }
+    }
+
     const history = mods.history;
     if (history !== undefined && typeof history !== 'boolean') {
       if (!history || typeof history !== 'object' || Array.isArray(history)) {
@@ -3221,36 +3284,122 @@ export function validateRecipe(raw: unknown): Recipe {
       throw new Error('Recipe subconscious must be an object.');
     }
     const sub = obj.subconscious as Record<string, unknown>;
-    const allowedSubconsciousKeys = new Set([
-      'enabled', 'name', 'model', 'systemPrompt', 'allowChannelSpeech', 'reAnchorFraction',
-    ]);
+    if (sub.reader !== undefined && sub.reader !== 'persistent' && sub.reader !== 'forks') {
+      throw new Error('Recipe subconscious.reader must be "persistent" or "forks".');
+    }
+    const forks = sub.reader === 'forks';
+    const reader = forks ? 'forks' : 'persistent';
+    const other = forks ? 'persistent' : 'forks';
+    const keysFor = {
+      forks: ['enabled', 'reader', 'model', 'voice', 'allowChannelSpeech', 'forkIdleTimeoutMs'],
+      persistent: ['enabled', 'reader', 'name', 'model', 'systemPrompt', 'allowChannelSpeech', 'reAnchorFraction'],
+    };
+    const allowedSubconsciousKeys = new Set(keysFor[reader]);
+    const onlyFor = (r: 'forks' | 'persistent') => keysFor[r].filter((key) => !keysFor[r === 'forks' ? 'persistent' : 'forks'].includes(key));
+    const otherReadersKeys = new Set(onlyFor(other));
     for (const key of Object.keys(sub)) {
+      if (otherReadersKeys.has(key)) {
+        const misplaced = Object.keys(sub).filter((k) => otherReadersKeys.has(k));
+        const alsoRemove = onlyFor(reader).filter((own) => Object.hasOwn(sub, own));
+        throw new Error(
+          `Recipe ${misplaced.map((k) => `subconscious.${k}`).join(' and ')} ${misplaced.length > 1 ? 'are' : 'is'} for reader "${other}", and this recipe's reader is "${reader}". ` +
+          `Remove ${misplaced.join(' and ')}, or set subconscious.reader to "${other}"` +
+          `${alsoRemove.length > 0 ? ` and remove ${alsoRemove.join(' and ')}, which only reader "${reader}" takes` : ''}.`,
+        );
+      }
       if (!allowedSubconsciousKeys.has(key)) {
         throw new Error(
           `Recipe subconscious has unknown field ${JSON.stringify(key)} ` +
-          `(expected one of: ${[...allowedSubconsciousKeys].join(', ')}).`,
+          `(expected one of: ${[...allowedSubconsciousKeys].join(', ')}` +
+          `${forks ? ' for reader "forks"' : ''}).`,
         );
       }
     }
     if (typeof sub.enabled !== 'boolean') {
       throw new Error('Recipe subconscious.enabled must be a boolean.');
     }
-    if (typeof sub.systemPrompt !== 'string' || !sub.systemPrompt.trim()) {
-      throw new Error('Recipe subconscious.systemPrompt must be a non-empty string.');
-    }
-    for (const k of ['name', 'model'] as const) {
-      if (sub[k] !== undefined && (typeof sub[k] !== 'string' || !(sub[k] as string).trim())) {
-        throw new Error(`Recipe subconscious.${k} must be a non-empty string.`);
+    if (forks) {
+      // A reader fork holds the resident's whole prefix: whose weights run
+      // it is stated, never defaulted; the framework refuses the omission too.
+      if (typeof sub.model !== 'string' || !sub.model.trim()) {
+        throw new Error('Recipe subconscious.model is required for reader "forks": say whose weights run the fork (the agent\'s own model for a copy of the resident, or another by name).');
+      }
+      if (typeof sub.voice !== 'string' || !sub.voice.trim()) {
+        throw new Error('Recipe subconscious.voice must be a non-empty string for reader "forks".');
+      }
+      // Finite: JSON `1e309` parses to Infinity, which saveRecipe() would
+      // write back as null and the next load would refuse.
+      const idle = sub.forkIdleTimeoutMs;
+      if (idle !== undefined && (typeof idle !== 'number' || !Number.isFinite(idle) || !(idle > 0))) {
+        throw new Error('Recipe subconscious.forkIdleTimeoutMs must be a positive finite number of milliseconds.');
+      }
+    } else {
+      if (typeof sub.systemPrompt !== 'string' || !sub.systemPrompt.trim()) {
+        throw new Error('Recipe subconscious.systemPrompt must be a non-empty string.');
+      }
+      for (const k of ['name', 'model'] as const) {
+        if (sub[k] !== undefined && (typeof sub[k] !== 'string' || !(sub[k] as string).trim())) {
+          throw new Error(`Recipe subconscious.${k} must be a non-empty string.`);
+        }
+      }
+      if (sub.reAnchorFraction !== undefined) {
+        const f = sub.reAnchorFraction;
+        if (typeof f !== 'number' || !(f > 0 && f <= 1)) {
+          throw new Error('Recipe subconscious.reAnchorFraction must be a number in (0, 1].');
+        }
       }
     }
     if (sub.allowChannelSpeech !== undefined && typeof sub.allowChannelSpeech !== 'boolean') {
       throw new Error('Recipe subconscious.allowChannelSpeech must be a boolean.');
     }
-    if (sub.reAnchorFraction !== undefined) {
-      const f = sub.reAnchorFraction;
-      if (typeof f !== 'number' || !(f > 0 && f <= 1)) {
-        throw new Error('Recipe subconscious.reAnchorFraction must be a number in (0, 1].');
+  }
+
+  if (obj.speech !== undefined) {
+    if (!obj.speech || typeof obj.speech !== 'object' || Array.isArray(obj.speech)) {
+      throw new Error('Recipe speech must be an object.');
+    }
+    const speech = obj.speech as Record<string, unknown>;
+    for (const key of Object.keys(speech)) {
+      if (key !== 'locus') throw new Error(`Recipe speech has unknown field ${JSON.stringify(key)} (expected: locus).`);
+    }
+    if (speech.locus !== undefined && speech.locus !== 'delivery' && speech.locus !== 'latest-inbound') {
+      throw new Error('Recipe speech.locus must be "delivery" or "latest-inbound".');
+    }
+  }
+
+  if (obj.tuneOut !== undefined) {
+    if (!obj.tuneOut || typeof obj.tuneOut !== 'object' || Array.isArray(obj.tuneOut)) {
+      throw new Error('Recipe tuneOut must be an object.');
+    }
+    const tuneOut = obj.tuneOut as Record<string, unknown>;
+    for (const key of Object.keys(tuneOut)) {
+      if (key !== 'enabled' && key !== 'announce') {
+        throw new Error(`Recipe tuneOut has unknown field ${JSON.stringify(key)} (expected: enabled, announce).`);
       }
+    }
+    for (const key of ['enabled', 'announce'] as const) {
+      if (tuneOut[key] !== undefined && typeof tuneOut[key] !== 'boolean') {
+        throw new Error(`Recipe tuneOut.${key} must be a boolean.`);
+      }
+    }
+  }
+
+  if (obj.dendrite !== undefined) {
+    if (!obj.dendrite || typeof obj.dendrite !== 'object' || Array.isArray(obj.dendrite)) {
+      throw new Error('Recipe dendrite must be an object.');
+    }
+    const dendrite = obj.dendrite as Record<string, unknown>;
+    for (const key of Object.keys(dendrite)) {
+      if (key !== 'announceOrphans' && key !== 'collapseDerivationNoticesAfter') {
+        throw new Error(`Recipe dendrite has unknown field ${JSON.stringify(key)} (expected: announceOrphans, collapseDerivationNoticesAfter).`);
+      }
+    }
+    if (dendrite.announceOrphans !== undefined && typeof dendrite.announceOrphans !== 'boolean') {
+      throw new Error('Recipe dendrite.announceOrphans must be a boolean.');
+    }
+    const after = dendrite.collapseDerivationNoticesAfter;
+    if (after !== undefined && !(typeof after === 'number' && Number.isInteger(after) && after >= 0)) {
+      throw new Error('Recipe dendrite.collapseDerivationNoticesAfter must be a non-negative integer.');
     }
   }
 
