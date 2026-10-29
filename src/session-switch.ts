@@ -64,6 +64,18 @@ export function refusedWhileSwitching(app: { switching?: boolean }, what: string
     : null;
 }
 
+/** The refusal of an action prepared against `prepared` when `open` is the
+ *  session open now, or null when they're the same. */
+export function refusedForAnotherSession(
+  open: string | undefined,
+  prepared: string,
+  what: string,
+): string | null {
+  return open === prepared
+    ? null
+    : `${what} refused: it was prepared in a session that isn't the open one now. Nothing changed; choose again in the open session.`;
+}
+
 const running = new WeakMap<object, Map<symbol, string>>();
 
 /** Holds a switch off while `work` runs, under `what`'s name, until it settles. */

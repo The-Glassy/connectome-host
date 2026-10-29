@@ -1,7 +1,7 @@
 /**
  * WebUI wire protocol — JSON-over-WebSocket envelope for the web admin client.
  *
- * Versioning: v2. Breaking changes bump `WEB_PROTOCOL_VERSION`. On a
+ * Versioning: v3. Breaking changes bump `WEB_PROTOCOL_VERSION`. On a
  * mismatch the Web UI page shows a banner saying what to do and keeps the
  * welcome, session and messages it had: `applyWelcome` returns before taking
  * any of them. The welcome's other readers still read it, among them the
@@ -11,11 +11,20 @@
  * v2: an observer gets only the frames its grant's scopes cover, live as well
  * as in its welcome, and a `stream-ended` frame in place of a stream-end trace
  * its scopes don't cover, which a page has to handle to end a streamed turn.
+ *
+ * v3: the seven messages that change a session (`rollback`, `suppress`,
+ * `pin-add`, `pin-remove`, `settings-update`, `settings-reset` and
+ * `settings-cancel-transition`) carry `sessionId`, the `welcome.session.id`
+ * the page showed when the operator prepared them. It's required whenever
+ * the message acts on this process, and the server refuses one prepared
+ * against a session that is no longer the open one. A message that names a
+ * fleet child in `scope` carries none, since the page knows no child's
+ * session.
  */
 
 import type { Line } from '../output-line.js';
 
-export const WEB_PROTOCOL_VERSION = 2;
+export const WEB_PROTOCOL_VERSION = 3;
 
 /** What an observer needs to be sent the agent trees, and so what a page
  *  needs to build and show them: every scope but 'debug'. A tree's nodes
@@ -921,6 +930,8 @@ export interface PinAddMessage {
   type: 'pin-add';
   /** Fleet child name, or 'local'/undefined for the parent process. */
   scope?: string;
+  /** The session the page showed; required unless `scope` names a fleet child. */
+  sessionId?: string;
   agent?: string;
   kind?: 'pin' | 'document';
   firstMessageId: string;
@@ -935,6 +946,8 @@ export interface PinRemoveMessage {
   type: 'pin-remove';
   /** Fleet child name, or 'local'/undefined for the parent process. */
   scope?: string;
+  /** The session the page showed; required unless `scope` names a fleet child. */
+  sessionId?: string;
   agent?: string;
   pinId: string;
 }
@@ -971,6 +984,8 @@ export interface SettingsUpdateMessage {
   type: 'settings-update';
   /** Fleet child name, or 'local'/undefined for the parent process. */
   scope?: string;
+  /** The session the page showed; required unless `scope` names a fleet child. */
+  sessionId?: string;
   agent?: string;
   contextBudgetTokens?: number;
   tailTokens?: number;
@@ -1010,6 +1025,8 @@ export interface SettingsResetMessage {
   type: 'settings-reset';
   /** Fleet child name, or 'local'/undefined for the parent process. */
   scope?: string;
+  /** The session the page showed; required unless `scope` names a fleet child. */
+  sessionId?: string;
   agent?: string;
   keys?: string[];
   persist?: boolean;
@@ -1021,6 +1038,8 @@ export interface SettingsCancelTransitionMessage {
   type: 'settings-cancel-transition';
   /** Fleet child name, or 'local'/undefined for the parent process. */
   scope?: string;
+  /** The session the page showed; required unless `scope` names a fleet child. */
+  sessionId?: string;
   agent?: string;
   persist?: boolean;
 }
@@ -1084,6 +1103,8 @@ export interface ObserverHelloMessage {
 export interface RollbackMessage {
   type: 'rollback';
   messageId: string;
+  /** The session the page showed when the operator chose `messageId`. */
+  sessionId: string;
   /** Agent name; defaults to the recipe's primary agent. */
   agent?: string;
   /** Free-text reason, recorded in the operator log. */
@@ -1096,6 +1117,8 @@ export interface RollbackMessage {
 export interface SuppressMessage {
   type: 'suppress';
   messageIds: string[];
+  /** The session the page showed when the operator chose `messageIds`. */
+  sessionId: string;
   agent?: string;
   note?: string;
   corrId?: string;
@@ -1175,12 +1198,14 @@ export function isClientMessage(value: unknown): value is WebUiClientMessage {
       return true;
     case 'rollback':
       return isNonEmptyString(v.messageId)
+        && isNonEmptyString(v.sessionId)
         && (v.agent === undefined || isNonEmptyString(v.agent))
         && (v.note === undefined || typeof v.note === 'string')
         && (v.corrId === undefined || typeof v.corrId === 'string');
     case 'suppress':
       return Array.isArray(v.messageIds) && v.messageIds.length > 0
         && v.messageIds.every((id) => isNonEmptyString(id))
+        && isNonEmptyString(v.sessionId)
         && (v.agent === undefined || isNonEmptyString(v.agent))
         && (v.note === undefined || typeof v.note === 'string')
         && (v.corrId === undefined || typeof v.corrId === 'string');
@@ -1234,7 +1259,7 @@ export function isClientMessage(value: unknown): value is WebUiClientMessage {
     case 'request-pins':
       return isOptionalScope(v.scope) && isOptionalNonEmptyString(v.agent);
     case 'pin-add': {
-      if (!isOptionalScope(v.scope)) return false;
+      if (!isOptionalScope(v.scope) || !sessionFitsScope(v)) return false;
       if (!isOptionalNonEmptyString(v.agent)) return false;
       if (!isNonEmptyString(v.firstMessageId)) return false;
       if (v.lastMessageId !== undefined && !isNonEmptyString(v.lastMessageId)) return false;
@@ -1249,11 +1274,12 @@ export function isClientMessage(value: unknown): value is WebUiClientMessage {
       return true;
     }
     case 'pin-remove':
-      return isOptionalScope(v.scope) && isOptionalNonEmptyString(v.agent) && isNonEmptyString(v.pinId);
+      return isOptionalScope(v.scope) && sessionFitsScope(v)
+        && isOptionalNonEmptyString(v.agent) && isNonEmptyString(v.pinId);
     case 'request-settings':
       return isOptionalScope(v.scope) && isOptionalNonEmptyString(v.agent);
     case 'settings-update': {
-      if (!isOptionalScope(v.scope)) return false;
+      if (!isOptionalScope(v.scope) || !sessionFitsScope(v)) return false;
       if (!isOptionalNonEmptyString(v.agent)) return false;
       if (!isOptionalBool(v.persist) || !isOptionalBool(v.notify) || !isOptionalBool(v.immediate)) return false;
       for (const k of ['contextBudgetTokens', 'tailTokens', 'transitionPaceTokens']) {
@@ -1265,12 +1291,14 @@ export function isClientMessage(value: unknown): value is WebUiClientMessage {
     }
     case 'settings-reset':
       return isOptionalScope(v.scope)
+        && sessionFitsScope(v)
         && isOptionalNonEmptyString(v.agent)
         && isOptionalBool(v.persist)
         && isOptionalBool(v.notify)
         && isOptionalStringArray(v.keys);
     case 'settings-cancel-transition':
-      return isOptionalScope(v.scope) && isOptionalNonEmptyString(v.agent) && isOptionalBool(v.persist);
+      return isOptionalScope(v.scope) && sessionFitsScope(v)
+        && isOptionalNonEmptyString(v.agent) && isOptionalBool(v.persist);
     case 'request-credential':
       return isOptionalScope(v.scope);
     case 'credential-action': {
@@ -1337,6 +1365,17 @@ function isOptionalNonEmptyString(v: unknown): v is string | undefined {
 
 function isOptionalScope(v: unknown): v is string | undefined {
   return v === undefined || typeof v === 'string';
+}
+
+/** True when `scope` names a fleet child rather than this process. */
+export function isChildScope(scope: string | undefined): scope is string {
+  return scope !== undefined && scope !== '' && scope !== 'local';
+}
+
+function sessionFitsScope(v: Record<string, unknown>): boolean {
+  return isChildScope(v.scope as string | undefined)
+    ? v.sessionId === undefined
+    : isNonEmptyString(v.sessionId);
 }
 
 function isOptionalBool(v: unknown): v is boolean | undefined {

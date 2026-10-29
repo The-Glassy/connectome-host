@@ -34,7 +34,12 @@ import type { CallLedger } from '../call-ledger.js';
 import type { QuotaMeter } from '../quota-meter.js';
 import type { CredentialMonitor } from '../credential-state.js';
 import { handleCommand } from '../commands.js';
-import { PANEL_OPS_THAT_CHANGE_THE_SESSION, refusedWhileSwitching, trackRunning } from '../session-switch.js';
+import {
+  PANEL_OPS_THAT_CHANGE_THE_SESSION,
+  refusedForAnotherSession,
+  refusedWhileSwitching,
+  trackRunning,
+} from '../session-switch.js';
 import { parseCommand } from '../command-name.js';
 import { AgentTreeReducer, type AgentTreeSnapshot } from '../state/agent-tree-reducer.js';
 import { FleetTreeAggregator } from '../state/fleet-tree-aggregator.js';
@@ -43,6 +48,7 @@ import type { FleetModule } from './fleet-module.js';
 import type { WireEvent } from './fleet-types.js';
 import {
   WEB_PROTOCOL_VERSION,
+  isChildScope,
   isClientMessage,
   type WebUiServerMessage,
   type WebUiClientMessage,
@@ -185,37 +191,53 @@ const HEALTH_ROUTE_STRINGS: ReadonlyMap<string, KeptStrings> = new Map<string, K
   ['/credential', CREDENTIAL_STRINGS],
 ]);
 
-function isChildScope(scope: string | undefined): scope is string {
-  return scope !== undefined && scope !== '' && scope !== 'local';
+/** A refusal of `message` in its own reply form, with the text `refusal`
+ *  gives for it, or null when `refusal` gives none. */
+function refusalReply(
+  message: WebUiClientMessage,
+  refusal: (what: string) => string | null,
+): WebUiServerMessage | null {
+  switch (message.type) {
+    case 'rollback':
+    case 'suppress': {
+      const error = refusal(message.type);
+      return error ? { type: 'surgery-result', corrId: message.corrId, op: message.type, ok: false, error } : null;
+    }
+    case 'fleet-stop':
+    case 'fleet-restart': {
+      const text = refusal(`${message.type} ${message.name}`);
+      return text ? { type: 'command-result', lines: [{ text, style: 'tool' }] } : null;
+    }
+    case 'host-quiesce':
+    case 'host-resume': {
+      const text = refusal(message.type);
+      return text ? { type: 'error', corrId: message.corrId, message: text } : null;
+    }
+    default: {
+      if (!PANEL_OPS_THAT_CHANGE_THE_SESSION.has(message.type)) return null;
+      if (isChildScope((message as { scope?: string }).scope)) return null;
+      const text = refusal(message.type);
+      return text ? { type: 'error', message: text } : null;
+    }
+  }
 }
 
 export function switchRefusalFor(
   app: { switching?: boolean },
   message: WebUiClientMessage,
 ): WebUiServerMessage | null {
-  switch (message.type) {
-    case 'rollback':
-    case 'suppress': {
-      const error = refusedWhileSwitching(app, message.type);
-      return error ? { type: 'surgery-result', corrId: message.corrId, op: message.type, ok: false, error } : null;
-    }
-    case 'fleet-stop':
-    case 'fleet-restart': {
-      const text = refusedWhileSwitching(app, `${message.type} ${message.name}`);
-      return text ? { type: 'command-result', lines: [{ text, style: 'tool' }] } : null;
-    }
-    case 'host-quiesce':
-    case 'host-resume': {
-      const text = refusedWhileSwitching(app, message.type);
-      return text ? { type: 'error', corrId: message.corrId, message: text } : null;
-    }
-    default: {
-      if (!PANEL_OPS_THAT_CHANGE_THE_SESSION.has(message.type)) return null;
-      if (isChildScope((message as { scope?: string }).scope)) return null;
-      const text = refusedWhileSwitching(app, message.type);
-      return text ? { type: 'error', message: text } : null;
-    }
-  }
+  return refusalReply(message, (what) => refusedWhileSwitching(app, what));
+}
+
+/** The refusal of a message prepared against a session other than the open
+ *  one, or null for a message that carries no session or names the open one. */
+export function sessionRefusalFor(
+  openSessionId: string | undefined,
+  message: WebUiClientMessage,
+): WebUiServerMessage | null {
+  const prepared = (message as { sessionId?: string }).sessionId;
+  if (prepared === undefined) return null;
+  return refusalReply(message, (what) => refusedForAnotherSession(openSessionId, prepared, what));
 }
 
 function panelErrorResponse(err: unknown): Response {
@@ -1614,7 +1636,8 @@ export class WebUiModule implements Module {
       return;
     }
     const app = sharedServer.app;
-    const refused = switchRefusalFor(app, parsed);
+    const refused = switchRefusalFor(app, parsed)
+      ?? sessionRefusalFor(app.sessionManager.getActiveSession()?.id, parsed);
     if (refused) {
       this.send(client, refused);
       if (parsed.type === 'host-quiesce' || parsed.type === 'host-resume') this.broadcastHostMode();

@@ -2,8 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import type { AgentFramework } from '@animalabs/agent-framework';
 import { handleCommand } from '../src/commands.js';
 import { trackRunning } from '../src/session-switch.js';
-import { switchRefusalFor } from '../src/modules/web-ui-module.js';
-import type { WebUiClientMessage } from '../src/web/protocol.js';
+import { sessionRefusalFor, switchRefusalFor } from '../src/modules/web-ui-module.js';
+import { isClientMessage, type WebUiClientMessage } from '../src/web/protocol.js';
 
 type App = Parameters<typeof handleCommand>[1];
 
@@ -339,6 +339,66 @@ describe("the web UI's actions that change the session are refused while a sessi
       { type: 'cancel-subagent', name: 'helper' },
     ] as WebUiClientMessage[]) {
       expect(switchRefusalFor(switching, message)).toBeNull();
+    }
+  });
+});
+
+describe('a web UI change prepared in one session is never made in another', () => {
+  const other = (what: string) =>
+    `${what} refused: it was prepared in a session that isn't the open one now. Nothing changed; choose again in the open session.`;
+  const changes: Array<[WebUiClientMessage, unknown]> = [
+    [
+      { type: 'rollback', corrId: 'c1', messageId: 'm1', sessionId: 's1' },
+      { type: 'surgery-result', corrId: 'c1', op: 'rollback', ok: false, error: other('rollback') },
+    ],
+    [
+      { type: 'suppress', corrId: 'c2', messageIds: ['m1'], sessionId: 's1' },
+      { type: 'surgery-result', corrId: 'c2', op: 'suppress', ok: false, error: other('suppress') },
+    ],
+    [{ type: 'pin-add', firstMessageId: 'm1', sessionId: 's1' }, { type: 'error', message: other('pin-add') }],
+    [{ type: 'pin-remove', pinId: 'pin-0', sessionId: 's1' }, { type: 'error', message: other('pin-remove') }],
+    [{ type: 'settings-update', tailTokens: 4000, sessionId: 's1' }, { type: 'error', message: other('settings-update') }],
+    [{ type: 'settings-reset', sessionId: 's1' }, { type: 'error', message: other('settings-reset') }],
+    [{ type: 'settings-cancel-transition', sessionId: 's1' }, { type: 'error', message: other('settings-cancel-transition') }],
+  ];
+  for (const [message, reply] of changes) {
+    test(`${message.type} prepared in another session is answered in its own reply form, saying nothing changed`, () => {
+      expect(isClientMessage(message)).toBe(true);
+      expect(sessionRefusalFor('s2', message)).toEqual(reply as never);
+      expect(sessionRefusalFor(undefined, message)).toEqual(reply as never);
+      expect(sessionRefusalFor('s1', message)).toBeNull();
+    });
+
+    test(`${message.type} that doesn't say which session it was prepared in isn't a message the server takes`, () => {
+      const { sessionId: _shown, ...unstamped } = message as WebUiClientMessage & { sessionId: string };
+      expect(isClientMessage(unstamped)).toBe(false);
+      expect(isClientMessage({ ...unstamped, sessionId: '' })).toBe(false);
+    });
+  }
+
+  test("a pin or settings change for a fleet child carries no session, since the page knows none of a child's", () => {
+    for (const message of [
+      { type: 'pin-add', scope: 'child', firstMessageId: 'm1' },
+      { type: 'pin-remove', scope: 'child', pinId: 'pin-0' },
+      { type: 'settings-update', scope: 'child', tailTokens: 4000 },
+      { type: 'settings-reset', scope: 'child' },
+      { type: 'settings-cancel-transition', scope: 'child' },
+    ]) {
+      expect(isClientMessage(message)).toBe(true);
+      expect(isClientMessage({ ...message, sessionId: 's1' })).toBe(false);
+      expect(sessionRefusalFor('s2', message as WebUiClientMessage)).toBeNull();
+    }
+  });
+
+  test('a message that changes no session is never refused for its session', () => {
+    for (const message of [
+      { type: 'request-pins' },
+      { type: 'request-settings' },
+      { type: 'fleet-stop', name: 'child' },
+      { type: 'host-quiesce' },
+      { type: 'user-message', content: 'hello' },
+    ] as WebUiClientMessage[]) {
+      expect(sessionRefusalFor('s2', message)).toBeNull();
     }
   });
 });

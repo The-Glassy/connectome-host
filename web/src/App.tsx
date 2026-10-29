@@ -123,7 +123,7 @@ export function App() {
   const [protoMismatch, setProtoMismatch] = createSignal<number | null>(null);
   let knownIds = new Set<string>();
   let welcomeKey: string | null = null;
-  let welcomeSessionId: string | null = null;
+  const [shownSession, setShownSession] = createSignal<string | null>(null);
   let atBottom = true;
   let historyCorrSeq = 0;
   let pendingHistoryCorr: string | null = null;
@@ -414,10 +414,11 @@ export function App() {
   const sendSurgery = (req: SurgeryRequest, note: string): void => {
     setSurgeryPending(true);
     const corrId = `srg-${Date.now()}`;
+    const sessionId = shownSession() ?? '';
     if (req.op === 'rollback') {
-      wire.send({ type: 'rollback', messageId: req.messageIds[0], ...(note ? { note } : {}), corrId });
+      wire.send({ type: 'rollback', messageId: req.messageIds[0], sessionId, ...(note ? { note } : {}), corrId });
     } else {
-      wire.send({ type: 'suppress', messageIds: req.messageIds, ...(note ? { note } : {}), corrId });
+      wire.send({ type: 'suppress', messageIds: req.messageIds, sessionId, ...(note ? { note } : {}), corrId });
     }
   };
   const confirmSurgery = (note: string): void => {
@@ -464,6 +465,26 @@ export function App() {
     retryAfterQuiesce = null;
     setSurgery(null);
     setSurgeryResult(null);
+  };
+  /** A message that changes a session carries the session the page shows,
+   *  unless it's for a fleet child, whose session the page doesn't know. */
+  const shownSessionFor = (scope: string): { sessionId?: string } =>
+    scope === 'local' ? { sessionId: shownSession() ?? '' } : {};
+  /** Drops everything the operator prepared against the session the page
+   *  showed until now, so nothing chosen there is sent against the next. */
+  const dropWhatWasPrepared = (): void => {
+    retryAfterQuiesce = null;
+    setSurgery(null);
+    setSurgeryResult(null);
+    setSurgeryPending(false);
+    clearSelection();
+    if (panelScope() !== 'local') return;
+    setSettingsLoaded(false);
+    setSettingsState(null);
+    setPinsLoaded(false);
+    setPinsState(null);
+    if (sidebarTab() === 'settings') refreshSettings();
+    if (sidebarTab() === 'pins') refreshPins();
   };
   const refreshOpLog = (): void => {
     if (!features().has('operator-log')) return;
@@ -720,12 +741,13 @@ export function App() {
     if (panelScope() !== 'local' && !msg.childTrees.some((c) => c.name === panelScope())) {
       changePanelScope('local');
     }
-    if (welcomeSessionId !== null && msg.session.id !== welcomeSessionId) {
+    if (shownSession() !== null && msg.session.id !== shownSession()) {
       clearMcpl();
       if (sidebarTab() === 'mcp') refreshMcpl();
       closePanel();
+      dropWhatWasPrepared();
     }
-    welcomeSessionId = msg.session.id;
+    setShownSession(msg.session.id);
     const key = `${msg.session.id}/${msg.branch.id}`;
     const entries = msg.messages.map(entryToMessage);
 
@@ -1519,35 +1541,39 @@ export function App() {
                 onSetEnv={(id, env) => wire.send({ type: 'mcpl-set-env', id, env })}
               />
             </Show>
-            <Show when={sidebarTab() === 'settings'}>
-              <SettingsPanel
-                loaded={settingsLoaded()}
-                state={settingsState()}
-                scope={panelScope()}
-                onRefresh={refreshSettings}
-                onApply={(patch) => wire.send({ type: 'settings-update', scope: panelScope(), ...patch })}
-                onReset={(keys, persist) =>
-                  wire.send({ type: 'settings-reset', scope: panelScope(), ...(keys ? { keys } : {}), persist })}
-                onCancelTransition={() => wire.send({ type: 'settings-cancel-transition', scope: panelScope() })}
-                onDryContext={(ctx) => { setDryContext(ctx as DryContextData); setMainView('dry'); }}
-              />
+            <Show when={sidebarTab() === 'settings' ? `session:${shownSession() ?? ''}` : null} keyed>
+              {(_shown) => (
+                <SettingsPanel
+                  loaded={settingsLoaded()}
+                  state={settingsState()}
+                  scope={panelScope()}
+                  onRefresh={refreshSettings}
+                  onApply={(patch) => wire.send({ type: 'settings-update', scope: panelScope(), ...shownSessionFor(panelScope()), ...patch })}
+                  onReset={(keys, persist) =>
+                    wire.send({ type: 'settings-reset', scope: panelScope(), ...shownSessionFor(panelScope()), ...(keys ? { keys } : {}), persist })}
+                  onCancelTransition={() => wire.send({ type: 'settings-cancel-transition', scope: panelScope(), ...shownSessionFor(panelScope()) })}
+                  onDryContext={(ctx) => { setDryContext(ctx as DryContextData); setMainView('dry'); }}
+                />
+              )}
             </Show>
-            <Show when={sidebarTab() === 'pins'}>
-              <PinsPanel
-                loaded={pinsLoaded()}
-                state={pinsState()}
-                agent={pinsState()?.agent}
-                candidates={panelScope() === 'local'
-                  ? messages
-                      .filter((m) => m.index !== undefined && m.id)
-                      .map<PinCandidate>((m) => ({
-                        id: m.id, index: m.index!, participant: m.participant, text: m.text ?? '',
-                      }))
-                  : pinsState()?.candidates ?? []}
-                onRefresh={refreshPins}
-                onAdd={(input) => wire.send({ type: 'pin-add', scope: panelScope(), ...input })}
-                onRemove={(pinId) => wire.send({ type: 'pin-remove', scope: panelScope(), pinId })}
-              />
+            <Show when={sidebarTab() === 'pins' ? `session:${shownSession() ?? ''}` : null} keyed>
+              {(_shown) => (
+                <PinsPanel
+                  loaded={pinsLoaded()}
+                  state={pinsState()}
+                  agent={pinsState()?.agent}
+                  candidates={panelScope() === 'local'
+                    ? messages
+                        .filter((m) => m.index !== undefined && m.id)
+                        .map<PinCandidate>((m) => ({
+                          id: m.id, index: m.index!, participant: m.participant, text: m.text ?? '',
+                        }))
+                    : pinsState()?.candidates ?? []}
+                  onRefresh={refreshPins}
+                  onAdd={(input) => wire.send({ type: 'pin-add', scope: panelScope(), ...shownSessionFor(panelScope()), ...input })}
+                  onRemove={(pinId) => wire.send({ type: 'pin-remove', scope: panelScope(), ...shownSessionFor(panelScope()), pinId })}
+                />
+              )}
             </Show>
             <Show when={sidebarTab() === 'files'}>
               <FilesPanel

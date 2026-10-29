@@ -36,9 +36,14 @@ const refusal = (what: string) =>
 
 type Reply = Record<string, unknown> & { type: string; corrId?: string };
 
-function hostApp(framework: Record<string, unknown>, switching: boolean, switched: string[] = []) {
+function hostApp(
+  framework: Record<string, unknown>,
+  switching: boolean,
+  switched: string[] = [],
+  { open = 's1', cm: more = {} }: { open?: string; cm?: Record<string, unknown> } = {},
+) {
   const sessions = [{ id: 's1', name: 'first', manuallyNamed: true }, { id: 's2', name: 'second', manuallyNamed: true }];
-  const cm = { getAllMessages: () => [], currentBranch: () => ({ id: 'b1', name: 'main' }) };
+  const cm = { getAllMessages: () => [], currentBranch: () => ({ id: 'b1', name: 'main' }), ...more };
   const agent = { name: 'main', model: 'test-model', state: { status: 'idle' }, getContextManager: () => cm };
   return {
     framework: {
@@ -52,7 +57,7 @@ function hostApp(framework: Record<string, unknown>, switching: boolean, switche
       ...framework,
     },
     sessionManager: {
-      getActiveSession: () => sessions[0],
+      getActiveSession: () => sessions.find((s) => s.id === open),
       findSession: (nameOrId: string) => sessions.find((s) => s.id === nameOrId || s.name === nameOrId),
     },
     recipe: { name: 'test', agent: { name: 'main' } },
@@ -114,13 +119,13 @@ describe("the web UI's own entry during a session switch", () => {
     webUiModule.setApp(app as never);
     const client = await connect();
     try {
-      client.send({ type: 'rollback', corrId: 'before-stop', messageId: 'm1' });
+      client.send({ type: 'rollback', corrId: 'before-stop', messageId: 'm1', sessionId: 's1' });
       expect(await client.next('surgery-result for the rollback before the stop', (r) => r.corrId === 'before-stop')).toEqual({
         type: 'surgery-result', corrId: 'before-stop', op: 'rollback', ok: false, error: refusal('rollback'),
       });
 
       await webUiModule.stop();
-      client.send({ type: 'rollback', corrId: 'after-stop', messageId: 'm1' });
+      client.send({ type: 'rollback', corrId: 'after-stop', messageId: 'm1', sessionId: 's1' });
       expect(await client.next('the not-ready error after the stop', (r) => r.type === 'error')).toEqual({ type: 'error', message: 'host not ready' });
       expect(rollbacks).toEqual([]);
     } finally {
@@ -154,7 +159,7 @@ describe("the web UI's own entry during a session switch", () => {
     webUiModule.setApp(hostApp({ rollbackToMessage }, false, switched) as never);
     const client = await connect();
     try {
-      client.send({ type: 'rollback', corrId: 'held', messageId: 'm1' });
+      client.send({ type: 'rollback', corrId: 'held', messageId: 'm1', sessionId: 's1' });
       const early = client.next("the held rollback's surgery-result", (r) => r.corrId === 'held');
       expect(await Promise.race([entered.then(() => 'reached'), early.then((r) => JSON.stringify(r))])).toBe('reached');
       client.send({ type: 'command', command: '/session switch second', corrId: 'too-soon' });
@@ -168,6 +173,56 @@ describe("the web UI's own entry during a session switch", () => {
       client.send({ type: 'command', command: '/session switch second', corrId: 'now' });
       expect((await client.next("the later /session switch's answer", (r) => r.corrId === 'now')).switchToSessionId).toBe('s2');
       expect(switched).toEqual(['s2']);
+    } finally {
+      client.close();
+    }
+  }, TEST_MS);
+});
+
+describe('a change the page prepared in one session, sent once another is open', () => {
+  const other = (what: string) =>
+    `${what} refused: it was prepared in a session that isn't the open one now. Nothing changed; choose again in the open session.`;
+
+  test("a rollback chosen in the session before a switch is refused, and the open session's branch isn't moved", async () => {
+    const rollbacks: unknown[] = [];
+    const rollbackToMessage = async (...args: unknown[]) => {
+      rollbacks.push(args);
+      return { sourceBranch: 'main', targetBranch: 'b2', messagesRemoved: 1, lastVisible: null };
+    };
+    webUiModule.setApp(hostApp({ rollbackToMessage }, false, [], { open: 's2' }) as never);
+    const client = await connect();
+    try {
+      client.send({ type: 'rollback', corrId: 'stale', messageId: 'm1', sessionId: 's1' });
+      expect(await client.next("the stale rollback's surgery-result", (r) => r.corrId === 'stale')).toEqual({
+        type: 'surgery-result', corrId: 'stale', op: 'rollback', ok: false, error: other('rollback'),
+      });
+      expect(rollbacks).toEqual([]);
+
+      client.send({ type: 'rollback', corrId: 'shown', messageId: 'm1', sessionId: 's2' });
+      expect((await client.next("the open session's rollback", (r) => r.corrId === 'shown')).ok).toBe(true);
+      expect(rollbacks).toHaveLength(1);
+    } finally {
+      client.close();
+    }
+  }, TEST_MS);
+
+  test("a pin removal chosen in the session before a switch is refused, and the open session's pin of that id stays", async () => {
+    const unpinned: string[] = [];
+    const cm = {
+      pinRange: () => 'pin-1',
+      unpin: (id: string) => { unpinned.push(id); return true; },
+      listPins: () => [],
+    };
+    webUiModule.setApp(hostApp({}, false, [], { open: 's2', cm }) as never);
+    const client = await connect();
+    try {
+      client.send({ type: 'pin-remove', pinId: 'pin-0', sessionId: 's1' });
+      const answer = await client.next(
+        "the stale removal's answer",
+        (r) => (r.type === 'error' && String(r.message).startsWith('pin-remove')) || r.type === 'pins-list',
+      );
+      expect(unpinned).toEqual([]);
+      expect(answer).toEqual({ type: 'error', message: other('pin-remove') });
     } finally {
       client.close();
     }
