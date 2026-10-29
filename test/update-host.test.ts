@@ -109,7 +109,8 @@ describe('commitRelease', () => {
     moveCurrent(root, '0.10.2');
     expect(refusal(() => commitRelease(here, { now: at, unconnectedServers: () => ['discord', 'heartbeat'] }))).toBe(
       "The MCPL servers discord, heartbeat weren't connected when this release went to commit, so it starts none of " +
-      "its agents, and the next start goes back to 0.10.2: a release on trial commits only once every server it's " +
+      'its agents, and the next start goes back to 0.10.2: with no readable record of this request saying which ' +
+      "servers 0.10.2 had connected when it stopped, a release on trial commits only once every server it's " +
       "configured with is connected, closed tabs aside. This start's log says why each one failed.",
     );
     expect(readCurrent(root)).toBe('0.10.2');
@@ -158,8 +159,9 @@ describe('commitRelease', () => {
   test('a request that doesn\'t record its servers, as a release before the record or a Go back from a shell writes, one whose record this release can\'t read, one for another release, or a mark that can\'t be read, counts every server', () => {
     moveCurrent(root, '0.10.2');
     const every = "The MCPL servers discord, heartbeat weren't connected when this release went to commit, so it starts " +
-      "none of its agents, and the next start goes back to 0.10.2: a release on trial commits only once every server " +
-      "it's configured with is connected, closed tabs aside. This start's log says why each one failed.";
+      'none of its agents, and the next start goes back to 0.10.2: with no readable record of this request saying ' +
+      "which servers 0.10.2 had connected when it stopped, a release on trial commits only once every server it's " +
+      "configured with is connected, closed tabs aside. This start's log says why each one failed.";
     const start = () => commitRelease(here, { now: at, unconnectedServers: () => ['discord', 'heartbeat'] });
     writeJsonAtomic(installPaths(root).mark, { v: 1, id: 'm1', to: '0.11.0', why: 'update', at: at.toISOString() });
     expect(refusal(start)).toBe(every);

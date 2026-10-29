@@ -121,11 +121,12 @@ export function commitRelease(here: ReleaseHere, check: CommitCheck = {}): { fro
     throw new StartRefusal(
       `The MCPL server${holding.length === 1 ? '' : 's'} ${holding.join(', ')} ` +
       `${holding.length === 1 ? "wasn't" : "weren't"} connected when this release went to commit, so it starts none ` +
-      `of its agents, and the next start goes back to ${from}: a release on trial commits only once ` +
+      `of its agents, and the next start goes back to ${from}: ` +
       (asked === null
-        ? "every server it's configured with is connected, closed tabs aside."
-        : `it has connected each server it's configured with that ${from} had connected when it stopped, closed tabs ` +
-          'aside.') +
+        ? `with no readable record of this request saying which servers ${from} had connected when it stopped, a ` +
+          "release on trial commits only once every server it's configured with is connected, closed tabs aside."
+        : `a release on trial commits only once it has connected each server it's configured with that ${from} had ` +
+          'connected when it stopped, closed tabs aside.') +
       " This start's log says why each one failed.",
     );
   }
