@@ -148,6 +148,7 @@ const config = {
 
 interface AppContext {
   framework: AgentFramework;
+  frameworkSessionId: string;
   membrane: Membrane;
   sessionManager: SessionManager;
   recipe: Recipe;
@@ -1138,6 +1139,7 @@ async function main() {
 
   const app: AppContext = {
     framework,
+    frameworkSessionId: activeSession.id,
     membrane,
     sessionManager,
     recipe,
@@ -1163,6 +1165,7 @@ async function main() {
         },
         install: async (next) => {
           this.framework = next;
+          this.frameworkSessionId = id;
           this.onFrameworkReplaced?.();
           await startFramework(next, null);
           this.userMessageCount = 0;

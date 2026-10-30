@@ -1,7 +1,7 @@
 /**
  * WebUI wire protocol — JSON-over-WebSocket envelope for the web admin client.
  *
- * Versioning: v2. Breaking changes bump `WEB_PROTOCOL_VERSION`. On a
+ * Versioning: v3. Breaking changes bump `WEB_PROTOCOL_VERSION`. On a
  * mismatch the Web UI page shows a banner saying what to do and keeps the
  * welcome, session and messages it had: `applyWelcome` returns before taking
  * any of them. The welcome's other readers still read it, among them the
@@ -11,11 +11,32 @@
  * v2: an observer gets only the frames its grant's scopes cover, live as well
  * as in its welcome, and a `stream-ended` frame in place of a stream-end trace
  * its scopes don't cover, which a page has to handle to end a streamed turn.
+ *
+ * v3: the eight messages whose target the operator chose from a session's data
+ * (`rollback`, `suppress`, `pin-add`, `pin-remove`, `settings-update`,
+ * `settings-reset`, `settings-cancel-transition` and `cancel-subagent`) carry
+ * `sessionId`, the session whose data the operator chose the change from, and
+ * the server refuses one chosen in a session other than the one whose
+ * framework is open. Rollback and suppress always carry it. A pin or settings
+ * change carries it unless its `scope` names a fleet child, and a
+ * `cancel-subagent` unless its `childName` does, since the page doesn't know a
+ * child's session, and then carries none. The data they're chosen from says
+ * whose it is: the welcome's `session`, and `sessionId` on a `history-page`,
+ * on this process's `pins-list` and `settings-state`, and on the
+ * `/debug/context` answer, each the session whose framework produced it. A
+ * push such as `message-appended` carries no stamp: it goes only to a client
+ * welcomed for the framework that sent it, so it belongs to the welcome before
+ * it. The one exception is a switch whose new framework fails to start: the
+ * clients keep the welcome of the framework before it, and a frame the server
+ * sends from the new one in answer to an action, such as the `branch-changed`
+ * after a command, reaches them before their next welcome. The new framework's
+ * traces and stored messages don't, since the server follows a framework's
+ * events only once it has started.
  */
 
 import type { Line } from '../output-line.js';
 
-export const WEB_PROTOCOL_VERSION = 2;
+export const WEB_PROTOCOL_VERSION = 3;
 
 /** What an observer needs to be sent the agent trees, and so what a page
  *  needs to build and show them: every scope but 'debug'. A tree's nodes
@@ -496,6 +517,9 @@ export interface PinsListMessage {
   type: 'pins-list';
   /** Process these pins live in ('local' or fleet-child name). */
   scope?: string;
+  /** The session whose framework answered, on this process's list; absent
+   *  on a fleet child's. */
+  sessionId?: string;
   agent: string;
   pins: Array<{
     id: string;
@@ -560,6 +584,9 @@ export interface SettingsStateMessage {
   type: 'settings-state';
   /** Process these settings belong to ('local' or fleet-child name). */
   scope?: string;
+  /** The session whose framework answered, on this process's state; absent
+   *  on a fleet child's. */
+  sessionId?: string;
   agent: string;
   /** Live values. `transition` is 'converging' while a paced descent runs. */
   settings: {
@@ -595,6 +622,8 @@ export interface SettingsStateMessage {
 export interface HistoryPageMessage {
   type: 'history-page';
   corrId: string;
+  /** The session whose framework answered. */
+  sessionId: string;
   /** Entries in store order (oldest first), ending just before the
    *  requested `beforeIndex`, or, for an observer, before the messages
    *  after them that its scopes empty. */
@@ -805,6 +834,10 @@ export interface CancelSubagentMessage {
   type: 'cancel-subagent';
   name: string;
   childName?: string;
+  /** The session shown when the operator chose this cancel, whose subagents
+   *  the page's tree showed. Required unless `childName` is set, and then
+   *  absent. */
+  sessionId?: string;
 }
 
 /** Stop a fleet child gracefully. */
@@ -924,6 +957,10 @@ export interface PinAddMessage {
   type: 'pin-add';
   /** Fleet child name, or 'local'/undefined for the parent process. */
   scope?: string;
+  /** The session of the data the operator chose this from, as the server
+   *  stamped it on that data. Required unless `scope` names a fleet child,
+   *  and then absent. */
+  sessionId?: string;
   agent?: string;
   kind?: 'pin' | 'document';
   firstMessageId: string;
@@ -938,6 +975,10 @@ export interface PinRemoveMessage {
   type: 'pin-remove';
   /** Fleet child name, or 'local'/undefined for the parent process. */
   scope?: string;
+  /** The session of the data the operator chose this from, as the server
+   *  stamped it on that data. Required unless `scope` names a fleet child,
+   *  and then absent. */
+  sessionId?: string;
   agent?: string;
   pinId: string;
 }
@@ -974,6 +1015,10 @@ export interface SettingsUpdateMessage {
   type: 'settings-update';
   /** Fleet child name, or 'local'/undefined for the parent process. */
   scope?: string;
+  /** The session of the data the operator chose this from, as the server
+   *  stamped it on that data. Required unless `scope` names a fleet child,
+   *  and then absent. */
+  sessionId?: string;
   agent?: string;
   contextBudgetTokens?: number;
   tailTokens?: number;
@@ -1013,6 +1058,10 @@ export interface SettingsResetMessage {
   type: 'settings-reset';
   /** Fleet child name, or 'local'/undefined for the parent process. */
   scope?: string;
+  /** The session of the data the operator chose this from, as the server
+   *  stamped it on that data. Required unless `scope` names a fleet child,
+   *  and then absent. */
+  sessionId?: string;
   agent?: string;
   keys?: string[];
   persist?: boolean;
@@ -1024,6 +1073,10 @@ export interface SettingsCancelTransitionMessage {
   type: 'settings-cancel-transition';
   /** Fleet child name, or 'local'/undefined for the parent process. */
   scope?: string;
+  /** The session of the data the operator chose this from, as the server
+   *  stamped it on that data. Required unless `scope` names a fleet child,
+   *  and then absent. */
+  sessionId?: string;
   agent?: string;
   persist?: boolean;
 }
@@ -1087,6 +1140,9 @@ export interface ObserverHelloMessage {
 export interface RollbackMessage {
   type: 'rollback';
   messageId: string;
+  /** The session of the messages the operator chose this from, as the
+   *  server stamped it on them. */
+  sessionId: string;
   /** Agent name; defaults to the recipe's primary agent. */
   agent?: string;
   /** Free-text reason, recorded in the operator log. */
@@ -1099,6 +1155,9 @@ export interface RollbackMessage {
 export interface SuppressMessage {
   type: 'suppress';
   messageIds: string[];
+  /** The session of the messages the operator chose this from, as the
+   *  server stamped it on them. */
+  sessionId: string;
   agent?: string;
   note?: string;
   corrId?: string;
@@ -1178,12 +1237,14 @@ export function isClientMessage(value: unknown): value is WebUiClientMessage {
       return true;
     case 'rollback':
       return isNonEmptyString(v.messageId)
+        && isNonEmptyString(v.sessionId)
         && (v.agent === undefined || isNonEmptyString(v.agent))
         && (v.note === undefined || typeof v.note === 'string')
         && (v.corrId === undefined || typeof v.corrId === 'string');
     case 'suppress':
       return Array.isArray(v.messageIds) && v.messageIds.length > 0
         && v.messageIds.every((id) => isNonEmptyString(id))
+        && isNonEmptyString(v.sessionId)
         && (v.agent === undefined || isNonEmptyString(v.agent))
         && (v.note === undefined || typeof v.note === 'string')
         && (v.corrId === undefined || typeof v.corrId === 'string');
@@ -1214,7 +1275,9 @@ export function isClientMessage(value: unknown): value is WebUiClientMessage {
       return isNonEmptyString(v.childName) && typeof v.content === 'string';
     case 'cancel-subagent':
       return isNonEmptyString(v.name)
-        && (v.childName === undefined || isNonEmptyString(v.childName));
+        && (v.childName === undefined
+          ? isNonEmptyString(v.sessionId)
+          : isNonEmptyString(v.childName) && v.sessionId === undefined);
     case 'fleet-stop':
     case 'fleet-restart':
       return isNonEmptyString(v.name);
@@ -1237,7 +1300,7 @@ export function isClientMessage(value: unknown): value is WebUiClientMessage {
     case 'request-pins':
       return isOptionalScope(v.scope) && isOptionalNonEmptyString(v.agent);
     case 'pin-add': {
-      if (!isOptionalScope(v.scope)) return false;
+      if (!isOptionalScope(v.scope) || !sessionFitsScope(v)) return false;
       if (!isOptionalNonEmptyString(v.agent)) return false;
       if (!isNonEmptyString(v.firstMessageId)) return false;
       if (v.lastMessageId !== undefined && !isNonEmptyString(v.lastMessageId)) return false;
@@ -1252,11 +1315,12 @@ export function isClientMessage(value: unknown): value is WebUiClientMessage {
       return true;
     }
     case 'pin-remove':
-      return isOptionalScope(v.scope) && isOptionalNonEmptyString(v.agent) && isNonEmptyString(v.pinId);
+      return isOptionalScope(v.scope) && sessionFitsScope(v)
+        && isOptionalNonEmptyString(v.agent) && isNonEmptyString(v.pinId);
     case 'request-settings':
       return isOptionalScope(v.scope) && isOptionalNonEmptyString(v.agent);
     case 'settings-update': {
-      if (!isOptionalScope(v.scope)) return false;
+      if (!isOptionalScope(v.scope) || !sessionFitsScope(v)) return false;
       if (!isOptionalNonEmptyString(v.agent)) return false;
       if (!isOptionalBool(v.persist) || !isOptionalBool(v.notify) || !isOptionalBool(v.immediate)) return false;
       for (const k of ['contextBudgetTokens', 'tailTokens', 'transitionPaceTokens']) {
@@ -1268,12 +1332,14 @@ export function isClientMessage(value: unknown): value is WebUiClientMessage {
     }
     case 'settings-reset':
       return isOptionalScope(v.scope)
+        && sessionFitsScope(v)
         && isOptionalNonEmptyString(v.agent)
         && isOptionalBool(v.persist)
         && isOptionalBool(v.notify)
         && isOptionalStringArray(v.keys);
     case 'settings-cancel-transition':
-      return isOptionalScope(v.scope) && isOptionalNonEmptyString(v.agent) && isOptionalBool(v.persist);
+      return isOptionalScope(v.scope) && sessionFitsScope(v)
+        && isOptionalNonEmptyString(v.agent) && isOptionalBool(v.persist);
     case 'request-credential':
       return isOptionalScope(v.scope);
     case 'credential-action': {
@@ -1340,6 +1406,16 @@ function isOptionalNonEmptyString(v: unknown): v is string | undefined {
 
 function isOptionalScope(v: unknown): v is string | undefined {
   return v === undefined || typeof v === 'string';
+}
+
+export function isChildScope(scope: string | undefined): scope is string {
+  return scope !== undefined && scope !== '' && scope !== 'local';
+}
+
+function sessionFitsScope(v: Record<string, unknown>): boolean {
+  return isChildScope(v.scope as string | undefined)
+    ? v.sessionId === undefined
+    : isNonEmptyString(v.sessionId);
 }
 
 function isOptionalBool(v: unknown): v is boolean | undefined {

@@ -80,6 +80,25 @@ export function refusedWhileSwitching(app: { switching?: boolean }, what: string
     : null;
 }
 
+type NamedSession = { id: string; name: string };
+
+export function refusedForAnotherSession(
+  open: string,
+  sessions: { findSession(nameOrId: string): NamedSession | null | undefined },
+  chosenIn: string,
+  what: string,
+): string | null {
+  if (chosenIn === open) return null;
+  const label = (id: string): string => {
+    try {
+      const session = sessions.findSession(id);
+      if (session?.id === id) return `session "${session.name}" [${id}]`;
+    } catch { }
+    return `session ${id}`;
+  };
+  return `${what} refused: it was chosen in ${label(chosenIn)}, and ${label(open)} is open now. Nothing changed; choose again in ${label(open)}.`;
+}
+
 const running = new WeakMap<object, Map<symbol, string | null>>();
 
 /** Counts `work`, an operator's command or action, as running on `app` until it settles. A headless host's quiet
