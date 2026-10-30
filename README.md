@@ -183,18 +183,6 @@ process that ends without a stop can lose it. Set 0 only for a short run in
 which a pass at a point that depends on the machine's load would make runs
 differ, such as a test fixture's.
 
-`agent.thinkingBinding: true` says the agent runs on an account that enforces
-thinking binding: a signed thinking block is valid only under the conversation
-and head it was minted under, and the provider refuses a request that replays
-one after either changed. The agent then leaves its earlier replies' thinking
-out of a request once a fold invalidates it, and its subagents and forks do
-the same. Leave it out (or `false`) otherwise: requests carry the agent's
-thinking as stored, and on Anthropic's API, for a model that takes it, the
-host sends the drop control so the provider drops a block it finds invalid
-instead of refusing. Whether an account enforces binding depends on the
-account as well as the model, and it can't be read from either ahead of time,
-so the host doesn't turn this on by itself.
-
 ### Prose routing
 
 Plain assistant text (anything the model writes that is not a tool call) is
@@ -782,6 +770,7 @@ From npm, `bun add @animalabs/connectome-host` or `npm install @animalabs/connec
 | `CONNECTOME_OPS_WEBHOOK` | — | Webhook for ops alerts |
 | `COUNT_TOKENS_MODEL` | the agent's model | Override the model used for exact token counts in the context-makeup panel |
 | `LLM_CALLS_FULL_PAYLOADS` | off | `1`/`true`: keep the full request on every llm-calls log entry (large; a line over 16 MiB drops it) |
+| `THINKING_BINDING_PROBE` | on | `off`: skip the start-up check of what the account does with a signed thinking block whose earlier conversation changed (see `docs/AGENT-ONBOARDING.md` §11.10); agents on a model whose thinking binds then leave such thinking out, as on an account that refuses it |
 | `GATE_TELEMETRY` | off | `1`: send `x-gate-*` telemetry headers — only when `ANTHROPIC_BASE_URL` is also set |
 
 Recipes may reference any further variables they need as `${VAR}` (for

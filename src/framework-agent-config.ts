@@ -2,7 +2,7 @@ import { AgentFramework } from '@animalabs/agent-framework';
 import type { Recipe } from './recipe.js';
 import { DEFAULT_RECIPE_CLOCK, resolveProvider } from './recipe.js';
 import { effectiveContextBudgetTokens, effectiveMaxTokens } from './recipe-fit.js';
-import { modelThinking } from './logging-adapter.js';
+import { leavesOutChangedThinking, modelThinking } from './logging-adapter.js';
 import { getDefaultModelLimits } from './model-limits.js';
 
 type AgentConfig = Parameters<typeof AgentFramework.create>[0]['agents'][number];
@@ -28,23 +28,20 @@ export type FrameworkAgentConfig = AgentConfig & {
 };
 
 /** The drop control and the window go only on the Anthropic route, the one
- *  they were tried on (anima-research/context-manager#155). Earlier replies'
- *  thinking is left out ahead of time (`binds`) only when the recipe says the
- *  agent's account enforces binding (`agent.thinkingBinding: true`): the model
- *  record can't know the account, and leaving out reasoning the provider would
- *  have kept loses it for nothing. Otherwise the drop control alone lets the
- *  provider drop a block it finds invalid, where the model takes it. */
-export function thinkingBindingSettings(model: string, provider: string | undefined, bindsByRecipe = false): {
-  thinkingBinding?: { binds?: true; dropBlock: boolean };
+ *  they were tried on (anima-research/context-manager#155). Where the start-up
+ *  probe found the account still shows the model a block whose earlier
+ *  conversation changed, neither the binding nor the control goes: the
+ *  thinking is the model's to read, and the control would have it dropped. */
+export function thinkingBindingSettings(model: string, provider: string | undefined): {
+  thinkingBinding?: { binds: true; dropBlock: boolean };
   physicalWindowTokens?: number;
 } {
   const facts = modelThinking(model);
   if (!facts.binds) return {};
   const direct = provider === 'anthropic';
-  const dropBlock = direct && facts.dropBlock;
   const window = direct && facts.windowShownByRefusal ? getDefaultModelLimits(model)?.maxContextTokens : undefined;
   return {
-    ...(bindsByRecipe || dropBlock ? { thinkingBinding: { ...(bindsByRecipe ? { binds: true as const } : {}), dropBlock } } : {}),
+    ...(leavesOutChangedThinking(model) ? { thinkingBinding: { binds: true as const, dropBlock: direct && facts.dropBlock } } : {}),
     ...(window !== undefined ? { physicalWindowTokens: window } : {}),
   };
 }
@@ -152,7 +149,7 @@ export function buildFrameworkAgentConfig(
     }),
     strategy,
     ...(thinking && { thinking }),
-    ...thinkingBindingSettings(model, resolveProvider(recipe), recipe.agent.thinkingBinding === true),
+    ...thinkingBindingSettings(model, resolveProvider(recipe)),
     ...(recipe.agent.refusalHandling && { refusalHandling: recipe.agent.refusalHandling }),
     ...(recipe.agent.sameRoundThinkTextPolicy !== undefined
       ? { sameRoundThinkTextPolicy: recipe.agent.sameRoundThinkTextPolicy }

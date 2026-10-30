@@ -25,8 +25,6 @@ import { systemPromptFor, thinkingBindingSettings } from '../framework-agent-con
 export interface SubagentModuleConfig {
   provider?: string;
   formatter?: 'native' | 'anthropic-xml';
-  /** The resident's `agent.thinkingBinding`: its subagents run on the same account, so they leave thinking out ahead of time only when it does. */
-  thinkingBinds?: boolean;
   maxDepth?: number;
   currentDepth?: number;
   defaultModel?: string;
@@ -3034,7 +3032,7 @@ export class SubagentModule implements Module {
       maxTokens: launch.maxTokens,
       maxStreamTokens: launch.maxStreamTokens,
       ...(launch.proseRouting !== undefined ? { proseRouting: launch.proseRouting } : {}),
-      ...thinkingBindingSettings(launch.model, this.config.provider, this.config.thinkingBinds === true),
+      ...thinkingBindingSettings(launch.model, this.config.provider),
       allowedTools: launch.allowedTools === 'all' ? 'all' as const : [...launch.allowedTools],
       strategy: new KnowledgeStrategy({
         headWindowTokens: launch.strategy.headWindowTokens,

@@ -169,6 +169,44 @@ export function modelThinking(model: string): ModelThinking {
   return MODEL_THINKING_PATTERNS.find(([pattern]) => pattern.test(id))?.[1] ?? UNREACHED;
 }
 
+/** What this process's account does with a signed thinking block whose
+ *  earlier conversation changed, as the start-up probe found it
+ *  (thinking-binding-probe.ts): refuses the request, drops the block on its
+ *  own, or still shows it to the model. */
+export type AccountBinding = 'refuses' | 'drops' | 'shows';
+
+const accountBindings = new Map<string, AccountBinding>();
+
+/** One key per row of the model record, so a dated snapshot, a routing prefix
+ *  or a [1m] suffix reads what was found for its model; a Claude model the
+ *  record doesn't list is its own key. */
+function accountBindingKey(model: string): string {
+  const id = model.toLowerCase().replace(/(\d)\.(\d)/g, '$1-$2');
+  const row = MODEL_THINKING_PATTERNS.findIndex(([pattern]) => pattern.test(id));
+  return row >= 0 ? `row:${MODEL_THINKING[row]![0]}` : `id:${id.replace(/\[[^\]]*\]$/, '')}`;
+}
+
+export function recordAccountBinding(model: string, binding: AccountBinding): void {
+  accountBindings.set(accountBindingKey(model), binding);
+}
+
+/** What the probe found for `model` on this account; undefined when it wasn't probed or couldn't tell. */
+export function accountBinding(model: string): AccountBinding | undefined {
+  return accountBindings.get(accountBindingKey(model));
+}
+
+/** For tests. */
+export function clearAccountBindings(): void {
+  accountBindings.clear();
+}
+
+/** Whether an agent on `model` leaves out thinking whose earlier conversation
+ *  changed: its thinking binds, and the account wasn't found to show such a
+ *  block anyway. */
+export function leavesOutChangedThinking(model: string): boolean {
+  return modelThinking(model).binds && accountBinding(model) !== 'shows';
+}
+
 const DROP_BLOCK = { prefix_mismatch_behavior: 'drop_block' } as const;
 export type ProviderCallObserver = (record: ProviderCallRecord) => void;
 
@@ -450,7 +488,8 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
    *  the control. */
   private withBinding(request: ProviderRequest): ProviderRequest {
     const facts = modelThinking(request.model);
-    if (!facts.binds || !facts.dropBlock) return request;
+    // An account that shows such a block is asked to drop it by the control.
+    if (!facts.binds || !facts.dropBlock || accountBinding(request.model) === 'shows') return request;
     const extraThinking = (request.extra as { thinking?: unknown } | undefined)?.thinking;
     const current = (extraThinking ?? request.thinking) as Record<string, unknown> | null | undefined;
     let thinking: Record<string, unknown>;
