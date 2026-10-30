@@ -41,6 +41,7 @@ async function withHost(body: (host: Host) => Promise<void>, env: Record<string,
       }
     });
     socket.on('error', () => { /* the host closes it as it exits */ });
+    await until(() => events.some((e) => e.type === 'lifecycle' && e.phase === 'ready'), 'the host\'s ready');
     await body({
       dir,
       events,
