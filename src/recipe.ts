@@ -1612,9 +1612,9 @@ export interface Recipe {
    * How long agent-framework lets a model call go without progress
    * (FrameworkConfig.inferenceBounds), passed to it as written: `false` for
    * none of its bounds, or an object with `progressBounds`, any of
-   * `beforeContentMs`, `betweenEventsMs` and `thinkTokensPerSecond` in place
-   * of membrane's 60000, 150000 and 87, and `flatMinimumMs`, in place of
-   * 1862000. Left out, agent-framework's defaults stand.
+   * `beforeContentMs`, `betweenEventsMs` and `thinkTokensPerSecond`, and
+   * `flatMinimumMs` beside it. Left out, agent-framework's defaults stand:
+   * the "Inference bounds" section of the README its package ships gives them.
    */
   inferenceBounds?: FrameworkConfig['inferenceBounds'];
 }
