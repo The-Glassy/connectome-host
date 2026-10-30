@@ -234,9 +234,16 @@ describe('the binding on the wire (through the real adapter)', () => {
 });
 
 describe('thinkingBindingSettings and the agent config', () => {
-  test('a binding model on the Anthropic route gets the control and its window', () => {
+  test('a binding model on the Anthropic route gets the control and its window, and no thinking is left out ahead of time', () => {
     expect(thinkingBindingSettings('claude-opus-5-5', 'anthropic'))
+      .toEqual({ thinkingBinding: { dropBlock: true }, physicalWindowTokens: 1_000_000 });
+  });
+
+  test('only a recipe that says its account enforces binding leaves thinking out ahead of time', () => {
+    expect(thinkingBindingSettings('claude-opus-5-5', 'anthropic', true))
       .toEqual({ thinkingBinding: { binds: true, dropBlock: true }, physicalWindowTokens: 1_000_000 });
+    expect(thinkingBindingSettings('claude-opus-5-5', 'bedrock', true)).toEqual({ thinkingBinding: { binds: true, dropBlock: false } });
+    expect(thinkingBindingSettings('claude-opus-4-8', 'anthropic', true)).toEqual({});
   });
 
   test.each(['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'])(
@@ -246,15 +253,15 @@ describe('thinkingBindingSettings and the agent config', () => {
     },
   );
 
-  test('on another route, or one not stated, it binds without the control and has no window', () => {
+  test('on another route, or one not stated, it gets neither the control nor a window', () => {
     for (const provider of ['bedrock', 'openrouter', undefined]) {
-      expect(thinkingBindingSettings('claude-opus-5-5', provider)).toEqual({ thinkingBinding: { binds: true, dropBlock: false } });
+      expect(thinkingBindingSettings('claude-opus-5-5', provider)).toEqual({});
     }
   });
 
-  test('a model recorded as binding without the control binds, with no window', () => {
+  test('a model recorded as binding without the control gets nothing', () => {
     for (const model of ['claude-mythos-5-1', 'claude-opus-5-6']) {
-      expect(thinkingBindingSettings(model, 'anthropic')).toEqual({ thinkingBinding: { binds: true, dropBlock: false } });
+      expect(thinkingBindingSettings(model, 'anthropic')).toEqual({});
     }
   });
 
@@ -278,13 +285,17 @@ describe('thinkingBindingSettings and the agent config', () => {
 
   test("buildFrameworkAgentConfig sets them from the model and the recipe's provider, and gives the recipe's system prompt as written", () => {
     const direct = build('claude-sonnet-5-5');
-    expect(direct.thinkingBinding).toEqual({ binds: true, dropBlock: true });
+    expect(direct.thinkingBinding).toEqual({ dropBlock: true });
     expect(direct.physicalWindowTokens).toBe(1_000_000);
     expect(direct.systemPrompt).toBe('Be yourself.');
     const bedrock = build('claude-sonnet-5-5', 'bedrock');
-    expect(bedrock.thinkingBinding).toEqual({ binds: true, dropBlock: false });
+    expect(bedrock.thinkingBinding).toBeUndefined();
     expect(bedrock.physicalWindowTokens).toBeUndefined();
     expect(bedrock.systemPrompt).toBe('Be yourself.');
+    const optedIn = buildFrameworkAgentConfig(
+      validateRecipe({ name: 'b', agent: { systemPrompt: 'Be yourself.', thinkingBinding: true } }), 'a', 'claude-sonnet-5-5', { kind: 's' } as never);
+    expect(optedIn.thinkingBinding).toEqual({ binds: true, dropBlock: true });
+    expect(() => validateRecipe({ name: 'b', agent: { systemPrompt: 's', thinkingBinding: 'yes' } })).toThrow('agent.thinkingBinding must be true or false');
     const older = build('claude-opus-4-8');
     expect(older.thinkingBinding).toBeUndefined();
     expect(older.physicalWindowTokens).toBeUndefined();
@@ -321,11 +332,12 @@ describe("an agent's system prompt carries no host paragraph about folds", () =>
 });
 
 describe('subagents', () => {
-  async function harness(parentModel: string, parentPrompt: string, provider = 'anthropic', formatter?: 'native' | 'anthropic-xml') {
+  async function harness(parentModel: string, parentPrompt: string, provider = 'anthropic', formatter?: 'native' | 'anthropic-xml', thinkingBinds?: boolean) {
     const membrane = new Membrane(new MockAdapter({ defaultResponse: 'ok' }), { formatter: new NativeFormatter() });
     const subagent = new SubagentModule({
       provider,
       ...(formatter !== undefined ? { formatter } : {}),
+      ...(thinkingBinds !== undefined ? { thinkingBinds } : {}),
       parentAgentName: 'parent',
       defaultModel: 'claude-opus-5-5',
       defaultMaxTokens: 256,
@@ -353,7 +365,7 @@ describe('subagents', () => {
       expect(launch.systemPrompt).toBe('Look it up.');
       const config = inner.ephemeralAgentConfig(launch, 'child-1');
       expect(config.systemPrompt).toBe('Look it up.');
-      expect(config.thinkingBinding).toEqual({ binds: true, dropBlock: true });
+      expect(config.thinkingBinding).toEqual({ dropBlock: true });
       expect(config.physicalWindowTokens).toBe(1_000_000);
       const plain = inner.resolveLaunch('spawn', { name: 'old', systemPrompt: 'Look it up.', task: 't', model: 'claude-opus-4-8' }, 'parent', 0);
       expect(plain.systemPrompt).toBe('Look it up.');
@@ -365,13 +377,23 @@ describe('subagents', () => {
     }
   });
 
-  test('a spawn on Bedrock binds without the control and has no window', async () => {
+  test("a spawn leaves thinking out ahead of time only when its resident's recipe says the account enforces binding", async () => {
+    const { framework, inner } = await harness('claude-opus-5-5', 'parent', 'anthropic', undefined, true);
+    try {
+      const launch = inner.resolveLaunch('spawn', { name: 'child', systemPrompt: 'Look it up.', task: 't' }, 'parent', 0);
+      expect(inner.ephemeralAgentConfig(launch, 'child-1').thinkingBinding).toEqual({ binds: true, dropBlock: true });
+    } finally {
+      await framework.stop();
+    }
+  });
+
+  test('a spawn on Bedrock gets neither the control nor a window, and leaves out no thinking ahead of time', async () => {
     const { framework, inner } = await harness('claude-opus-4-8', 'parent', 'bedrock');
     try {
       const launch = inner.resolveLaunch('spawn', { name: 'child', systemPrompt: 'Look it up.', task: 't' }, 'parent', 0);
       expect(launch.systemPrompt).toBe('Look it up.');
       const config = inner.ephemeralAgentConfig(launch, 'child-1');
-      expect(config.thinkingBinding).toEqual({ binds: true, dropBlock: false });
+      expect(config.thinkingBinding).toBeUndefined();
       expect(config.physicalWindowTokens).toBeUndefined();
     } finally {
       await framework.stop();

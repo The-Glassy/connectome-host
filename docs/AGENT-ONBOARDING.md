@@ -838,14 +838,17 @@ trigger into a channel the resident reads.
 works only on the model that minted them; any other model 400s. Editing the *shape* of a turn
 around a retained thinking block (split, reorder, insert before) also 400s ("thinking blocks
 cannot be modified") — a transport error the membrane retries once text-only, not a refusal.
-On Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 5.5, whose thinking binds, a block is bound
-to the conversation and head (system text, tools, model) it was minted under: an account that
-enforces the binding refuses a request where those changed, as after a fold. The host sends the
-drop control on agent turns through the Anthropic API so the provider sets such a block aside instead, and context-manager
-leaves out what a fold invalidates (anima-research/context-manager#155). On those four the host
-also passes the model's window, and with both, agent-framework doesn't break a turn's stream at
-`maxStreamTokens` (or the `/budget` command's value): its stream breaks mid-turn for its size
-only where its next request would pass the window, and a fresh compile carries the turn on.
+On models whose thinking can bind, a block is bound to the conversation and head (system
+text, tools, model) it was minted under, and an account that enforces the binding refuses a
+request where those changed, as after a fold. Whether it's enforced depends on the account, not
+only the model, so the host doesn't assume it. It sends the drop control on agent turns through
+the Anthropic API for a model that takes it, so the provider sets such a block aside instead of
+refusing. A recipe for an agent known to run on an enforcing account sets
+`agent.thinkingBinding: true`, and then context-manager also leaves out what a fold invalidates
+(anima-research/context-manager#155), for the agent and its subagents. Where the host also
+passes the model's window, such an agent doesn't break a turn's stream at `maxStreamTokens` (or
+the `/budget` command's value): its stream breaks mid-turn for its size only where its next
+request would pass the window, and a fresh compile carries the turn on.
 
 ---
 

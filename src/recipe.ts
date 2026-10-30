@@ -396,6 +396,18 @@ export interface RecipeAgent {
    */
   clock?: ClockConfig | false;
   /**
+   * Whether to leave earlier replies' thinking out of a request ahead of time
+   * (agent-framework `thinkingBinding.binds`), where the account the agent
+   * runs on enforces that signed thinking is bound to the conversation before
+   * it. `true` only for an agent known to run on such an account. Omitted or
+   * `false`: requests carry the agent's thinking as stored, and where the model
+   * takes it, the drop control lets the provider drop a block it finds invalid
+   * instead of refusing the call. The host's model record no longer turns this
+   * on by itself: it can't know the account, and stripping reasoning that the
+   * provider would have kept loses it for nothing.
+   */
+  thinkingBinding?: boolean;
+  /**
    * Extra Anthropic beta flags sent as the `anthropic-beta` header on every
    * request. Merged with any transport-required betas (OAuth). Anthropic
    * provider only.
@@ -1958,7 +1970,7 @@ const RECIPE_AGENT_KEYS = [
   'systemPrompt', 'maxTokens', 'maxStreamTokens', 'contextBudgetTokens', 'cacheTtl',
   'cacheKeepalive', 'promptCaching', 'sameRoundThinkTextPolicy', 'proseRouting',
   'toolWrapperProseGuard', 'autoContinue', 'anthropicBetas', 'strategy', 'thinking', 'responses', 'codex', 'mock',
-  'refusalHandling', 'clock',
+  'refusalHandling', 'clock', 'thinkingBinding',
 ] as const;
 export const DEFAULT_RECIPE_CLOCK: ClockConfig = Object.freeze({ intervalMinutes: 10 }) as ClockConfig;
 
@@ -2281,6 +2293,9 @@ export function validateRecipe(raw: unknown): Recipe {
     throw new Error(`Recipe agent.toolWrapperProseGuard must be a boolean, got ${JSON.stringify(agent.toolWrapperProseGuard)}.`);
   }
 
+  if (agent.thinkingBinding !== undefined && typeof agent.thinkingBinding !== 'boolean') {
+    throw new Error('Recipe agent.thinkingBinding must be true or false.');
+  }
   if (agent.autoContinue !== undefined && typeof agent.autoContinue !== 'boolean') {
     const value: unknown = agent.autoContinue;
     if (!value || typeof value !== 'object' || Array.isArray(value)) {

@@ -276,6 +276,7 @@ async function createFramework(
       parentAgentName: agentName,
       provider: resolveProvider(recipe),
       formatter: recipe.agent.formatter,
+      ...(recipe.agent.thinkingBinding === true ? { thinkingBinds: true } : {}),
       defaultModel: subagentConfig.defaultModel || model,
       defaultMaxTokens: subagentConfig.defaultMaxTokens,
       ...(subagentConfig.orientation ? { orientation: subagentConfig.orientation } : {}),

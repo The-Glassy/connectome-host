@@ -28,17 +28,23 @@ export type FrameworkAgentConfig = AgentConfig & {
 };
 
 /** The drop control and the window go only on the Anthropic route, the one
- *  they were tried on (anima-research/context-manager#155). */
-export function thinkingBindingSettings(model: string, provider: string | undefined): {
-  thinkingBinding?: { binds: true; dropBlock: boolean };
+ *  they were tried on (anima-research/context-manager#155). Earlier replies'
+ *  thinking is left out ahead of time (`binds`) only when the recipe says the
+ *  agent's account enforces binding (`agent.thinkingBinding: true`): the model
+ *  record can't know the account, and leaving out reasoning the provider would
+ *  have kept loses it for nothing. Otherwise the drop control alone lets the
+ *  provider drop a block it finds invalid, where the model takes it. */
+export function thinkingBindingSettings(model: string, provider: string | undefined, bindsByRecipe = false): {
+  thinkingBinding?: { binds?: true; dropBlock: boolean };
   physicalWindowTokens?: number;
 } {
   const facts = modelThinking(model);
   if (!facts.binds) return {};
   const direct = provider === 'anthropic';
+  const dropBlock = direct && facts.dropBlock;
   const window = direct && facts.windowShownByRefusal ? getDefaultModelLimits(model)?.maxContextTokens : undefined;
   return {
-    thinkingBinding: { binds: true, dropBlock: direct && facts.dropBlock },
+    ...(bindsByRecipe || dropBlock ? { thinkingBinding: { ...(bindsByRecipe ? { binds: true as const } : {}), dropBlock } } : {}),
     ...(window !== undefined ? { physicalWindowTokens: window } : {}),
   };
 }
@@ -146,7 +152,7 @@ export function buildFrameworkAgentConfig(
     }),
     strategy,
     ...(thinking && { thinking }),
-    ...thinkingBindingSettings(model, resolveProvider(recipe)),
+    ...thinkingBindingSettings(model, resolveProvider(recipe), recipe.agent.thinkingBinding === true),
     ...(recipe.agent.refusalHandling && { refusalHandling: recipe.agent.refusalHandling }),
     ...(recipe.agent.sameRoundThinkTextPolicy !== undefined
       ? { sameRoundThinkTextPolicy: recipe.agent.sameRoundThinkTextPolicy }
