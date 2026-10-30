@@ -82,7 +82,7 @@ import { opsAlertLine, opsAlertOf, type OpsAlertEntry } from './state/ops-alerts
 import { setCallLogPath } from './bug-report.js';
 import { SessionManager } from './session-manager.js';
 import { startFramework } from './start-framework.js';
-import { currentForStart, releaseHere, type ReleaseHere } from './update/host.js';
+import { StartRefusal, currentForStart, releaseHere, type ReleaseHere } from './update/host.js';
 import { childrenFilePath, trialPlaces } from './update/contract.js';
 import { hostUpdate, hostVersionOf } from './update/update.js';
 import { armTrialLog } from './update/trial-log.js';
@@ -1245,7 +1245,8 @@ async function main() {
 }
 
 main().catch(async (err) => {
-  console.error('Fatal error:', err);
+  if (err instanceof StartRefusal) console.error(err.message);
+  else console.error('Fatal error:', err);
   // Headless, headless.log may still hold lines written just before the
   // failure, such as the server's error; exiting at once would drop them.
   await beforeFatalExit?.();
