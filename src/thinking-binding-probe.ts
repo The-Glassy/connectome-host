@@ -73,7 +73,7 @@ export async function probeThinkingBinding(
   const options = { signal: controller.signal };
   const adaptive = modelAcceptsAdaptiveThinking(model);
   const thinking = adaptive ? { enabled: true, type: 'adaptive' as const } : { enabled: true, budgetTokens: 1024 };
-  // Membrane sends an explicit budget only below maxTokens - 1024.
+  // Membrane sends an explicit budget of at most maxTokens - 1024.
   const replyTokens = adaptive ? 256 : 2048;
   try {
     const isSigned = (block: ContentBlock) =>
@@ -176,21 +176,21 @@ export async function probeAccountBinding(membrane: Completer, options: AccountB
   const saved = readSaved(options.stateFile);
   const entry = (model: string) => `${options.route ?? options.provider ?? ''}|${accountBindingKey(model)}`;
   let changed = false;
+  const fallsBack = (model: string) => options.provider === 'anthropic' && modelThinking(model).dropBlock;
   for (const result of results) {
-    let binding = result.binding;
-    if (binding === 'shows' && !(options.provider === 'anthropic' && modelThinking(result.model).dropBlock)) {
+    const last = result.binding ? undefined : saved[entry(result.model)];
+    const binding = result.binding ?? last?.binding;
+    if (binding === 'shows' && !fallsBack(result.model)) {
       // Kept only where the drop control can stand in if a gateway moves the
       // agent to an account that refuses such a block (logging-adapter's stream()).
-      log(`[thinking-binding] ${result.model}: this account still shows the model a signed thinking block whose earlier conversation changed (${result.detail}), but this route has no drop control to fall back on, so such thinking is left out.`);
+      log(`[thinking-binding] ${result.model}: this account still shows the model a signed thinking block whose earlier conversation changed (${last ? `as found ${last.at}` : result.detail}), but this route has no drop control to fall back on, so such thinking is left out.`);
       continue;
     }
-    if (binding) {
-      saved[entry(result.model)] = { binding, at: new Date().toISOString() };
+    if (result.binding) {
+      saved[entry(result.model)] = { binding: result.binding, at: new Date().toISOString() };
       changed = true;
-      log(`[thinking-binding] ${result.model}: this account ${OUTCOME[binding]} (${result.detail}).`);
+      log(`[thinking-binding] ${result.model}: this account ${OUTCOME[result.binding]} (${result.detail}).`);
     } else {
-      const last = saved[entry(result.model)];
-      binding = last?.binding;
       log(`[thinking-binding] ${result.model}: the probe couldn't tell what this account does with a signed thinking block whose earlier conversation changed (${result.detail}), ` +
         (last ? `so what it found ${last.at} stands: it ${OUTCOME[last.binding]}.` : 'so such thinking is left out.'));
     }

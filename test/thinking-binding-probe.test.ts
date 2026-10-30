@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { NormalizedRequest } from '@animalabs/membrane';
@@ -133,6 +133,14 @@ describe('what the probe found decides the binding', () => {
     clearAccountBindings();
     await probeAccountBinding(provider({ fail: new Error('overloaded') }).membrane, { ...base, route: 'anthropic https://other.example', log: () => {} });
     expect(accountBinding('claude-opus-5-5')).toBeUndefined();
+    // A kept 'shows' is held to the same rule as a fresh one.
+    const shared = { ...base, models: ['claude-mythos-5-1'] };
+    writeFileSync(stateFile, JSON.stringify({ [`anthropic https://gate.example|row:mythos-5-1`]: { binding: 'shows', at: '2026-10-30T00:00:00Z' } }));
+    clearAccountBindings();
+    const kept: string[] = [];
+    await probeAccountBinding(provider({ fail: new Error('overloaded') }).membrane, { ...shared, log: (l) => kept.push(l) });
+    expect(accountBinding('claude-mythos-5-1')).toBeUndefined();
+    expect(kept[0]).toContain('no drop control to fall back on');
   });
 
   test('two spellings of one model are probed once', async () => {

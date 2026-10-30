@@ -797,15 +797,28 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
     options?: ProviderRequestOptions,
   ): Promise<ProviderResponse> {
     const t0 = Date.now();
+    // What the request was shaped by: a refusal is answered from this, not from
+    // a verdict another agent's refusal changed while this one was out.
+    const sentWithoutControl = accountBinding(request.model) === 'shows';
     const effective = this.withOAuthIdentity(this.withEffort(this.withProgressNotes(this.withBinding(this.withReasoning(request)))));
     const sink: { rawRequest: unknown } = { rawRequest: null };
     const wrapped = this.captureRawRequest(options, sink);
+    let delivered = false;
+    const watched: StreamCallbacks = sentWithoutControl
+      ? {
+          ...callbacks,
+          onChunk: (chunk) => { delivered = true; callbacks.onChunk(chunk); },
+          ...(callbacks.onContentBlock ? { onContentBlock: (i: number, b: unknown) => { delivered = true; callbacks.onContentBlock!(i, b); } } : {}),
+          ...(callbacks.onThinkingSignature ? { onThinkingSignature: (i: number, s: string) => { delivered = true; callbacks.onThinkingSignature!(i, s); } } : {}),
+        }
+      : callbacks;
     let response: ProviderResponse;
     try {
-      response = await super.stream(effective, callbacks, wrapped);
+      response = await super.stream(effective, watched, wrapped);
     } catch (err) {
       this.recordCall('stream', request, t0, sink.rawRequest, { error: err });
-      if (!isBindingRefusal(err) || accountBinding(request.model) !== 'shows') throw err;
+      // Sent again only when nothing of it reached the caller, as membrane's own retries.
+      if (!sentWithoutControl || delivered || !isBindingRefusal(err)) throw err;
       // The account was found at start to show such a block, and this one
       // refused it: a gateway moved the agent to another account. From here on
       // the control goes with every request (a 'shows' verdict is kept only
