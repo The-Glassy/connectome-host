@@ -274,12 +274,14 @@ const AGENT_FRAMEWORK = {
 };
 
 test("discord.js resolving from the installed agent-framework, which loads it by require out of bun build's reach, is named", async () => {
-  const discord = {
-    "node_modules/discord.js/package.json": JSON.stringify({ name: "discord.js", version: "1.0.0", main: "index.js" }),
-    "node_modules/discord.js/index.js": "module.exports = {};\n",
+  const nested = {
+    "node_modules/@animalabs/agent-framework/package.json": JSON.stringify({ name: "@animalabs/agent-framework", version: "1.0.0", type: "module", main: "index.js", dependencies: { "discord.js": "1.0.0" } }),
+    "node_modules/@animalabs/agent-framework/index.js": "export {};\n",
+    "node_modules/@animalabs/agent-framework/node_modules/discord.js/package.json": JSON.stringify({ name: "discord.js", version: "1.0.0", main: "index.js" }),
+    "node_modules/@animalabs/agent-framework/node_modules/discord.js/index.js": "module.exports = {};\n",
   };
-  const pkg = { dependencies: { "@animalabs/agent-framework": "1.0.0", "discord.js": "1.0.0" }, bundleDependencies: ["@animalabs/agent-framework", "discord.js"] };
-  const result = await check(standIn(pkg, HOST, { ...AGENT_FRAMEWORK, ...discord }));
+  const pkg = { dependencies: { "@animalabs/agent-framework": "1.0.0" }, bundleDependencies: ["@animalabs/agent-framework"] };
+  const result = await check(standIn(pkg, HOST, nested));
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stdout, /src\/index\.ts's imports resolve, discord\.js resolves from @animalabs\/agent-framework, and the offline smoke run answered\.$/m);
 }, TIMEOUT_MS);
@@ -289,6 +291,18 @@ test("an install where discord.js doesn't resolve from agent-framework fails, th
   const result = await check(standIn(pkg, HOST, AGENT_FRAMEWORK));
   assert.equal(result.code, 1);
   assert.match(result.stderr, /^pack-installs-alone: discord\.js doesn't resolve from the installed @animalabs\/agent-framework in zz-host-1\.0\.0\.tgz: /m);
+}, TIMEOUT_MS);
+
+test("a discord.js that only a node_modules above the install holds doesn't count as installed", async () => {
+  const above = mkdtempSync(join(tmpdir(), "pack-installs-alone-above-"));
+  made.push(above);
+  mkdirSync(join(above, "node_modules", "discord.js"), { recursive: true });
+  writeFileSync(join(above, "node_modules", "discord.js", "package.json"), JSON.stringify({ name: "discord.js", version: "1.0.0", main: "index.js" }));
+  writeFileSync(join(above, "node_modules", "discord.js", "index.js"), "module.exports = {};\n");
+  const pkg = { dependencies: { "@animalabs/agent-framework": "1.0.0" }, bundleDependencies: ["@animalabs/agent-framework"] };
+  const result = await check(standIn(pkg, HOST, AGENT_FRAMEWORK), { TMPDIR: above });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /^pack-installs-alone: discord\.js doesn't resolve from the installed @animalabs\/agent-framework in zz-host-1\.0\.0\.tgz without leaving the install: it resolves only to .*node_modules\/discord\.js\/index\.js: /m);
 }, TIMEOUT_MS);
 
 const DEAF = `process.on("SIGTERM", () => {});\nawait new Promise((resolve) => setTimeout(resolve, 90_000));\n`;

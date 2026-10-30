@@ -29,10 +29,10 @@
 // limits in milliseconds (defaults 900000 and 120000); npm pack has the
 // install's.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { CheckError, TimeoutError, hostStarts, run } from "./lib/host-starts.mjs";
 
 const ENTRY = "src/index.ts";
@@ -64,21 +64,28 @@ function webAssets(html) {
   return [...new Set(refs.filter((ref) => ref !== "" && !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(ref)).map((ref) => ref.replace(/^\.?\//, "")))];
 }
 
-function lazyResolves(installed, subject) {
+function lazyResolves(installed, root, subject) {
   const pkg = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"));
   if (pkg.dependencies?.[LAZY.from] === undefined) return false;
-  const lookups = createRequire(join(installed, "package.json")).resolve.paths(LAZY.from) ?? [];
+  const real = realpathSync(root);
+  const inside = (path) => path.startsWith(root + sep) || path.startsWith(real + sep);
+  const lookups = (createRequire(join(installed, "package.json")).resolve.paths(LAZY.from) ?? []).filter(inside);
   const from = lookups.map((dir) => join(dir, ...LAZY.from.split("/"))).find((dir) => existsSync(join(dir, "package.json")));
   if (from === undefined) {
     throw new CheckError(`${LAZY.from} isn't in the installed tree of ${subject}, though its package.json depends on it.`);
   }
+  let found;
   try {
-    createRequire(join(from, "package.json")).resolve(LAZY.spec);
+    found = createRequire(join(from, "package.json")).resolve(LAZY.spec);
   } catch {
+    found = undefined;
+  }
+  if (found === undefined || !inside(found)) {
     throw new CheckError(
-      `${LAZY.spec} doesn't resolve from the installed ${LAZY.from} in ${subject}: ${LAZY.from} loads it by require ` +
-        `when the host makes its first Discord client, which \`bun build\` of ${ENTRY} doesn't reach, so a host with a ` +
-        "Discord module would fail there. A dependency missing from the install does that.",
+      `${LAZY.spec} doesn't resolve from the installed ${LAZY.from} in ${subject}` +
+        `${found === undefined ? "" : ` without leaving the install: it resolves only to ${found}`}: ${LAZY.from} loads ` +
+        `it by require when the host makes its first Discord client, which \`bun build\` of ${ENTRY} doesn't reach, so ` +
+        "a host with a Discord module would fail there. A dependency missing from the install does that.",
     );
   }
   return true;
@@ -203,7 +210,7 @@ function main() {
         "A file missing from the package, or a dependency only devDependencies supplied, does that.",
     );
 
-    const lazy = lazyResolves(installed, packed.filename);
+    const lazy = lazyResolves(installed, dir, packed.filename);
     const { native } = hostStarts({ root: installed, cwd: dir, work, subject: `the installed ${packed.filename}`, smokeTimeoutMs });
     console.log(
       `${packed.filename} (${files.length} files) installs on its own with npm ${npmVersion}, running no install ` +
