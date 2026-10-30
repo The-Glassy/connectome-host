@@ -3023,11 +3023,12 @@ export class SubagentModule implements Module {
     };
   }
 
-  /** An agent's config from its stored launch, for a launch and a resume alike, so a resumed run gets what it launched with. */
+  /** An agent's config from its stored launch, for a launch and a resume alike, so a resumed run gets what it launched with,
+   *  less the legacy fold paragraph a launch stored by an earlier host may carry. */
   private agentConfig(launch: ResumableLaunch, agentName: string) {
     return {
       model: launch.model,
-      systemPrompt: launch.systemPrompt,
+      systemPrompt: systemPromptFor(launch.systemPrompt),
       maxTokens: launch.maxTokens,
       maxStreamTokens: launch.maxStreamTokens,
       ...(launch.proseRouting !== undefined ? { proseRouting: launch.proseRouting } : {}),

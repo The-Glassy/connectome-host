@@ -414,6 +414,9 @@ describe('subagents', () => {
       const copied = inner.resolveLaunch('spawn', { name: 'c', systemPrompt: `Look it up.\n\n${LEGACY_FOLD_LINE}`, task: 't' }, 'parent', 0);
       expect(copied.systemPrompt).toBe('Look it up.');
       expect(describeSubagentLaunch(fork)).not.toMatch(/fold/i);
+      // A launch an earlier host stored with the paragraph resumes without it.
+      const stored = { ...copied, systemPrompt: `Look it up.\n\n${LEGACY_FOLD_LINE}` };
+      expect(inner.ephemeralAgentConfig(stored, 'c-1').systemPrompt).toBe('Look it up.');
     } finally {
       await framework.stop();
     }
