@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { NormalizedRequest } from '@animalabs/membrane';
 import { probeAccountBinding, probeThinkingBinding, isBindingRefusal } from '../src/thinking-binding-probe.js';
 import { accountBinding, clearAccountBindings, leavesOutChangedThinking, recordAccountBinding } from '../src/logging-adapter.js';
@@ -98,11 +101,51 @@ describe('what the probe found decides the binding', () => {
   });
 
   test('an account that refuses or drops such a block, or one the probe could not read, keeps the binding and the control', async () => {
-    for (const opts of [{ changedBlockTokens: 'refuse' as const }, { changedBlockTokens: 0 }, { signed: false }]) {
+    const cases = [[{ changedBlockTokens: 'refuse' as const }, 'refuses'], [{ changedBlockTokens: 0 }, 'drops'], [{ signed: false }, undefined]] as const;
+    for (const [opts, found] of cases) {
       clearAccountBindings();
       await probeAccountBinding(provider(opts).membrane, { provider: 'anthropic', assistant: 'resident', models: ['claude-opus-5-5'], env: {}, log: () => {} });
+      expect(accountBinding('claude-opus-5-5')).toBe(found);
       expect(thinkingBindingSettings('claude-opus-5-5', 'anthropic')).toEqual({ thinkingBinding: { binds: true, dropBlock: true }, physicalWindowTokens: 1_000_000 });
     }
+  });
+
+  test('an account that shows such a block is taken at its word only where the drop control can stand in if the account changes', async () => {
+    for (const [providerName, model] of [['bedrock', 'claude-opus-5-5'], ['anthropic', 'claude-mythos-5-1']] as const) {
+      clearAccountBindings();
+      const lines: string[] = [];
+      await probeAccountBinding(provider({ changedBlockTokens: 60 }).membrane, { provider: providerName, assistant: 'resident', models: [model], env: {}, log: (l) => lines.push(l) });
+      expect(accountBinding(model)).toBeUndefined();
+      expect(lines[0]).toContain('this route has no drop control to fall back on, so such thinking is left out');
+    }
+  });
+
+  test('what the probe last decided stands at a start where it cannot tell', async () => {
+    const stateFile = join(mkdtempSync(join(tmpdir(), 'binding-probe-')), 'thinking-binding.json');
+    const base = { provider: 'anthropic', route: 'anthropic https://gate.example', assistant: 'resident', models: ['claude-opus-5-5'], env: {}, stateFile };
+    await probeAccountBinding(provider({ changedBlockTokens: 60 }).membrane, { ...base, log: () => {} });
+    expect(Object.values(JSON.parse(readFileSync(stateFile, 'utf8'))).map((v) => (v as { binding: string }).binding)).toEqual(['shows']);
+    clearAccountBindings();
+    const lines: string[] = [];
+    await probeAccountBinding(provider({ fail: new Error('overloaded') }).membrane, { ...base, log: (l) => lines.push(l) });
+    expect(accountBinding('claude-opus-5-5')).toBe('shows');
+    expect(lines[0]).toContain('stands: it still shows the model');
+    clearAccountBindings();
+    await probeAccountBinding(provider({ fail: new Error('overloaded') }).membrane, { ...base, route: 'anthropic https://other.example', log: () => {} });
+    expect(accountBinding('claude-opus-5-5')).toBeUndefined();
+  });
+
+  test('two spellings of one model are probed once', async () => {
+    const { membrane, requests } = provider({ changedBlockTokens: 0 });
+    await probeAccountBinding(membrane, { provider: 'anthropic', assistant: 'resident', models: ['claude-opus-5-5[1m]', 'claude-opus-5-5'], env: {}, log: () => {} });
+    expect(requests).toHaveLength(5);
+  });
+
+  test('on a model without adaptive thinking every request leaves room for an explicit budget', async () => {
+    const { membrane, requests } = provider({ changedBlockTokens: 0 });
+    await probeThinkingBinding(membrane, 'claude-haiku-6', 'resident');
+    expect(requests).toHaveLength(5);
+    for (const r of requests) expect(r.config.maxTokens).toBeGreaterThanOrEqual((r.config.thinking?.budgetTokens ?? 0) + 1024);
   });
 
   test('no probe for a model whose thinking does not bind, the mock provider, the anthropic-xml formatter, the switch, or a model already probed', async () => {

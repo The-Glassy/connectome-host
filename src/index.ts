@@ -1143,6 +1143,8 @@ async function main() {
     formatter: recipe.agent.formatter,
     assistant: agentName,
     models: [resolveModel(recipe), typeof recipe.modules?.subagents === 'object' ? recipe.modules.subagents.defaultModel : undefined],
+    stateFile: join(config.dataDir, 'thinking-binding.json'),
+    route: `${provider} ${process.env.ANTHROPIC_BASE_URL ?? ''}`.trim(),
   });
   const framework = await createFramework(membrane, storePath, recipe, agentName, settingsModule, callLedger, quotaMeter, credentials, !!codexGate, extensions);
 

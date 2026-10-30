@@ -847,8 +847,12 @@ binds: some still show the model such a block. At start, for each such model the
 agent's and its subagents' default), the host mints one block and replays it under a changed
 system text, a few small requests that `[thinking-binding]` lines in its log report on. Where the
 account showed the block, the agent and its subagents send their thinking as stored, without the
-drop control, which would have the block dropped; where it refused or dropped it, or the check
-couldn't tell, they leave such thinking out as above. `THINKING_BINDING_PROBE=off` skips the check.
+drop control, which would have the block dropped. That holds only on the Anthropic route for a model
+that takes the control: if a gateway later moves the agent to an account that refuses such a block,
+the first refusal turns the control on for the rest of the run and the request is sent again. Where
+the account refused or dropped the block they leave such thinking out as above. A start at which the
+check can't tell uses what it last found on the same route (`$DATA_DIR/thinking-binding.json`), or
+leaves such thinking out. `THINKING_BINDING_PROBE=off` skips the check.
 On those four the host
 also passes the model's window, and with both, agent-framework doesn't break a turn's stream at
 `maxStreamTokens` (or the `/budget` command's value): its stream breaks mid-turn for its size

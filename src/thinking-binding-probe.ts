@@ -23,8 +23,12 @@
  * leaves such thinking out as before.
  */
 
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import type { ContentBlock, Membrane, NormalizedMessage, NormalizedResponse } from '@animalabs/membrane';
-import { modelAcceptsAdaptiveThinking, modelThinking, recordAccountBinding, accountBinding, type AccountBinding } from './logging-adapter.js';
+import {
+  accountBinding, accountBindingKey, isBindingRefusal, modelAcceptsAdaptiveThinking, modelThinking, recordAccountBinding,
+  type AccountBinding,
+} from './logging-adapter.js';
 
 const HEAD_MINTED = 'You answer arithmetic questions. Session A.';
 const HEAD_CHANGED = 'You answer arithmetic questions. Session B.';
@@ -50,12 +54,7 @@ function inputTokens(response: NormalizedResponse): number {
   return usage.inputTokens + (usage.cacheCreationTokens ?? 0) + (usage.cacheReadTokens ?? 0);
 }
 
-/** The provider's refusal of a block minted for a different conversation. */
-export function isBindingRefusal(error: unknown): boolean {
-  const status = (error as { httpStatus?: number; status?: number } | null)?.httpStatus ?? (error as { status?: number } | null)?.status;
-  const message = String((error as { message?: unknown } | null)?.message ?? error);
-  return status === 400 && /bound to a different conversation|invalid `?signature`? in `?thinking`? block/i.test(message);
-}
+export { isBindingRefusal };
 
 function describe(error: unknown): string {
   const message = String((error as { message?: unknown } | null)?.message ?? error);
@@ -74,7 +73,8 @@ export async function probeThinkingBinding(
   const options = { signal: controller.signal };
   const adaptive = modelAcceptsAdaptiveThinking(model);
   const thinking = adaptive ? { enabled: true, type: 'adaptive' as const } : { enabled: true, budgetTokens: 1024 };
-  const replyTokens = adaptive ? 256 : 1100;
+  // Membrane sends an explicit budget only below maxTokens - 1024.
+  const replyTokens = adaptive ? 256 : 2048;
   try {
     const isSigned = (block: ContentBlock) =>
       (block.type === 'thinking' && typeof block.signature === 'string' && block.signature !== '') || block.type === 'redacted_thinking';
@@ -144,8 +144,12 @@ export interface AccountBindingProbeOptions {
   formatter?: string;
   /** Membrane's assistant participant, the agent's name. */
   assistant: string;
-  /** The agent's model and its subagents' default model; repeats and undefined are skipped. */
+  /** The agent's model and its subagents' default model; repeats (by the model record's row) and undefined are skipped. */
   models: Array<string | undefined>;
+  /** Where the last outcome the probe could decide is kept, per route and model row, for a start at which it can't. */
+  stateFile?: string;
+  /** What names the route the probe goes over, such as the provider and its base URL. */
+  route?: string;
   timeoutMs?: number;
   env?: Record<string, string | undefined>;
   log?: (line: string) => void;
@@ -163,16 +167,62 @@ export async function probeAccountBinding(membrane: Completer, options: AccountB
   const log = options.log ?? ((line: string) => console.error(line));
   const switchedOff = /^(off|0|false|no)$/i.test((env.THINKING_BINDING_PROBE ?? '').trim());
   if (switchedOff || options.provider === 'mock' || options.formatter === 'anthropic-xml') return [];
-  const models = [...new Set(options.models.filter((m): m is string => typeof m === 'string' && m !== ''))]
-    .filter((model) => modelThinking(model).binds && accountBinding(model) === undefined);
-  const results = await Promise.all(models.map((model) => probeThinkingBinding(membrane, model, options.assistant, options.timeoutMs)));
+  const byRow = new Map<string, string>();
+  for (const model of options.models) {
+    if (typeof model !== 'string' || model === '' || !modelThinking(model).binds || accountBinding(model) !== undefined) continue;
+    if (!byRow.has(accountBindingKey(model))) byRow.set(accountBindingKey(model), model);
+  }
+  const results = await Promise.all([...byRow.values()].map((model) => probeThinkingBinding(membrane, model, options.assistant, options.timeoutMs)));
+  const saved = readSaved(options.stateFile);
+  const entry = (model: string) => `${options.route ?? options.provider ?? ''}|${accountBindingKey(model)}`;
+  let changed = false;
   for (const result of results) {
-    if (result.binding) {
-      recordAccountBinding(result.model, result.binding);
-      log(`[thinking-binding] ${result.model}: this account ${OUTCOME[result.binding]} (${result.detail}).`);
+    let binding = result.binding;
+    if (binding === 'shows' && !(options.provider === 'anthropic' && modelThinking(result.model).dropBlock)) {
+      // Kept only where the drop control can stand in if a gateway moves the
+      // agent to an account that refuses such a block (logging-adapter's stream()).
+      log(`[thinking-binding] ${result.model}: this account still shows the model a signed thinking block whose earlier conversation changed (${result.detail}), but this route has no drop control to fall back on, so such thinking is left out.`);
+      continue;
+    }
+    if (binding) {
+      saved[entry(result.model)] = { binding, at: new Date().toISOString() };
+      changed = true;
+      log(`[thinking-binding] ${result.model}: this account ${OUTCOME[binding]} (${result.detail}).`);
     } else {
-      log(`[thinking-binding] ${result.model}: the probe couldn't tell what this account does with a signed thinking block whose earlier conversation changed (${result.detail}), so such thinking is left out.`);
+      const last = saved[entry(result.model)];
+      binding = last?.binding;
+      log(`[thinking-binding] ${result.model}: the probe couldn't tell what this account does with a signed thinking block whose earlier conversation changed (${result.detail}), ` +
+        (last ? `so what it found ${last.at} stands: it ${OUTCOME[last.binding]}.` : 'so such thinking is left out.'));
+    }
+    if (binding) recordAccountBinding(result.model, binding);
+  }
+  if (changed && options.stateFile) {
+    try {
+      writeFileSync(`${options.stateFile}.tmp`, `${JSON.stringify(saved, null, 2)}\n`);
+      renameSync(`${options.stateFile}.tmp`, options.stateFile);
+    } catch (error) {
+      log(`[thinking-binding] couldn't keep the outcome in ${options.stateFile}: ${describe(error)}`);
     }
   }
   return results;
+}
+
+type SavedBindings = Record<string, { binding: AccountBinding; at: string }>;
+
+function readSaved(file: string | undefined): SavedBindings {
+  if (!file) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: SavedBindings = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      const v = value as { binding?: unknown; at?: unknown } | null;
+      if (v && (v.binding === 'refuses' || v.binding === 'drops' || v.binding === 'shows') && typeof v.at === 'string') {
+        out[key] = { binding: v.binding, at: v.at };
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
 }

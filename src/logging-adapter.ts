@@ -180,7 +180,7 @@ const accountBindings = new Map<string, AccountBinding>();
 /** One key per row of the model record, so a dated snapshot, a routing prefix
  *  or a [1m] suffix reads what was found for its model; a Claude model the
  *  record doesn't list is its own key. */
-function accountBindingKey(model: string): string {
+export function accountBindingKey(model: string): string {
   const id = model.toLowerCase().replace(/(\d)\.(\d)/g, '$1-$2');
   const row = MODEL_THINKING_PATTERNS.findIndex(([pattern]) => pattern.test(id));
   return row >= 0 ? `row:${MODEL_THINKING[row]![0]}` : `id:${id.replace(/\[[^\]]*\]$/, '')}`;
@@ -198,6 +198,14 @@ export function accountBinding(model: string): AccountBinding | undefined {
 /** For tests. */
 export function clearAccountBindings(): void {
   accountBindings.clear();
+}
+
+/** The provider's refusal of a signed thinking block minted for a different conversation. */
+export function isBindingRefusal(error: unknown): boolean {
+  const e = error as { httpStatus?: number; status?: number; rawError?: { status?: number } } | null;
+  const status = e?.httpStatus ?? e?.status ?? e?.rawError?.status;
+  const message = String((error as { message?: unknown } | null)?.message ?? error);
+  return status === 400 && /bound to a different conversation|invalid `?signature`? in `?thinking`? block/i.test(message);
 }
 
 /** Whether an agent on `model` leaves out thinking whose earlier conversation
@@ -797,7 +805,19 @@ export class LoggingAnthropicAdapter extends AnthropicAdapter {
       response = await super.stream(effective, callbacks, wrapped);
     } catch (err) {
       this.recordCall('stream', request, t0, sink.rawRequest, { error: err });
-      throw err;
+      if (!isBindingRefusal(err) || accountBinding(request.model) !== 'shows') throw err;
+      // The account was found at start to show such a block, and this one
+      // refused it: a gateway moved the agent to another account. From here on
+      // the control goes with every request (a 'shows' verdict is kept only
+      // for a model that takes it), so the provider drops such a block instead
+      // of refusing; the refusal came before anything streamed, so the request
+      // is sent again. A restart checks the account again.
+      recordAccountBinding(request.model, 'refuses');
+      console.error(
+        `[thinking-binding] ${request.model}: a signed thinking block whose earlier conversation changed was refused, ` +
+        'though the account was found at start to show such blocks; the drop control goes with every request from now on.',
+      );
+      return this.stream(request, callbacks, options);
     }
     this.recordCall('stream', request, t0, sink.rawRequest, { response });
     return response;
