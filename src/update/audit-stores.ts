@@ -711,7 +711,7 @@ export const CHILD_AUDIT_MINUTES_ENV = 'CONNECTOME_FLEET_CHILD_AUDIT_MINUTES';
 /** A fleet child's audit's limit: the minutes `env` gives, when they're a
  *  number above 0, up to what a timer holds (Infinity included), or else
  *  CHILD_AUDIT_LIMIT_MS. */
-function childAuditLimitMs(env: NodeJS.ProcessEnv): number {
+export function childAuditLimitMs(env: NodeJS.ProcessEnv): number {
   const minutes = Number(env[CHILD_AUDIT_MINUTES_ENV]);
   return minutes > 0 ? Math.min(minutes * 60_000, 2 ** 31 - 1) : CHILD_AUDIT_LIMIT_MS;
 }
@@ -930,15 +930,18 @@ async function residentOf(dataDir: string, read: RecipeRead, loaded?: ExtensionR
       name,
       namespace: `agents/${name}`,
       strategy,
-      ...(subconscious?.enabled
+      // Reader forks read the resident's own context and open no subconscious namespace.
+      ...(subconscious?.enabled && subconscious.reader !== 'forks'
         ? {
-          subconscious: {
-            // agent-framework's default name, as the recipe's doc says.
-            name: subconscious.name ?? 'Subconscious',
-            namespace: `subconscious/${name}`,
-            reAnchorFraction: subconscious.reAnchorFraction,
-          },
-        }
+            subconscious: {
+              // agent-framework's default name, as the recipe's doc says.
+              name: ('name' in subconscious ? subconscious.name : undefined) ?? 'Subconscious',
+              namespace: `subconscious/${name}`,
+              ...('reAnchorFraction' in subconscious && subconscious.reAnchorFraction !== undefined
+                ? { reAnchorFraction: subconscious.reAnchorFraction }
+                : {}),
+            },
+          }
         : {}),
     }),
   };

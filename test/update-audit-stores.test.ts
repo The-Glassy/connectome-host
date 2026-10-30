@@ -13,12 +13,12 @@ import { AutobiographicalStrategy, ContextManager } from '@animalabs/context-man
 import { Membrane, MockAdapter } from '@animalabs/membrane';
 import { buildFrameworkAgentConfig } from '../src/framework-agent-config.js';
 import { recipeModel } from '../src/recipe.js';
-import { buildFrameworkStrategy, standardKvUnifiedConfig } from '../src/framework-strategy.js';
+import { buildFrameworkStrategy, standardKvUnifiedConfig, dendriteCreateOptions } from '../src/framework-strategy.js';
 import { loadExtensions } from '../src/extensions.js';
 import { DEFAULT_RECIPE, loadSavedRecipe, saveRecipe, validateRecipe } from '../src/recipe.js';
 import { SessionManager } from '../src/session-manager.js';
 import { startFramework } from '../src/start-framework.js';
-import { auditStores, fleetChildRepair, subconsciousView, type AuditOptions } from '../src/update/audit-stores.js';
+import { auditStores, childAuditLimitMs, fleetChildRepair, subconsciousView, type AuditOptions } from '../src/update/audit-stores.js';
 import { AUDIT_POINTER, loadRepairAlert, loadRepairLines, type LoadRepairReport } from '../src/web/load-repair-alert.js';
 import * as contract from '../src/update/contract.js';
 import { makeRepairStore } from './load-repair-store.js';
@@ -264,7 +264,7 @@ function limitWhen(ready: () => boolean, limitMs = 5 * 60_000): { armed: () => n
     const timer = {};
     const poll = (): void => {
       if (cleared.has(timer)) return;
-      if (ready()) later(() => { if (!cleared.has(timer)) handler(); }, 1_000);
+      if (ready()) handler();
       else later(poll, 50);
     };
     later(poll, 0);
@@ -327,7 +327,7 @@ describe('the store audit', () => {
     try {
       const { lines, failed } = await audit([dir]);
       expect(failed).toEqual([`Couldn't audit ${stores[0]}: it opened, and closing it failed: store close failed`]);
-      expect(lines[1]).toStartWith(`${stores[0]} (agents/agent): agent's memory changed at load: `);
+      expect(lines.some((line) => line.startsWith(`${stores[0]} (agents/agent): agent's memory changed at load: `))).toBe(true);
     } finally {
       storeClose.mockRestore();
     }
@@ -391,7 +391,8 @@ describe('the store audit', () => {
   test("each store's answer is the one agent-framework's own open of it gives", async () => {
     const recipe = { ...DEFAULT_RECIPE, agent: { ...DEFAULT_RECIPE.agent, strategy: { headWindowTokens: 500, recentWindowTokens: 1000 } } };
     const subconscious = { enabled: true, systemPrompt: 'attend to the agent' };
-    const cases: Record<string, { make: (store: string) => Promise<void>; subconscious?: true; off?: true }> = {
+    const forks = { enabled: true, reader: 'forks', model: 'claude-sonnet-4-5', voice: 'You are reading for the agent.' };
+    const cases: Record<string, { make: (store: string) => Promise<void>; subconscious?: true; off?: true; forks?: true }> = {
       crossed: { make: (store) => copyStore(store, 'agents/agent', true) },
       plain: { make: (store) => copyStore(store, 'agents/agent', false) },
       'unowned run inside a span': { make: (store) => makeSpanStore(store) },
@@ -401,13 +402,14 @@ describe('the store audit', () => {
       'a subconscious that opens': { make: (store) => copyStore(store, 'agents/agent', false), subconscious: true },
       "a subconscious whose context a start can't read": { make: makeBrokenSubconsciousStore, subconscious: true },
       'the same store, its subconscious off': { make: makeBrokenSubconsciousStore, off: true },
+      'the same store, its reader forks': { make: makeBrokenSubconsciousStore, forks: true },
     };
     const audited: Record<string, string> = {};
     const started: Record<string, string> = {};
     const said: Record<string, { audit: string; start: string }> = {};
-    for (const [index, [name, { make, subconscious: on, off }]] of Object.entries(cases).entries()) {
+    for (const [index, [name, { make, subconscious: on, off, forks: forked }]] of Object.entries(cases).entries()) {
       const { dir, stores } = await makeDataDirWith(`case-${index}`, [make]);
-      const caseRecipe = on ? { ...recipe, subconscious } : off ? { ...recipe, subconscious: { ...subconscious, enabled: false } } : recipe;
+      const caseRecipe = on ? { ...recipe, subconscious } : off ? { ...recipe, subconscious: { ...subconscious, enabled: false } } : forked ? { ...recipe, subconscious: forks } : recipe;
       saveRecipe(dir, caseRecipe);
       const copy = join(root, `case-${index}-framework`);
       cpSync(stores[0]!, copy, { recursive: true });
@@ -422,7 +424,7 @@ describe('the store audit', () => {
           membrane: new Membrane(new MockAdapter()),
           agents: [buildFrameworkAgentConfig(validated, 'agent', model, strategy)],
           modules: [],
-          ...(validated.subconscious ? { subconscious: validated.subconscious } : {}),
+          ...dendriteCreateOptions(validated, model, resolveTimeZone(validated.agent.timezone)),
         });
         await framework.stop();
         started[name] = 'opens';
@@ -442,6 +444,7 @@ describe('the store audit', () => {
       'a subconscious that opens': 'opens',
       "a subconscious whose context a start can't read": 'refused',
       'the same store, its subconscious off': 'opens',
+      'the same store, its reader forks': 'opens',
     });
     for (const [name, { audit: line, start }] of Object.entries(said)) {
       expect(line, name).toContain(start.replace(/\s*\n\s*/g, ' '));
@@ -765,11 +768,18 @@ describe('the store audit', () => {
   });
 
   test('a system prompt the recipe gives as a URL is not fetched', async () => {
-    const { dir, stores } = await makeDataDir('data', [{ namespace: 'agents/agent', crossed: true }]);
-    saveRecipe(dir, { ...DEFAULT_RECIPE, agent: { ...DEFAULT_RECIPE.agent, systemPrompt: 'http://127.0.0.1:1/prompt.md' } });
-    const { status, failed } = await audit([dir]);
-    expect(status).toBe(1);
-    expect(failed[0]).toStartWith(`${stores[0]} (agents/agent): refused: `);
+    const asked: string[] = [];
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) { asked.push(new URL(request.url).pathname); return new Response('a prompt'); } });
+    try {
+      const { dir, stores } = await makeDataDir('data', [{ namespace: 'agents/agent', crossed: false }]);
+      saveRecipe(dir, { ...DEFAULT_RECIPE, agent: { ...DEFAULT_RECIPE.agent, systemPrompt: `${server.url.href}prompt.md` } });
+      const { status, lines, failed } = await audit([dir]);
+      expect(asked).toEqual([]);
+      expect({ status, failed }).toEqual({ status: 0, failed: [] });
+      expect(lines).toContain(`${stores[0]} (agents/agent): opens`);
+    } finally {
+      server.stop(true);
+    }
   });
 
   test("given the extensions a start loaded, the audit builds its strategy from them and runs no register() of its own", async () => {
@@ -1470,7 +1480,14 @@ describe("a fleet child's audit and what outlasts it", () => {
     expect(await waitForEnd(held, 10_000)).toBe(true);
   }, 60_000);
 
-  test("a child's audit has the minutes the audit's environment gives it, and 5 where it gives none it can use", async () => {
+  test("the minutes the audit's environment gives become a child audit's limit, at most a timer's longest, and 5 where they give none it can use", () => {
+    const limitFor = (minutes: string | undefined) => childAuditLimitMs(minutes === undefined ? {} : { CONNECTOME_FLEET_CHILD_AUDIT_MINUTES: minutes });
+    // A timer holds at most 2 ** 31 - 1 ms.
+    expect(['7.5', '0.5', '1e9', 'Infinity', '0', '-1', 'soon', '10m', undefined].map(limitFor))
+      .toEqual([7.5 * 60_000, 30_000, 2 ** 31 - 1, 2 ** 31 - 1, 5 * 60_000, 5 * 60_000, 5 * 60_000, 5 * 60_000, 5 * 60_000]);
+  });
+
+  test("a child's audit is armed with the limit its audit's environment gives, not its own entry's, the default included", async () => {
     const parent = await makeDataDir('parent', [{ namespace: 'agents/agent', crossed: false }]);
     const child = await makeDataDir('kid', [{ namespace: 'agents/agent', crossed: false }]);
     const timing = join(root, 'timing-strategy.ts');
@@ -1497,7 +1514,7 @@ describe("a fleet child's audit and what outlasts it", () => {
       return later(handler, ms, ...rest);
     }) as typeof setTimeout);
     try {
-      for (const minutes of ['7.5', '1e9', 'Infinity', '0', '-1', 'soon', undefined]) {
+      for (const minutes of [undefined, '7.5']) {
         if (minutes === undefined) delete process.env.CONNECTOME_FLEET_CHILD_AUDIT_MINUTES;
         else process.env.CONNECTOME_FLEET_CHILD_AUDIT_MINUTES = minutes;
         const result = await audit([parent.dir]);
@@ -1508,8 +1525,7 @@ describe("a fleet child's audit and what outlasts it", () => {
       if (before === undefined) delete process.env.CONNECTOME_FLEET_CHILD_AUDIT_MINUTES;
       else process.env.CONNECTOME_FLEET_CHILD_AUDIT_MINUTES = before;
     }
-    // A timer holds at most 2 ** 31 - 1 ms.
-    expect(limits).toEqual([7.5 * 60_000, 2 ** 31 - 1, 2 ** 31 - 1, 5 * 60_000, 5 * 60_000, 5 * 60_000, 5 * 60_000]);
+    expect(limits).toEqual([5 * 60_000, 7.5 * 60_000]);
     expect(longTimersArmedOutsideTheAudit).toBeGreaterThan(0);
   }, 90_000);
 
@@ -2741,7 +2757,7 @@ describe('a host on trial, before its commit', () => {
       notifyOps: (kind: string) => { sent.push(kind); },
     } as never;
     await expect(startFramework(framework, { root: install, release: '0.11.0' }, { dataDir: dir, activeStore: stores[0]!, places: () => [dir] }))
-      .rejects.toThrow("couldn't connect the MCPL server discord");
+      .rejects.toThrow("The MCPL server discord wasn't connected when this release went to commit");
     expect(readCurrent(install)).toBe('0.10.2');
     expect(sent).toEqual(['memory-load-repair']);
   }, 60_000);

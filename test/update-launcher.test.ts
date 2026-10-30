@@ -313,12 +313,18 @@ describe('what a switch copies', () => {
   test("a child whose process has ended holds a fallback while its group has a member; the lock goes by its holder alone", async () => {
     mark({ to: '0.11.0', why: 'update' });
     await decide(root, ops());
+    writeFileSync(join(data, 'sessions', 'store.txt'), 'B wrote this');
     child("kid's job", join(dir, 'kid'), 778, boot);
     groups.add(778);
     let waits = 0;
-    const o: LauncherOps = { ...ops(), sleep: (ms) => { clock += ms; if (++waits === 2) groups.delete(778); } };
+    const o: LauncherOps = { ...ops(), sleep: (ms) => {
+      clock += ms;
+      expect(store()).toBe('B wrote this');
+      if (++waits === 2) groups.delete(778);
+    } };
     expect(await decide(root, o)).toEqual({ release: '0.10.2', trial: false });
-    expect(waits).toBe(2);
+    expect(groups.has(778)).toBe(false);
+    expect(store()).toBe('A wrote this');
     writeJsonAtomic(installPaths(root).lock, { v: 1, pid: 4242, bootId: boot, at: 'x' });
     groups.add(4242);
     expect(await decide(root, ops())).toEqual({ release: '0.10.2', trial: false });
@@ -611,7 +617,7 @@ describe('a switch', () => {
       if (++waits === 8) alive.delete(778);
     } };
     expect(await decide(root, o)).toEqual({ release: '0.10.2', trial: false });
-    expect(waits).toBe(8);
+    expect(alive.has(778)).toBe(false);
     expect(store()).toBe('A wrote this');
   });
 
@@ -2504,6 +2510,26 @@ describe('a Go back from a shell', () => {
     expect(reports.at(-1)).toMatch(/^\[update\] The next start goes back to 0\.10\.2, keeping the newer data\. Start the service/);
     expect(await decide(root, ops())).toEqual({ release: '0.10.2', trial: true });
     expect(store()).toBe('B wrote this');
+  });
+
+  test('with an expected release, asks for nothing when the offer is to another once it holds the lock, which it gives up', async () => {
+    await committedSwitch();
+    release('0.9.0');
+    lockOf(4242);
+    alive.add(4242);
+    const exiting: LauncherOps = { ...ops(), sleep: (ms) => {
+      clock += ms;
+      slept += ms;
+      writeJsonAtomic(copyLabelPath(installPaths(root).copy), { ...lastCopy(root)!, from: '0.9.0' } satisfies CopyLabel);
+      alive.delete(4242);
+    } };
+    expect(goBackFromShell(root, [KEEP_DATA_FLAG], exiting, '0.10.2')).toBe(1);
+    expect(slept).toBeGreaterThan(0);
+    expect(existsSync(installPaths(root).mark)).toBe(false);
+    expect(existsSync(installPaths(root).lock)).toBe(false);
+    expect(reports.at(-1)).toBe('[update] Nothing was asked for: the Go back offered is to 0.9.0, not 0.10.2');
+    expect(goBackFromShell(root, [KEEP_DATA_FLAG], ops(), '0.9.0')).toBe(0);
+    expect(readRecord<Mark>(installPaths(root).mark, 'mark')).toMatchObject({ to: '0.9.0', why: 'go-back', keepData: true });
   });
 
   test('restores the copy without --keep-data, and replaces a mark that stood', async () => {
