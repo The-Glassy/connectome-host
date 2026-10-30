@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { AgentFramework } from '@animalabs/agent-framework';
 import { handleCommand } from '../src/commands.js';
-import { trackRunning } from '../src/session-switch.js';
+import { trackOperatorWork } from '../src/session-switch.js';
 import { sessionRefusalFor, switchRefusalFor } from '../src/modules/web-ui-module.js';
 import { isClientMessage, type WebUiClientMessage } from '../src/web/protocol.js';
 
@@ -246,8 +246,8 @@ describe("another entry's work holds off a session switch until it settles", () 
     const app = plainApp();
     let finishRollback = () => {};
     let failRestart = (_error: Error) => {};
-    const rollback = trackRunning(app, 'rollback', new Promise<void>((resolve) => { finishRollback = resolve; }));
-    const restart = trackRunning(app, 'restart child', new Promise<void>((_resolve, reject) => { failRestart = reject; }));
+    const rollback = trackOperatorWork(app, 'rollback', new Promise<void>((resolve) => { finishRollback = resolve; }));
+    const restart = trackOperatorWork(app, 'restart child', new Promise<void>((_resolve, reject) => { failRestart = reject; }));
 
     expect(handleCommand('/session switch second', app).lines.map((line) => line.text)).toEqual([
       "rollback, restart child are still running, so the switch isn't started; try again once they have finished.",
@@ -268,8 +268,8 @@ describe("another entry's work holds off a session switch until it settles", () 
     const app = plainApp();
     let finishFirst = () => {};
     let finishSecond = () => {};
-    const first = trackRunning(app, 'rollback', new Promise<void>((resolve) => { finishFirst = resolve; }));
-    const second = trackRunning(app, 'rollback', new Promise<void>((resolve) => { finishSecond = resolve; }));
+    const first = trackOperatorWork(app, 'rollback', new Promise<void>((resolve) => { finishFirst = resolve; }));
+    const second = trackOperatorWork(app, 'rollback', new Promise<void>((resolve) => { finishSecond = resolve; }));
     const still = "rollback is still running, so the switch isn't started; try again once it has finished.";
 
     expect(handleCommand('/session switch second', app).lines.map((line) => line.text)).toEqual([still]);

@@ -569,6 +569,9 @@ export interface CredentialStateMessage {
   /** The last operator action. Its `message`, which holds a failed action's
    *  reason, an observer without 'ops' gets empty. */
   lastAction?: { id: string; at: number; ok: boolean; message: string };
+  /** While the last write of the credential to its file failed: the alert's
+   *  text, which an observer without 'ops' gets empty. */
+  unsaved?: string;
 }
 
 /**
