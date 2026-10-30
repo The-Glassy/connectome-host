@@ -268,6 +268,29 @@ test("@opentui/core must load in the installed tree, its native package with it"
   );
 }, TIMEOUT_MS * 3);
 
+const AGENT_FRAMEWORK = {
+  "node_modules/@animalabs/agent-framework/package.json": JSON.stringify({ name: "@animalabs/agent-framework", version: "1.0.0", type: "module", main: "index.js" }),
+  "node_modules/@animalabs/agent-framework/index.js": "export {};\n",
+};
+
+test("discord.js resolving from the installed agent-framework, which loads it by require out of bun build's reach, is named", async () => {
+  const discord = {
+    "node_modules/discord.js/package.json": JSON.stringify({ name: "discord.js", version: "1.0.0", main: "index.js" }),
+    "node_modules/discord.js/index.js": "module.exports = {};\n",
+  };
+  const pkg = { dependencies: { "@animalabs/agent-framework": "1.0.0", "discord.js": "1.0.0" }, bundleDependencies: ["@animalabs/agent-framework", "discord.js"] };
+  const result = await check(standIn(pkg, HOST, { ...AGENT_FRAMEWORK, ...discord }));
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /src\/index\.ts's imports resolve, discord\.js resolves from @animalabs\/agent-framework, and the offline smoke run answered\.$/m);
+}, TIMEOUT_MS);
+
+test("an install where discord.js doesn't resolve from agent-framework fails, though bun build doesn't reach it", async () => {
+  const pkg = { dependencies: { "@animalabs/agent-framework": "1.0.0" }, bundleDependencies: ["@animalabs/agent-framework"] };
+  const result = await check(standIn(pkg, HOST, AGENT_FRAMEWORK));
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /^pack-installs-alone: discord\.js doesn't resolve from the installed @animalabs\/agent-framework in zz-host-1\.0\.0\.tgz: /m);
+}, TIMEOUT_MS);
+
 const DEAF = `process.on("SIGTERM", () => {});\nawait new Promise((resolve) => setTimeout(resolve, 90_000));\n`;
 
 test("a smoke run that doesn't finish is stopped at its limit, even one that ignores SIGTERM, and the limit must be a number", async () => {
