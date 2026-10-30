@@ -1997,7 +1997,7 @@ function validateInferenceBounds(value: unknown): void {
   const { progressBounds, flatMinimumMs } = value as Record<string, unknown>;
   const aboveZero = (path: string, v: unknown): void => {
     if (v !== undefined && !(typeof v === 'number' && Number.isFinite(v) && v > 0)) {
-      throw new Error(`Recipe ${path} must be a number above 0, got ${typeof v === 'number' ? String(v) : JSON.stringify(v)}.`);
+      throw new Error(`Recipe ${path} must be a finite number above 0, got ${typeof v === 'number' ? String(v) : JSON.stringify(v)}.`);
     }
   };
   if (progressBounds !== undefined) {

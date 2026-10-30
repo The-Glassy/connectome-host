@@ -197,8 +197,8 @@ agent-framework's notes give the rest, compression's calls included.
 content to 90 seconds; `progressBounds` also takes `betweenEventsMs` and
 `thinkTokensPerSecond`, the object takes `flatMinimumMs` beside it (the least
 the flat bound on a stream can be, 1862000 by default), and `false` sets none
-of these bounds. A key it doesn't know, or a value that isn't a number above
-0, stops the load, naming it.
+of these bounds. A key it doesn't know, or a value that isn't a finite number
+above 0, stops the load, naming it.
 
 ### Prose routing
 

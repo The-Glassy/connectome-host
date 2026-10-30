@@ -99,11 +99,11 @@ describe('inferenceBounds', () => {
     ['a misspelt key', { progressbounds: {} }, 'Recipe inferenceBounds has unknown key "progressbounds"; it takes progressBounds and flatMinimumMs.'],
     ['progressBounds that isn\'t an object', { progressBounds: true }, 'Recipe inferenceBounds.progressBounds must be an object, got true.'],
     ['progressBounds of null', { progressBounds: null }, 'Recipe inferenceBounds.progressBounds must be an object, got null.'],
-    ['a bound that isn\'t finite', { progressBounds: { thinkTokensPerSecond: Infinity } }, 'Recipe inferenceBounds.progressBounds.thinkTokensPerSecond must be a number above 0, got Infinity.'],
+    ['a bound that isn\'t finite', { progressBounds: { thinkTokensPerSecond: Infinity } }, 'Recipe inferenceBounds.progressBounds.thinkTokensPerSecond must be a finite number above 0, got Infinity.'],
     ['a misspelt bound', { progressBounds: { beforeContentMS: 90_000 } }, 'Recipe inferenceBounds.progressBounds has unknown key "beforeContentMS"; it takes beforeContentMs, betweenEventsMs and thinkTokensPerSecond.'],
-    ['a bound of 0', { progressBounds: { betweenEventsMs: 0 } }, 'Recipe inferenceBounds.progressBounds.betweenEventsMs must be a number above 0, got 0.'],
-    ['a bound given as a string', { progressBounds: { beforeContentMs: '90000' } }, 'Recipe inferenceBounds.progressBounds.beforeContentMs must be a number above 0, got "90000".'],
-    ['a negative flatMinimumMs', { flatMinimumMs: -1 }, 'Recipe inferenceBounds.flatMinimumMs must be a number above 0, got -1.'],
+    ['a bound of 0', { progressBounds: { betweenEventsMs: 0 } }, 'Recipe inferenceBounds.progressBounds.betweenEventsMs must be a finite number above 0, got 0.'],
+    ['a bound given as a string', { progressBounds: { beforeContentMs: '90000' } }, 'Recipe inferenceBounds.progressBounds.beforeContentMs must be a finite number above 0, got "90000".'],
+    ['a negative flatMinimumMs', { flatMinimumMs: -1 }, 'Recipe inferenceBounds.flatMinimumMs must be a finite number above 0, got -1.'],
   ];
   for (const [what, value, message] of refused) {
     test(`${what} stops the load, naming the key`, () => {
