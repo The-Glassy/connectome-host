@@ -58,7 +58,7 @@ afterEach(async () => {
 
 function startHost(
   dir: string, index: string, root: string | null, modules: Record<string, unknown> = {}, recipeFields: Record<string, unknown> = {},
-  kid = false, more: Record<string, string> = {},
+  kid = false, more: Record<string, string> = {}, preloads: string[] = [],
 ): { host: ChildProcess; stderr: () => string; stdout: () => string; exit: Promise<number | null> } {
   const recipe = kid ? join(dir, 'kid.json') : join(dir, 'recipe.json');
   if (!kid) writeFileSync(recipe, JSON.stringify({ ...RECIPE, ...recipeFields, modules: { ...RECIPE.modules, ...modules } }));
@@ -68,7 +68,7 @@ function startHost(
   if (root !== null) env.CONNECTOME_INSTALL_ROOT = root;
   else delete env.CONNECTOME_INSTALL_ROOT;
   delete env.NO_UPDATE_NOTIFIER;
-  const host = spawn('bun', [index, recipe, '--headless'], {
+  const host = spawn('bun', [...preloads.flatMap((preload) => ['--preload', preload]), index, recipe, '--headless'], {
     cwd: dir,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -400,7 +400,9 @@ describe("a host's update, on a real start", () => {
     writeFileSync(join(placed, 'package.json'), JSON.stringify({ version: '9.9.10' }));
     writeFileSync(join(placed, 'src', 'index.ts'), '');
     writeFileSync(join(placed, 'src', 'update', 'launcher.ts'), '');
-    const { stderr, stdout, exit } = startHost(dir, index, root, { webui: { host: '127.0.0.1', port: 0 } });
+    const { stderr, stdout, exit } = startHost(
+      dir, index, root, { webui: { host: '127.0.0.1', port: 0 } }, {}, false, {}, [join(REPO_ROOT, 'test', 'held-socket-listen.ts')],
+    );
     const listening = /\[webui\] listening on http:\/\/127\.0\.0\.1:(\d+)/;
     await until(() => listening.test(stdout()), 30_000, `the host says where its Web UI listens (stderr: ${stderr().slice(-1500)})`);
     const port = Number(listening.exec(stdout())![1]);
@@ -413,15 +415,16 @@ describe("a host's update, on a real start", () => {
     page.send(JSON.stringify({ type: 'command', command: '/update restart 9.9.11' }));
     const refusal = 'The release installed to restart onto is now 9.9.10, not 9.9.11, so nothing is restarting. Look at what ' +
       '9.9.10 costs, then ask again.';
-    await until(() => frames.some((frame) => frame.lines?.some((line) => line.text === refusal)), 15_000, 'the refusal');
+    const answers = () => frames.filter((frame) => frame.type === 'command-result').flatMap((frame) => frame.lines!.map((l) => l.text));
+    await until(() => answers().length >= 2, 15_000, "the answer to the page's first restart");
+    expect(answers()).toEqual(['Restarting unless refused: turns in progress get up to 2 min to end…', refusal]);
     expect(closed).toBe(false);
     page.send(JSON.stringify({ type: 'command', command: '/update restart 9.9.10' }));
     expect(await exit).toBe(75);
     // The page's socket closes when the host's process exits, so no frame comes
     // after the close.
     await until(() => closed, 5_000, 'the page sees its connection close');
-    const answers = frames.filter((frame) => frame.type === 'command-result').flatMap((frame) => frame.lines!.map((l) => l.text));
-    expect(answers).toEqual([
+    expect(answers()).toEqual([
       'Restarting unless refused: turns in progress get up to 2 min to end…',
       refusal,
       'Restarting unless refused: turns in progress get up to 2 min to end…',

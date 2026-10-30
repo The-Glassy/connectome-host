@@ -126,6 +126,7 @@ export type { AppContext };
 
 const headless = process.argv.includes('--headless');
 const noTui = !headless && (process.argv.includes('--no-tui') || !process.stdin.isTTY);
+const batch = noTui && !process.stdin.isTTY;
 
 const config = {
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -756,7 +757,7 @@ async function runPiped(app: AppContext) {
     return false;
   }
 
-  if (!process.stdin.isTTY) {
+  if (batch) {
     console.log(batchModeStartNotice());
     const lines: string[] = [];
     const rl = createInterface({ input: process.stdin });
@@ -1210,8 +1211,10 @@ async function main() {
       },
     },
   });
-  if (!(noTui && !process.stdin.isTTY)) hostUpdate.startChecks();
-  getWebUiModule(framework)?.setApp(app);
+  if (!batch) hostUpdate.startChecks();
+  const serve = (): void => { getWebUiModule(app.framework)?.setApp(app); };
+  if (batch) serve();
+  else hostUpdate.whenStopAttached(serve);
   for (const [kind, message, data] of queuedAlerts.splice(0)) {
     (framework as unknown as { notifyOpsAlert?: (k: string, a: string, m: string, d?: Record<string, unknown>) => void })
       .notifyOpsAlert?.(kind, agentName, message, data);
