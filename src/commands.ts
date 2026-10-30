@@ -424,6 +424,9 @@ function credentialLines(state: CredentialState): Line[] {
   } else {
     lines.push({ text: `  expiry unknown; ${state.rotatable ? 'host can refresh' : 'not host-rotatable'}`, style: 'system' });
   }
+  if (state.unsaved !== undefined) {
+    lines.push({ text: `  WARNING: ${state.unsaved}. /auth recheck writes it again.`, style: 'system' });
+  }
   if (state.until !== undefined && state.kind === 'quota-spent') {
     lines.push({ text: `  resets ${new Date(state.until).toISOString()}`, style: 'system' });
   }

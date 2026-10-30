@@ -915,6 +915,7 @@ async function main() {
           : { token: config.authToken }),
         autoRefresh: config.anthropicAutoRefresh,
         baseURL: process.env.ANTHROPIC_BASE_URL || undefined,
+        onWriteBack: (file, error) => credentialsRef?.observeWriteBack(file, error),
       })
     : null;
   // Subscription credentials draw down utilization windows instead of being
