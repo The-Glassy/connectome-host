@@ -34,7 +34,7 @@ import type { CallLedger } from '../call-ledger.js';
 import type { QuotaMeter } from '../quota-meter.js';
 import type { CredentialMonitor } from '../credential-state.js';
 import { handleCommand } from '../commands.js';
-import { PANEL_OPS_THAT_CHANGE_THE_SESSION, refusedWhileSwitching, trackRunning } from '../session-switch.js';
+import { PANEL_OPS_THAT_CHANGE_THE_SESSION, refusedWhileSwitching, switchLeftForStop, trackOperatorWork } from '../session-switch.js';
 import { parseCommand } from '../command-name.js';
 import { AgentTreeReducer, type AgentTreeSnapshot } from '../state/agent-tree-reducer.js';
 import { FleetTreeAggregator } from '../state/fleet-tree-aggregator.js';
@@ -122,7 +122,7 @@ export interface WebUiAppRef {
   sessionManager: SessionManager;
   recipe: Recipe;
   branchState: BranchState;
-  switchSession(id: string): Promise<void>;
+  switchSession(id: string): Promise<unknown>;
   switching?: boolean;
 }
 
@@ -1669,19 +1669,19 @@ export class WebUiModule implements Module {
       }
 
       case 'rollback':
-        void trackRunning(app, 'rollback', this.handleSurgery(client, 'rollback', parsed));
+        void trackOperatorWork(app, 'rollback', this.handleSurgery(client, 'rollback', parsed));
         return;
 
       case 'suppress':
-        void trackRunning(app, 'suppress', this.handleSurgery(client, 'suppress', parsed));
+        void trackOperatorWork(app, 'suppress', this.handleSurgery(client, 'suppress', parsed));
         return;
 
       case 'host-quiesce':
-        void trackRunning(app, 'host-quiesce', this.handleHostMode(client, 'quiesce', parsed));
+        void trackOperatorWork(app, 'host-quiesce', this.handleHostMode(client, 'quiesce', parsed));
         return;
 
       case 'host-resume':
-        void trackRunning(app, 'host-resume', this.handleHostMode(client, 'resume', parsed));
+        void trackOperatorWork(app, 'host-resume', this.handleHostMode(client, 'resume', parsed));
         return;
 
       case 'request-host-mode': {
@@ -1730,7 +1730,7 @@ export class WebUiModule implements Module {
 
       case 'fleet-stop':
       case 'fleet-restart': {
-        void trackRunning(app, `${parsed.type} ${parsed.name}`, this.handleFleetControl(client, parsed.type, parsed.name));
+        void trackOperatorWork(app, `${parsed.type} ${parsed.name}`, this.handleFleetControl(client, parsed.type, parsed.name));
         return;
       }
 
@@ -2522,14 +2522,16 @@ export class WebUiModule implements Module {
 
     const commandName = `/${parseCommand(command).name}`;
     if (result.branchChanged) {
-      await trackRunning(app, commandName, this.materializeConfigMount());
+      await trackOperatorWork(app, commandName, this.materializeConfigMount());
       this.broadcastBranchChanged();
       this.refreshAllWelcomes();
     }
 
     if (result.switchToSessionId) {
       try {
-        await sharedServer?.app.switchSession(result.switchToSessionId);
+        if (await app.switchSession(result.switchToSessionId) === false) {
+          this.send(client, { type: 'error', corrId, message: switchLeftForStop(app.sessionManager.getActiveSession()) });
+        }
       } catch (err) {
         this.send(client, {
           type: 'error',
@@ -2551,7 +2553,7 @@ export class WebUiModule implements Module {
           switchToSessionId: follow.switchToSessionId,
         });
         if (follow.branchChanged) {
-          await trackRunning(app, commandName, this.materializeConfigMount());
+          await trackOperatorWork(app, commandName, this.materializeConfigMount());
           this.broadcastBranchChanged();
           this.refreshAllWelcomes();
         }

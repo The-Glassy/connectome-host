@@ -111,6 +111,7 @@ export class CredentialMonitor {
   private unsubMeter: (() => void) | null = null;
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
   private actionChain: Promise<void> = Promise.resolve();
+  private actionsRunning = 0;
   private loginInFlight = false;
   private disposed = false;
   private unsaved: string | undefined;
@@ -356,8 +357,16 @@ export class CredentialMonitor {
       }
     }
     const run = this.actionChain.then(() => this.performAction(id, queued));
-    this.actionChain = run.then(() => undefined, () => undefined);
+    const settled = run.then(() => undefined, () => undefined);
+    this.actionChain = settled;
+    this.actionsRunning++;
+    void settled.then(() => { this.actionsRunning--; });
     return run;
+  }
+
+  /** Whether an action asked for here, from any entry, hasn't settled yet. */
+  actionInFlight(): boolean {
+    return this.actionsRunning > 0;
   }
 
   private async performAction(id: CredentialActionId, params: { token?: string; restart?: boolean }): Promise<CredentialState> {
