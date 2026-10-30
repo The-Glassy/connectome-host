@@ -183,6 +183,21 @@ process that ends without a stop can lose it. Set 0 only for a short run in
 which a pass at a point that depends on the machine's load would make runs
 differ, such as a test fixture's.
 
+`inferenceBounds`, at the recipe's top level, is how long agent-framework
+lets a model call go without progress before it cuts it, passed to the
+framework as written. Left out, its defaults stand: on the `anthropic` and
+`bedrock` providers, a resident's streamed call is cut 60 seconds after its
+send if no content has come, or, once a thinking block has started, at its
+`max_tokens` at 87 tokens a second if that's later, and 150 seconds after
+its last provider event once content has begun. A cut call gets one fresh
+call a second later. agent-framework's notes give the rest, compression's
+calls included. `{"progressBounds": {"beforeContentMs": 90000}}` gives 90
+seconds before content; `progressBounds` also takes `betweenEventsMs` and
+`thinkTokensPerSecond`, the object takes `flatMinimumMs` beside it (the
+least the flat bound on a stream can be, 1862000), and `false` sets none of
+these bounds. A key it doesn't know, or a value that isn't a number above 0,
+stops the load, naming it.
+
 ### Prose routing
 
 Plain assistant text (anything the model writes that is not a tool call) is
