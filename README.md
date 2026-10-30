@@ -188,15 +188,17 @@ lets a model call go without progress before it cuts it, passed to the
 framework as written. Left out, its defaults stand: on the `anthropic` and
 `bedrock` providers, a resident's streamed call is cut 60 seconds after its
 send if no content has come, or, once a thinking block has started, at its
-`max_tokens` at 87 tokens a second if that's later, and 150 seconds after
-its last provider event once content has begun. A cut call gets one fresh
-call a second later. agent-framework's notes give the rest, compression's
-calls included. `{"progressBounds": {"beforeContentMs": 90000}}` gives 90
-seconds before content; `progressBounds` also takes `betweenEventsMs` and
-`thinkTokensPerSecond`, the object takes `flatMinimumMs` beside it (the
-least the flat bound on a stream can be, 1862000), and `false` sets none of
-these bounds. A key it doesn't know, or a value that isn't a number above 0,
-stops the load, naming it.
+`max_tokens` at 87 tokens a second from that start if that's later. Once
+content has begun, it's cut 150 seconds after its last provider event, or,
+when that event was a thinking block's start, after the block's allowance if
+that's longer. A cut call gets one fresh call a second later.
+agent-framework's notes give the rest, compression's calls included.
+`{"progressBounds": {"beforeContentMs": 90000}}` raises the bound before
+content to 90 seconds; `progressBounds` also takes `betweenEventsMs` and
+`thinkTokensPerSecond`, the object takes `flatMinimumMs` beside it (the least
+the flat bound on a stream can be, 1862000 by default), and `false` sets none
+of these bounds. A key it doesn't know, or a value that isn't a number above
+0, stops the load, naming it.
 
 ### Prose routing
 
