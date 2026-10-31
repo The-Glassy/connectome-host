@@ -1,7 +1,7 @@
 import type { AgentFramework } from '@animalabs/agent-framework';
 import { NativeFormatter } from '@animalabs/membrane';
 import type { ContentBlock, NormalizedMessage, NormalizedRequest, ToolDefinition } from '@animalabs/membrane';
-import { resolveProvider, type Recipe } from '../recipe.js';
+import { recipeModel, resolveProvider, type Recipe } from '../recipe.js';
 import { anthropicXmlFormatter, xmlToolsInSystem } from '../recipe-formatter.js';
 import type { CallLedger } from '../call-ledger.js';
 import type { QuotaMeter } from '../quota-meter.js';
@@ -16,7 +16,7 @@ import {
   type ToolClassRow,
   type ToolClassSource,
 } from '../tool-lifecycle-config.js';
-import { effectiveContextBudgetTokens } from '../framework-agent-config.js';
+import { effectiveContextBudgetTokens, effectiveMaxTokens } from '../recipe-fit.js';
 import { hostUpdate } from '../update/update.js';
 
 export interface PanelAppRef {
@@ -227,6 +227,7 @@ export interface McplLiveServer {
   toolCount: number;
   toolPrefix?: string;
   target?: string;
+  closedTab?: boolean;
 }
 
 export function buildMcplSnapshot(app: PanelAppRef): Record<string, unknown> {
@@ -239,7 +240,7 @@ export function buildMcplSnapshot(app: PanelAppRef): Record<string, unknown> {
     const fw = app.framework as unknown as {
       listMcplServers?: () => Array<{
         id: string; connected?: boolean; toolCount?: number; toolPrefix?: string;
-        command?: string; url?: string;
+        command?: string; url?: string; closedTab?: boolean;
       }>;
     };
     if (typeof fw.listMcplServers === 'function') {
@@ -249,6 +250,7 @@ export function buildMcplSnapshot(app: PanelAppRef): Record<string, unknown> {
         toolCount: s.toolCount ?? 0,
         ...(s.toolPrefix ? { toolPrefix: s.toolPrefix } : {}),
         ...(s.command || s.url ? { target: s.command ?? s.url } : {}),
+        ...(s.closedTab ? { closedTab: true } : {}),
       }));
     }
   } catch { }
@@ -1177,7 +1179,7 @@ export async function buildContextCurve(app: PanelAppRef, agentName: string): Pr
   requireAgent(app, agentName);
   const agent = app.framework.getAgent(agentName)!;
   const cm = (agent as unknown as { getContextManager: () => any }).getContextManager();
-  let maxTokens = effectiveContextBudgetTokens(app.recipe);
+  let maxTokens = effectiveContextBudgetTokens(app.recipe, recipeModel(app.recipe, process.env.MODEL));
   let transition: string | undefined;
   try {
     const settings = (app.framework as unknown as {
@@ -1187,7 +1189,7 @@ export async function buildContextCurve(app: PanelAppRef, agentName: string): Pr
     if (typeof live === 'number' && live > 0) maxTokens = live;
     transition = settings?.transition;
   } catch { }
-  const reserveForResponse = app.recipe.agent.maxTokens ?? 16_384;
+  const reserveForResponse = effectiveMaxTokens(app.recipe);
   // A dry run: a committing compile on every render would persist its fold
   // resolutions and queue compression from its plan, mid-stream included.
   const compiled = await cm.compile({ maxTokens, reserveForResponse }, undefined, { dryRun: true });
@@ -1383,7 +1385,7 @@ export function runContextPreview(
           + 'or the active strategy has no fold plan (non-adaptive)', 501,
       );
     }
-    const reserve = app.recipe.agent.maxTokens ?? 16_384;
+    const reserve = effectiveMaxTokens(app.recipe);
     return {
       agent: agentName,
       budget,

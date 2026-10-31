@@ -38,6 +38,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { applyAgentOverlay, loadMcplServers, mergeRecipeServers } from './mcpl-config.js';
 import { CALL_LOG_READ_BUDGET, readLinesFromEnd } from './call-log-tail.js';
+import { SESSION_MARKER } from './session-marker.js';
 
 export const BUG_REPORT_REPO = 'anima-research/connectome-host';
 /** The issue form the link fills (.github/ISSUE_TEMPLATE/bug_report.yml). */
@@ -129,7 +130,7 @@ export const HOST_LOG_TAGS = new Set([
   'agent-settings', 'anthropic-credentials', 'autobiographical', 'batch', 'budget-preflight',
   'cache-keepalive', 'channel', 'cm-cache', 'coalescing', 'compression-quarantine', 'context-maintenance',
   'credential', 'credential-monitor', 'deprecated', 'diagnostics', 'discord', 'discord-awareness', 'echo',
-  'estimator-calibration', 'fleet', 'framework', 'gate', 'gate-telemetry', 'heartbeat', 'host', 'host-command',
+  'estimator-calibration', 'fit', 'fleet', 'framework', 'gate', 'gate-telemetry', 'heartbeat', 'host', 'host-command',
   'host-mode', 'host-notice', 'identity', 'image', 'inference-dropped', 'inference-failed',
   'inference-hard-down', 'inference-refusal', 'inference-rewind', 'inference-stale', 'interrupt',
   'kv-continuity-relaxation', 'kv-diag', 'kv-escalation', 'kv-overlap', 'kv-timing', 'kv-unified',
@@ -140,7 +141,7 @@ export const HOST_LOG_TAGS = new Set([
   'picker-config-drift', 'picker-dead-ids', 'picker-unrealizable', 'prose', 'provider-admission',
   'provider-cooldown', 'puppet', 'push-event-rejected', 'reasoning', 'reasoning-effort', 'refusal-retry',
   'refusal-rewind', 'rfc005', 'routespeech', 'routing', 'section', 'self-restart', 'self-wake', 'settings', 'shutdown',
-  'sleep', 'spill', 'store-topology', 'subagent', 'subscription-gc', 'thinking', 'tool', 'tool-boundary',
+  'sleep', 'spill', 'store-topology', 'subagent', 'subscription-gc', 'thinking', 'thinking-binding', 'tool', 'tool-boundary',
   'tool-result-guard', 'tool_result', 'tools', 'tts-relay', 'unstick', 'update', 'voice', 'webui', 'webui-observers',
   'windowed-passthrough', 'workspace',
 ]);
@@ -212,7 +213,7 @@ export interface HostErrorShape {
 }
 
 export interface HostErrorSummary {
-  log: 'tui-error.log' | 'headless.log';
+  log: 'tui-error.log' | 'headless.log' | 'readline-error.log';
   readable: boolean;
   truncated: boolean;
   tags: Array<[string, number]>;
@@ -453,11 +454,6 @@ export function summarizeProviderCalls(
   return { calls, failed, skipped, recent, omitted: failures.length - recent.length };
 }
 
-export function sessionMarker(now: Date): string {
-  return `--- session ${now.toISOString()} ---`;
-}
-
-const SESSION_MARKER = /^--- session \d{4}-\d{2}-\d{2}T[\d:.]+Z ---$/;
 const LEADING_STAMP = /^\[\d{4}-\d{2}-\d{2}T[\d:.]+Z\]\s*/;
 const TAG = /^\[([A-Za-z0-9:_./-]{1,40})\]/;
 const FRAME_LINE = /^\s+at\s+/;
@@ -852,7 +848,10 @@ export function gatherBugReportFacts(opts: GatherOptions): BugReportFacts {
     });
     providerCalls = { ...summary, truncated, readable };
   }
-  const errorLogName = opts.mode === 'tui' ? 'tui-error.log' : opts.mode === 'headless' ? 'headless.log' : null;
+  const errorLogName = opts.mode === 'tui' ? 'tui-error.log'
+    : opts.mode === 'headless' ? 'headless.log'
+    : opts.mode === 'readline' ? 'readline-error.log'
+    : null;
   let hostErrors: HostErrorSummary | null = null;
   if (errorLogName) {
     const read = tailLines(join(opts.dataDir, errorLogName), LOG_WINDOW);

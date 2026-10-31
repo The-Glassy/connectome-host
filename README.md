@@ -142,16 +142,63 @@ them through its merged view.
 **Memory defaults**: `agent.strategy` may be omitted entirely. The default is
 the autobiographical memory strategy with adaptive resolution, **kv-unified
 folding** (a cost-aware solver that weighs budget fit, prompt-cache cost and
-continuity), a 300k context budget with a 120k verbatim tail, compression by
+continuity), a context budget with a verbatim tail of 40% of it, compression by
 the agent's own model, and summaries voiced as the agent itself
-(`summaryParticipant` defaults to `agent.name`). The 300k budget assumes a
-1M-window model: on a 200k-window model, set `agent.contextBudgetTokens`
-yourself. Set a `strategy` block only to tune windows/budgets, to pin
+(`summaryParticipant` defaults to the agent's name), each introduced by
+context-manager's default label unless a recipe sets its own
+(`summaryContextLabel`). On a model the host knows a
+window for (Claude from 4.5 on, on Anthropic's API), with an `agent.maxTokens`
+that is unset or a positive number, the budget is the smaller
+of 300k and the window less the system prompt and 32k for the tools: 300k (a
+120k tail) on a 1M-window model with a system prompt under 668k tokens, and on
+a 200k-window model 168k less the system prompt, so a compile that keeps to
+the budget less `maxTokens` leaves `maxTokens` of the window for the reply. Otherwise it's 300k, so set
+`agent.contextBudgetTokens` yourself. Where the
+head and a tail of 40% of the budget wouldn't fit in the budget less
+`maxTokens` (with context-manager's over-budget grace), the tail is 40% of the
+budget less `maxTokens`. On Anthropic's API
+a recipe load that resolves the system prompt refuses a `maxTokens` over the
+model's maximum output, a budget that leaves the conversation too little room
+for the head and the tail once `maxTokens` is kept for the reply, or a budget
+whose prompt, not counting the tools, would pass the window, and says which
+number to change. Set a `strategy` block only to tune windows/budgets, to pin
 `foldingStrategy: "kv-stable"` for a resident whose store was built under it,
 or to opt into a different strategy type (`frontdesk`
 for channel-staffing agents, `passthrough` for none) — see
 `docs/AGENT-ONBOARDING.md` for sizing guidance on long-lived agents and
 [`docs/AGENT-MEMORY-GUIDE.md`](docs/AGENT-MEMORY-GUIDE.md) for how it works.
+
+`maintenanceIntervalMs`, at the recipe's top level, is how often
+agent-framework runs its context maintenance pass, in milliseconds: a whole
+number from 0 to 2147483647, and the framework's own 5000 when the recipe
+leaves it out. 0 turns the timer off, and with it the pass at start. Work
+only a pass would take then waits for something else to start it. Queued
+compression waits for, say, the next message, an over-budget compile or a
+`maintain` from an MCPL server the recipe allows host commands. After a
+start, compression that needs the agent's tool definitions (of history that
+holds tool calls, or any with a Fable- or Mythos-family compression model)
+waits for the agent's first request or a `maintain`. And no timer retries
+failed tool-result storage of a subagent run or fork that has ended, so a
+process that ends without a stop can lose it. Set 0 only for a short run in
+which a pass at a point that depends on the machine's load would make runs
+differ, such as a test fixture's.
+
+`inferenceBounds`, at the recipe's top level, is how long agent-framework
+lets a model call go without progress before it cuts it, passed to the
+framework as written. Left out, agent-framework's defaults stand. Its
+`progressBounds` takes `beforeContentMs` (how long a streamed call may go
+from its send with no content), `betweenEventsMs` (once content has begun,
+how long after its last provider event) and `thinkTokensPerSecond` (the rate
+a thinking block's allowance assumes: a lower rate allows a slower think);
+the object takes `flatMinimumMs` beside it (the least the flat bound on a
+stream can be); and `false` sets none of these bounds.
+`{"progressBounds": {"beforeContentMs": 90000}}` sets the bound before
+content to 90 seconds. The defaults, which calls each bound applies to, and
+what a cut call does next are in the "Inference bounds" section of
+agent-framework's README, which its package ships
+(`node_modules/@animalabs/agent-framework/README.md` in an install). A key it
+doesn't know, or a value that isn't a finite number above 0, stops the load,
+naming it.
 
 ### Prose routing
 
@@ -160,10 +207,12 @@ delivered by Agent Framework according to `agent.proseRouting`:
 
 | Mode | Behavior |
 |------|----------|
-| `"locus"` (default) | Text is auto-published to the current locus — the channel that last woke the agent. Text emitted in a tool-call round is delivered live, as narration, unless that round also calls `skip_reply` or an explicit send tool. |
+| `"locus"` (default) | Text is auto-published to the turn's locus: the channel of the delivery that woke the turn, a conversation fork's home channel, or a channel the agent opened during the turn (`speech.locus: "delivery"`, the default). A turn with none of these keeps its text private, unless an open all-except tune-out names a channel (a heartbeat's turn takes no fallback). Text emitted in a tool-call round is delivered live, as narration, unless that round also calls `skip_reply` or an explicit send tool. |
 | `"hybrid"` | Like `locus`, but a leading `>>>destination` envelope routes that segment elsewhere through the authorized channel resolver. |
 | `"explicit"` | Text must start with `>>#channel` / `>>@person` / `>>skip_reply`; unprefixed text is never delivered and bounces to a clipboard for a prefixed resend. |
 | `"disabled"` | Text is never auto-published. The only way anything reaches a channel is an explicit send tool (`send_message`, `channel_publish`, `reply_message`, `send_dm`, ...). Authored text stays in Chronicle and the turn-end `[delivered] nothing` receipt tells the agent how many segments were withheld. |
+
+From agent-framework 0.29.0, a turn the heartbeat opens (a tick or a reminder) takes no fallback to the channel that last had a message for its plain speech; an explicit send reaches someone from it. agent-framework's notes say where such text goes in each mode.
 
 Use `"disabled"` for agents that run multi-step tool tasks from a busy shared
 channel: in `locus` mode a stray one-line narration between two tool calls
@@ -176,8 +225,10 @@ caller's mode.
 `agent.sameRoundThinkTextPolicy` (`"public"` default, or `"private"`) governs
 only text emitted **beside a `think()` call** in the same round. It does not
 cover tool-call rounds without `think()`; use `proseRouting: "disabled"` for
-that. The think policy can be inspected and switched at runtime through the
-agent's `agent_settings` tool and the web UI; `proseRouting` is fixed for the
+that. The think policy can be inspected and switched at runtime through
+`agent_settings` (in the agent's built-in `settings` toolset, or its tool list
+if its `allowedTools` doesn't permit both `toolsets--open` and `toolsets--act`)
+and the web UI; `proseRouting` is fixed for the
 process lifetime.
 
 ```json
@@ -201,13 +252,14 @@ ends the turn), ends on a `>>skip_reply` / `>>>skip_reply` envelope, or has
 continued `maxConsecutive` times in a row (default 3, 1 to 20). Each next turn
 reads a short `[continue]` row naming `skip_reply` as the way to stop, with
 the count once the cap is near, and speaks in the same locus. Every
-continuation is a full inference, and in `locus` mode its prose is published,
+continuation is a full inference, and in `locus` mode its prose is published
+(a continuation in a run the heartbeat started takes no fallback to the
+channel that last had a message either),
 so keep the cap low. Ephemeral subagents don't inherit it: their streams run
 with it off, and a fork's or spawn's orientation lists `auto-continue` beside
-the parent's. It takes effect only with the agent-framework release that adds
-`AgentConfig.autoContinue` (agent-framework#744); with an earlier one, as this
-host's dependency is until it moves, the key validates but turns don't
-continue. See Agent Framework's `docs/auto-continue.md`.
+the parent's. It rests on `AgentConfig.autoContinue` (agent-framework#744),
+which agent-framework 0.29.0, this host's floor, has. See Agent Framework's
+`docs/auto-continue.md`.
 
 ```json
 { "agent": { "autoContinue": { "maxConsecutive": 3 } } }
@@ -255,7 +307,7 @@ loads only when a recipe names its id. For a named id the registry supplies
 the command, args and env, and the recipe entry may carry only policy fields —
 no `command` or `url` needed: `channelSubscription`, `toolPrefix`, feature-set
 and tool toggles, reconnect settings, WebSocket transport, `access`,
-`toolLifecycle`, `toolHints` and `inheritEnv` (`RECIPE_OVERRIDABLE_SERVER_FIELDS` in
+`toolLifecycle`, `toolHints`, `presentation` and `inheritEnv` (`RECIPE_OVERRIDABLE_SERVER_FIELDS` in
 `src/mcpl-config.ts`).
 An id-only entry the registry doesn't define is a startup error. Changes take
 effect on restart.
@@ -348,15 +400,30 @@ Servers an agent deploys for itself (`mcpl-servers.agent.json`, or a fleet child
 
 ### Tool hints and toolsets (MCPL RFC-014)
 
-`toolHints: true` on a server's entry turns on RFC-014 for that server. The host advertises `toolHints` to it, and the server then lists every tool with hints: static or dynamic, visible or not, and which toolset it belongs to. Its toolsets (a game, a builder) can then be opened and closed instead of all being present at once. Hints confer no authority: what the server may do is still its grant.
+From agent-framework 0.29.0 the host advertises RFC-014 `toolHints` to every server unless its entry says `toolHints: false`. A server that speaks RFC-014 then lists every tool with hints: static or dynamic, visible or not, and which toolset it belongs to. Its toolsets (a game, a builder) can then be opened and closed instead of all being present at once. Hints confer no authority: what the server may do is still its grant. A server that doesn't speak RFC-014 ignores the advertisement.
 
 ```json
 "mcpServers": {
-  "surfaces": { "url": "wss://surfaces.example/mcpl", "toolHints": true }
+  "games": { "url": "wss://games.example/mcpl" },
+  "legacy": { "url": "wss://legacy.example/mcpl", "toolHints": false }
 }
 ```
 
-Set it in the recipe, or in `mcpl-servers.json` for a server the recipe names. A recipe naming such a server may override it, so `false` there turns it off. It must be `true` or `false`: anything else stops the load. In the agent's own overlay (`mcpl-servers.agent.json`, or a fleet child's `mcpl-servers.agent.child.json`), anything else is left out and named in a startup line, and the server gets the default. Omitted, agent-framework's default applies. It takes effect with an agent-framework that implements RFC-014; older ones ignore it.
+Set `toolHints` in the recipe, or in `mcpl-servers.json` for a server the recipe names. A recipe naming such a server may override it. It must be `true` or `false`: anything else stops the load. In the agent's own overlay (`mcpl-servers.agent.json`, or a fleet child's `mcpl-servers.agent.child.json`), anything else is left out and named in a startup line, and the server gets the default.
+
+### The host's own toolsets: `settings` and server tabs
+
+From agent-framework 0.29.0 the tools an agent reaches for rarely live in a built-in toolset, `settings`, out of the tool list: agent-framework's own (agent settings, wake rules, gate status, event tags, tool visibility, heartbeat status and trigger, workspace status), every module utility, and this host's MCPL administration (`mcpl-admin--*`) and observer grants (`observers--*`). An agent opens it with `toolsets--open {"toolset": "settings"}`, calls one with `toolsets--act {"tool": "<name>", "args": {...}}`, and `toolsets--look {"toolset": "settings"}` lists them. The framework's single `utils` tool is gone; its utilities are in `settings`. An agent whose `allowedTools` doesn't permit both `toolsets--open` and `toolsets--act` has no `settings` toolset: the tools placed there stay in its tool list, and it calls a module utility, which is never in a tool list, by its own name, with no schema shown.
+
+Each MCPL server can also be presented as a tab. `presentation` on its entry sets how agents are shown it at first: `"full"` (the default: its tools in the tool list), `"tab"` (connected, its events still arriving, its tools starting out of the tool list: `toolsets--open {"server": "<id>"}` lists them for `toolsets--act`, and `toolsets--open {"server": "<id>", "full": true}` puts them back in the list), or `"closed-tab"` (a tab that also starts out disconnected). Each agent can change how it's shown a server later, which this setting doesn't decide. An agent whose `allowedTools` doesn't permit both `toolsets--open` and `toolsets--act` isn't shown tabs. A release on trial commits without connecting a closed tab, since it's kept disconnected on purpose.
+
+```json
+"mcpServers": {
+  "games": { "url": "wss://games.example/mcpl", "presentation": "tab" }
+}
+```
+
+Set it in the recipe, in `mcpl-servers.json`, or (for an agent's own servers) with `mcpl-admin--mcpl_deploy`'s `presentation`. A value other than those three stops the load, or in the agent's own overlay is left out, named in a startup line.
 
 ### Included recipes
 
@@ -721,6 +788,7 @@ From npm, `bun add @animalabs/connectome-host` or `npm install @animalabs/connec
 | `CONNECTOME_OPS_WEBHOOK` | — | Webhook for ops alerts |
 | `COUNT_TOKENS_MODEL` | the agent's model | Override the model used for exact token counts in the context-makeup panel |
 | `LLM_CALLS_FULL_PAYLOADS` | off | `1`/`true`: keep the full request on every llm-calls log entry (large; a line over 16 MiB drops it) |
+| `THINKING_BINDING_PROBE` | on | `off`: skip the start-up check of what the account does with a signed thinking block whose earlier conversation changed (see `docs/AGENT-ONBOARDING.md` §11.10); agents on a model whose thinking binds then leave such thinking out, as on an account that refuses it |
 | `GATE_TELEMETRY` | off | `1`: send `x-gate-*` telemetry headers — only when `ANTHROPIC_BASE_URL` is also set |
 
 Recipes may reference any further variables they need as `${VAR}` (for
@@ -734,7 +802,7 @@ bun src/index.ts                    # Interactive TUI
 bun src/index.ts --no-tui           # Readline mode
 echo "Hello" | bun src/index.ts     # Batch mode: run each line, then stop
 bun src/index.ts <recipe> --headless                     # Daemon: JSONL IPC over $DATA_DIR/ipc.sock, no terminal
-bun src/index.ts <recipe> --headless --exit-when-idle    # One-shot: exit once the agent goes idle
+bun src/index.ts <recipe> --headless --exit-when-idle    # One-shot: exit once the agent is idle with nothing in flight
 bun src/index.ts <recipe> --headless --socket-path <p>   # Custom socket path
 bun --watch src/index.ts            # Dev mode
 bun src/index.ts --audit-stores --recipe <recipe> <data dir>  # Store audit: starts no agent (below)
@@ -838,10 +906,27 @@ headless socket.
 | `/auth [status\|refresh\|login\|recheck\|token <tok>]` | Subscription credential state and operator actions (see docs/subscription-transport.md) |
 | `/session [list\|new\|switch\|rename\|delete]` | Session management; `delete` requires `--confirm` |
 | `/fleet [list\|status\|view\|peek\|stop\|restart]` | Fleet children (see [`docs/fleet-protocol.md`](docs/fleet-protocol.md)) |
-| `/update [install\|restart [wait\|now\|resume\|<version>]\|back [(keep\|restore) [<version>]]]` | Whether a newer release is out and what it costs; on an install set up to update itself, install it, restart onto it, or go back. A version, as the Web UI sends it, makes Restart or Go back refuse unless that's still the release it would act on ("Updating an install" in [`docs/DEPLOYMENTS.md`](docs/DEPLOYMENTS.md)) |
+| `/update [check\|install\|restart [wait\|now\|resume\|<version>]\|back [(keep\|restore) [<version>]]]` | Whether a newer release is out and what it costs (`check`, or `/update` alone); on an install set up to update itself, install it, restart onto it, or go back. A version, as the Web UI sends it, makes Restart or Go back refuse unless that's still the release it would act on ("Updating an install" in [`docs/DEPLOYMENTS.md`](docs/DEPLOYMENTS.md)) |
 
-Commands that move the head (`/undo`, `/redo`, `/checkout`, `/restore`,
-`/branchto`, `/newtopic`) are refused while a turn is in flight.
+Commands that move the head are refused while a turn is in flight: `/undo`,
+`/redo`, `/checkout`, `/restore` and `/branchto` while any agent sharing the
+store is mid-turn, the subconscious included, and `/newtopic` while the main
+agent is.
+
+While a session switch is under way, these are refused, each saying
+nothing changed: `/undo`, `/redo`, `/checkout`, `/branchto`, `/newtopic`,
+`/nudge`, `/puppet`, `/session rename`, `/session delete`, `/fleet stop` and
+`/fleet restart`, and `/checkpoint`, `/restore` and `/budget` given a name or
+a value. The forms of those three that only list or show answer as they do
+without a switch. The same goes for the fleet view's stop and restart keys,
+and for the Web UI's rollback, suppress, fleet stop and restart, host
+quiesce and resume, and pin and settings changes. A pin or settings change
+made for a fleet child is passed on to it, and the child refuses it only
+while its own session is switching. Once the switch has stopped the old
+session's framework, the Web UI answers "host not ready" until the next one
+is installed, as before. `/session new` and `/session switch` start no
+switch while one is under way, or while one of the commands above, given
+earlier, or one of these actions on this host is still running.
 
 ## TUI controls
 

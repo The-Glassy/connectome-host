@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { defaultTokenEstimator } from '@animalabs/context-manager';
 import { buildFrameworkStrategy, standardKvUnifiedConfig, strategyMessageCap } from '../src/framework-strategy.js';
 import { buildFrameworkAgentConfig } from '../src/framework-agent-config.js';
 import { DEFAULT_RECIPE, validateRecipe } from '../src/recipe.js';
@@ -92,9 +93,13 @@ describe('standard-recipe memory defaults', () => {
     expect(tail({ contextBudgetTokens: 160_000 })).toBe(64_000);
     expect(tail({ contextBudgetTokens: 600_000 })).toBe(240_000);
     expect(tail({ strategy: { type: 'autobiographical', recentWindowTokens: 30_000 } })).toBe(30_000);
+    const haiku = recipe({ maxTokens: 16_000 });
+    const budget = buildFrameworkAgentConfig(haiku, 'agent', 'claude-haiku-4-5', buildFrameworkStrategy(haiku, 'claude-haiku-4-5', 'UTC')).contextBudgetTokens as number;
+    expect(budget).toBe(200_000 - 32_000 - defaultTokenEstimator('sys'));
+    expect(configView(buildFrameworkStrategy(haiku, 'claude-haiku-4-5', 'UTC')).recentWindowTokens).toBe(Math.round(budget * 0.4));
   });
 
-  test('budget defaults to 300k; maxStreamTokens follows it only when the budget is defaulted too', () => {
+  test('on a model with no window row the budget defaults to 300k; maxStreamTokens follows it only when the budget is defaulted too', () => {
     const agentConfig = (agent: Record<string, unknown>) => {
       const r = recipe(agent);
       return buildFrameworkAgentConfig(r, 'agent', 'some-model', buildFrameworkStrategy(r, 'some-model', 'UTC'));
@@ -244,13 +249,21 @@ describe('standard-recipe memory defaults', () => {
     expect(config.kvUnified).toBeUndefined();
   });
 
-  test("without an agent name the summary voice falls back to the library's 'Claude' default", () => {
-    const strategy = buildFrameworkStrategy(
-      recipe(),
-      'some-model',
-      'America/Los_Angeles',
-    );
-    expect(configView(strategy).summaryParticipant).toBe('Claude');
+  test("the host sets no summary label of its own, so context-manager's default stands; a recipe's label is passed through", () => {
+    const built = (agent: Record<string, unknown>) =>
+      configView(buildFrameworkStrategy(recipe(agent), 'some-model', 'America/Los_Angeles')).summaryContextLabel;
+    const libraryDefault = 'What do you remember from earlier?';
+    expect(built({ name: 'Mira' })).toBe(libraryDefault);
+    expect(built({})).toBe(libraryDefault);
+    expect(built({ name: 'Mira', strategy: { type: 'frontdesk' } })).toBe(libraryDefault);
+    expect(built({ name: 'Mira', strategy: { type: 'autobiographical', summaryContextLabel: 'Earlier:' } })).toBe('Earlier:');
+  });
+
+  test('without agent.name, summaries are voiced by the name the agent runs under, not the library\'s "Claude"', () => {
+    const strategy = buildFrameworkStrategy(recipe(), 'some-model', 'America/Los_Angeles', undefined, 'agent');
+    expect(configView(strategy).summaryParticipant).toBe('agent');
+    const named = buildFrameworkStrategy(recipe({ name: 'Mira' }), 'some-model', 'America/Los_Angeles', undefined, 'Mira');
+    expect(configView(named).summaryParticipant).toBe('Mira');
   });
 
   test('DEFAULT_RECIPE does not enable the opt-in modules', () => {

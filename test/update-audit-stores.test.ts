@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
+import { describe, test, expect, beforeAll, beforeEach, afterAll, afterEach, spyOn } from 'bun:test';
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import {
@@ -11,13 +11,15 @@ import { AgentFramework, resolveTimeZone } from '@animalabs/agent-framework';
 import { JsStore } from '@animalabs/chronicle';
 import { AutobiographicalStrategy, ContextManager } from '@animalabs/context-manager';
 import { Membrane, MockAdapter } from '@animalabs/membrane';
-import { buildFrameworkAgentConfig, recipeModel } from '../src/framework-agent-config.js';
-import { buildFrameworkStrategy, standardKvUnifiedConfig } from '../src/framework-strategy.js';
+import { buildFrameworkAgentConfig } from '../src/framework-agent-config.js';
+import { recipeModel } from '../src/recipe.js';
+import { buildFrameworkStrategy, standardKvUnifiedConfig, dendriteCreateOptions } from '../src/framework-strategy.js';
 import { loadExtensions } from '../src/extensions.js';
 import { DEFAULT_RECIPE, loadSavedRecipe, saveRecipe, validateRecipe } from '../src/recipe.js';
 import { SessionManager } from '../src/session-manager.js';
 import { startFramework } from '../src/start-framework.js';
-import { auditStores, fleetChildRepair, subconsciousView, type AuditOptions } from '../src/update/audit-stores.js';
+import { auditStores, childAuditLimitMs, fleetChildRepair, subconsciousView, type AuditOptions } from '../src/update/audit-stores.js';
+import { StartRefusal } from '../src/update/host.js';
 import { AUDIT_POINTER, loadRepairAlert, loadRepairLines, type LoadRepairReport } from '../src/web/load-repair-alert.js';
 import * as contract from '../src/update/contract.js';
 import { makeRepairStore } from './load-repair-store.js';
@@ -76,6 +78,22 @@ async function makeStore(path: string, namespace: string, crossed: boolean): Pro
   manager.close();
 }
 
+let templates: string;
+const templateOf = new Map<string, Promise<string>>();
+beforeAll(() => { templates = mkdtempSync(join(tmpdir(), 'update-audit-templates-')); });
+afterAll(() => { rmSync(templates, { recursive: true, force: true }); });
+
+async function copyStore(path: string, namespace: string, crossed: boolean): Promise<void> {
+  const key = JSON.stringify([namespace, crossed]);
+  let template = templateOf.get(key);
+  if (template === undefined) {
+    const at = join(templates, String(templateOf.size));
+    template = makeStore(at, namespace, crossed).then(() => at);
+    templateOf.set(key, template);
+  }
+  cpSync(await template, path, { recursive: true });
+}
+
 /** The seed opens with auditOnly, which never chunks the uncovered frontier,
  *  so adding the messages makes no chunk records. */
 async function makeSpanStore(path: string, run?: 'tuned-out' | 'injected' | 'own-injected'): Promise<void> {
@@ -106,7 +124,7 @@ async function makeSpanStore(path: string, run?: 'tuned-out' | 'injected' | 'own
 /** context-manager's ContextLog reads each entry's fields to index it
  *  (rebuildSourceIndex), so a null entry fails the open. */
 async function makeBrokenSubconsciousStore(path: string): Promise<void> {
-  await makeStore(path, 'agents/agent', false);
+  await copyStore(path, 'agents/agent', false);
   const store = JsStore.openOrCreate({ path });
   store.registerState({ id: 'subconscious/agent/context', strategy: 'append_log', deltaSnapshotEvery: 50, fullSnapshotEvery: 10 });
   store.appendToStateJson('subconscious/agent/context', null);
@@ -139,7 +157,7 @@ async function makeDataDirWith(name: string, makers: Array<(store: string) => Pr
 }
 
 function makeDataDir(name: string, sessions: Array<{ namespace: string; crossed: boolean }>): Promise<{ dir: string; stores: string[] }> {
-  return makeDataDirWith(name, sessions.map((session) => (store: string) => makeStore(store, session.namespace, session.crossed)));
+  return makeDataDirWith(name, sessions.map((session) => (store: string) => copyStore(store, session.namespace, session.crossed)));
 }
 
 async function audit(dirs: string[], options: AuditOptions = {}): Promise<{ status: number; lines: string[]; failed: string[] }> {
@@ -247,7 +265,7 @@ function limitWhen(ready: () => boolean, limitMs = 5 * 60_000): { armed: () => n
     const timer = {};
     const poll = (): void => {
       if (cleared.has(timer)) return;
-      if (ready()) later(() => { if (!cleared.has(timer)) handler(); }, 1_000);
+      if (ready()) handler();
       else later(poll, 50);
     };
     later(poll, 0);
@@ -310,7 +328,7 @@ describe('the store audit', () => {
     try {
       const { lines, failed } = await audit([dir]);
       expect(failed).toEqual([`Couldn't audit ${stores[0]}: it opened, and closing it failed: store close failed`]);
-      expect(lines[1]).toStartWith(`${stores[0]} (agents/agent): agent's memory changed at load: `);
+      expect(lines.some((line) => line.startsWith(`${stores[0]} (agents/agent): agent's memory changed at load: `))).toBe(true);
     } finally {
       storeClose.mockRestore();
     }
@@ -374,23 +392,25 @@ describe('the store audit', () => {
   test("each store's answer is the one agent-framework's own open of it gives", async () => {
     const recipe = { ...DEFAULT_RECIPE, agent: { ...DEFAULT_RECIPE.agent, strategy: { headWindowTokens: 500, recentWindowTokens: 1000 } } };
     const subconscious = { enabled: true, systemPrompt: 'attend to the agent' };
-    const cases: Record<string, { make: (store: string) => Promise<void>; subconscious?: true; off?: true }> = {
-      crossed: { make: (store) => makeStore(store, 'agents/agent', true) },
-      plain: { make: (store) => makeStore(store, 'agents/agent', false) },
+    const forks = { enabled: true, reader: 'forks', model: 'claude-sonnet-4-5', voice: 'You are reading for the agent.' };
+    const cases: Record<string, { make: (store: string) => Promise<void>; subconscious?: true; off?: true; forks?: true }> = {
+      crossed: { make: (store) => copyStore(store, 'agents/agent', true) },
+      plain: { make: (store) => copyStore(store, 'agents/agent', false) },
       'unowned run inside a span': { make: (store) => makeSpanStore(store) },
       'tuned-out run inside a span': { make: (store) => makeSpanStore(store, 'tuned-out') },
       "another agent's stored injections inside a span": { make: (store) => makeSpanStore(store, 'injected') },
       "the agent's own stored injections inside a span": { make: (store) => makeSpanStore(store, 'own-injected') },
-      'a subconscious that opens': { make: (store) => makeStore(store, 'agents/agent', false), subconscious: true },
+      'a subconscious that opens': { make: (store) => copyStore(store, 'agents/agent', false), subconscious: true },
       "a subconscious whose context a start can't read": { make: makeBrokenSubconsciousStore, subconscious: true },
       'the same store, its subconscious off': { make: makeBrokenSubconsciousStore, off: true },
+      'the same store, its reader forks': { make: makeBrokenSubconsciousStore, forks: true },
     };
     const audited: Record<string, string> = {};
     const started: Record<string, string> = {};
     const said: Record<string, { audit: string; start: string }> = {};
-    for (const [index, [name, { make, subconscious: on, off }]] of Object.entries(cases).entries()) {
+    for (const [index, [name, { make, subconscious: on, off, forks: forked }]] of Object.entries(cases).entries()) {
       const { dir, stores } = await makeDataDirWith(`case-${index}`, [make]);
-      const caseRecipe = on ? { ...recipe, subconscious } : off ? { ...recipe, subconscious: { ...subconscious, enabled: false } } : recipe;
+      const caseRecipe = on ? { ...recipe, subconscious } : off ? { ...recipe, subconscious: { ...subconscious, enabled: false } } : forked ? { ...recipe, subconscious: forks } : recipe;
       saveRecipe(dir, caseRecipe);
       const copy = join(root, `case-${index}-framework`);
       cpSync(stores[0]!, copy, { recursive: true });
@@ -405,7 +425,7 @@ describe('the store audit', () => {
           membrane: new Membrane(new MockAdapter()),
           agents: [buildFrameworkAgentConfig(validated, 'agent', model, strategy)],
           modules: [],
-          ...(validated.subconscious ? { subconscious: validated.subconscious } : {}),
+          ...dendriteCreateOptions(validated, model, resolveTimeZone(validated.agent.timezone)),
         });
         await framework.stop();
         started[name] = 'opens';
@@ -425,6 +445,7 @@ describe('the store audit', () => {
       'a subconscious that opens': 'opens',
       "a subconscious whose context a start can't read": 'refused',
       'the same store, its subconscious off': 'opens',
+      'the same store, its reader forks': 'opens',
     });
     for (const [name, { audit: line, start }] of Object.entries(said)) {
       expect(line, name).toContain(start.replace(/\s*\n\s*/g, ' '));
@@ -443,7 +464,7 @@ describe('the store audit', () => {
   });
 
   test("the audit opens a named subconscious with its own name's view, and the resident with the resident's", async () => {
-    const { dir } = await makeDataDirWith('named-subconscious', [(store) => makeStore(store, 'agents/agent', false)]);
+    const { dir } = await makeDataDirWith('named-subconscious', [(store) => copyStore(store, 'agents/agent', false)]);
     saveRecipe(dir, { ...DEFAULT_RECIPE, subconscious: { enabled: true, name: 'Muse', systemPrompt: 'attend to the agent' } });
     const views = new Map<string, (message: never) => boolean>();
     const open = ContextManager.open.bind(ContextManager);
@@ -468,7 +489,7 @@ describe('the store audit', () => {
   test("the audit's subconscious view answers as the filter agent-framework opens a named subconscious with", async () => {
     // agent-framework doesn't export createSubconsciousAgent's filter, so this
     // takes the one it passes to ContextManager.open.
-    const { stores } = await makeDataDirWith('framework-subconscious', [(store) => makeStore(store, 'agents/agent', false)]);
+    const { stores } = await makeDataDirWith('framework-subconscious', [(store) => copyStore(store, 'agents/agent', false)]);
     let frameworkView: ((message: never) => boolean) | undefined;
     const open = ContextManager.open.bind(ContextManager);
     const spy = spyOn(ContextManager, 'open').mockImplementation(((options: { namespace?: string; viewFilter?: (message: never) => boolean }) => {
@@ -748,11 +769,18 @@ describe('the store audit', () => {
   });
 
   test('a system prompt the recipe gives as a URL is not fetched', async () => {
-    const { dir, stores } = await makeDataDir('data', [{ namespace: 'agents/agent', crossed: true }]);
-    saveRecipe(dir, { ...DEFAULT_RECIPE, agent: { ...DEFAULT_RECIPE.agent, systemPrompt: 'http://127.0.0.1:1/prompt.md' } });
-    const { status, failed } = await audit([dir]);
-    expect(status).toBe(1);
-    expect(failed[0]).toStartWith(`${stores[0]} (agents/agent): refused: `);
+    const asked: string[] = [];
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) { asked.push(new URL(request.url).pathname); return new Response('a prompt'); } });
+    try {
+      const { dir, stores } = await makeDataDir('data', [{ namespace: 'agents/agent', crossed: false }]);
+      saveRecipe(dir, { ...DEFAULT_RECIPE, agent: { ...DEFAULT_RECIPE.agent, systemPrompt: `${server.url.href}prompt.md` } });
+      const { status, lines, failed } = await audit([dir]);
+      expect(asked).toEqual([]);
+      expect({ status, failed }).toEqual({ status: 0, failed: [] });
+      expect(lines).toContain(`${stores[0]} (agents/agent): opens`);
+    } finally {
+      server.stop(true);
+    }
   });
 
   test("given the extensions a start loaded, the audit builds its strategy from them and runs no register() of its own", async () => {
@@ -944,7 +972,7 @@ describe('the store audit', () => {
 
   test('an index that is a link to nothing is no index, as for a start, which then takes the legacy store', async () => {
     const dir = join(root, 'legacy');
-    await makeStore(join(dir, 'store'), 'agents/agent', true);
+    await copyStore(join(dir, 'store'), 'agents/agent', true);
     symlinkSync(join(root, 'nowhere.json'), join(dir, 'sessions.json'));
     const { status, failed } = await audit([dir]);
     expect(status).toBe(1);
@@ -953,7 +981,7 @@ describe('the store audit', () => {
 
   test('a legacy store, from before sessions, is audited where a start would find it, and no index is made', async () => {
     const dir = join(root, 'legacy');
-    await makeStore(join(dir, 'store'), 'agents/agent', true);
+    await copyStore(join(dir, 'store'), 'agents/agent', true);
     const { status, failed } = await audit([dir]);
     expect(status).toBe(1);
     expect(failed[0]).toStartWith(`${join(dir, 'store')} (agents/agent): refused: `);
@@ -1098,7 +1126,7 @@ describe("what a strategy's open and an index can do", () => {
     delete index.sessions[second!];
     writeFileSync(join(dir, 'sessions.json'), JSON.stringify(index));
     const outside = new SessionManager(dir).getStorePath(escaped);
-    await makeStore(outside, 'agents/agent', false);
+    await copyStore(outside, 'agents/agent', false);
     const opened: string[] = [];
     const openStore = JsStore.openOrCreate.bind(JsStore);
     const opening = spyOn(JsStore, 'openOrCreate').mockImplementation((config) => {
@@ -1123,7 +1151,7 @@ describe("a fleet child's audit, in a process of its own", () => {
     const entries = [];
     const dirs: Record<string, { dir: string; stores: string[] }> = {};
     for (const child of children) {
-      dirs[child.name] = await makeDataDirWith(child.dir ?? child.name, [(store) => makeStore(store, 'agents/agent', false)]);
+      dirs[child.name] = await makeDataDirWith(child.dir ?? child.name, [(store) => copyStore(store, 'agents/agent', false)]);
       const recipe = join(root, `${child.name}.json`);
       const extension = child.extension === undefined ? undefined : join(root, `${child.name}-extension.ts`);
       if (extension !== undefined) writeFileSync(extension, child.extension!);
@@ -1270,7 +1298,7 @@ describe("a fleet child's audit, in a process of its own", () => {
       { name: 'cleaned', extension: "process.on('exit', () => { process.exit(0); });\nexport function register() {}" },
     ]);
     rmSync(dirs.cleaned!.stores[0]!, { recursive: true, force: true });
-    await makeStore(dirs.cleaned!.stores[0]!, 'agents/agent', true);
+    await copyStore(dirs.cleaned!.stores[0]!, 'agents/agent', true);
     const { status, failed } = await audit([parent.dir]);
     expect(status).toBe(1);
     const setThat = "Something in its process, such as an extension's exit handler, set that status: " +
@@ -1453,7 +1481,14 @@ describe("a fleet child's audit and what outlasts it", () => {
     expect(await waitForEnd(held, 10_000)).toBe(true);
   }, 60_000);
 
-  test("a child's audit has the minutes the audit's environment gives it, and 5 where it gives none it can use", async () => {
+  test("the minutes the audit's environment gives become a child audit's limit, at most a timer's longest, and 5 where they give none it can use", () => {
+    const limitFor = (minutes: string | undefined) => childAuditLimitMs(minutes === undefined ? {} : { CONNECTOME_FLEET_CHILD_AUDIT_MINUTES: minutes });
+    // A timer holds at most 2 ** 31 - 1 ms.
+    expect(['7.5', '0.5', '1e9', 'Infinity', '0', '-1', 'soon', '10m', undefined].map(limitFor))
+      .toEqual([7.5 * 60_000, 30_000, 2 ** 31 - 1, 2 ** 31 - 1, 5 * 60_000, 5 * 60_000, 5 * 60_000, 5 * 60_000, 5 * 60_000]);
+  });
+
+  test("a child's audit is armed with the limit its audit's environment gives, not its own entry's, the default included", async () => {
     const parent = await makeDataDir('parent', [{ namespace: 'agents/agent', crossed: false }]);
     const child = await makeDataDir('kid', [{ namespace: 'agents/agent', crossed: false }]);
     const timing = join(root, 'timing-strategy.ts');
@@ -1480,7 +1515,7 @@ describe("a fleet child's audit and what outlasts it", () => {
       return later(handler, ms, ...rest);
     }) as typeof setTimeout);
     try {
-      for (const minutes of ['7.5', '1e9', 'Infinity', '0', '-1', 'soon', undefined]) {
+      for (const minutes of [undefined, '7.5']) {
         if (minutes === undefined) delete process.env.CONNECTOME_FLEET_CHILD_AUDIT_MINUTES;
         else process.env.CONNECTOME_FLEET_CHILD_AUDIT_MINUTES = minutes;
         const result = await audit([parent.dir]);
@@ -1491,8 +1526,7 @@ describe("a fleet child's audit and what outlasts it", () => {
       if (before === undefined) delete process.env.CONNECTOME_FLEET_CHILD_AUDIT_MINUTES;
       else process.env.CONNECTOME_FLEET_CHILD_AUDIT_MINUTES = before;
     }
-    // A timer holds at most 2 ** 31 - 1 ms.
-    expect(limits).toEqual([7.5 * 60_000, 2 ** 31 - 1, 2 ** 31 - 1, 5 * 60_000, 5 * 60_000, 5 * 60_000, 5 * 60_000]);
+    expect(limits).toEqual([5 * 60_000, 7.5 * 60_000]);
     expect(longTimersArmedOutsideTheAudit).toBeGreaterThan(0);
   }, 90_000);
 
@@ -1618,8 +1652,8 @@ describe("which fleet children an audit follows, and how", () => {
   test("a child's opens line isn't a failure whatever its path holds, though another of its stores was refused", async () => {
     const parent = await makeDataDir('parent', [{ namespace: 'agents/agent', crossed: false }]);
     const child = await makeDataDirWith('kid ): refused: dir', [
-      (store) => makeStore(store, 'agents/agent', false),
-      (store) => makeStore(store, 'agents/agent', true),
+      (store) => copyStore(store, 'agents/agent', false),
+      (store) => copyStore(store, 'agents/agent', true),
     ]);
     saveRecipe(parent.dir, { ...DEFAULT_RECIPE, modules: { ...DEFAULT_RECIPE.modules, fleet: { children: [{ name: 'kid', recipe: childRecipe('kid'), dataDir: child.dir }] } } });
     const { status, lines, failed } = await audit([parent.dir]);
@@ -1970,7 +2004,7 @@ describe("which fleet children an audit follows, and how", () => {
       index.sessions[away] = { ...index.sessions[index.activeSessionId], id: away };
       writeFileSync(join(child.dir, 'sessions.json'), JSON.stringify(index));
       const outsideStore = new SessionManager(child.dir).getStorePath(away);
-      await makeStore(outsideStore, 'agents/agent', false);
+      await copyStore(outsideStore, 'agents/agent', false);
       const outside = await audit([parent.dir], { within: [root] });
       expect(outside.status).toBe(1);
       expect(outside.failed).toEqual([outsideLine(outsideStore, TRIAL_PLACES, true, false)]);
@@ -2094,8 +2128,8 @@ describe('which stores an audit opens, by where they lie', () => {
 
   test("a store a session names that isn't there, under a data directory reached through a link, gets a line and no failure, on a trial and by hand", async () => {
     const real = await makeDataDirWith('real', [
-      (store) => makeStore(store, 'agents/agent', false),
-      (store) => makeStore(store, 'agents/agent', false),
+      (store) => copyStore(store, 'agents/agent', false),
+      (store) => copyStore(store, 'agents/agent', false),
     ]);
     const linked = join(root, 'linked');
     symlinkSync(real.dir, linked);
@@ -2290,8 +2324,8 @@ describe('which stores an audit opens, by where they lie', () => {
 
   test("on a trial, a store under a place whose name starts with '..' lies under it", async () => {
     const { dir, stores } = await makeDataDirWith('..data', [
-      (store) => makeStore(store, 'agents/agent', false),
-      (store) => makeStore(store, 'agents/agent', false),
+      (store) => copyStore(store, 'agents/agent', false),
+      (store) => copyStore(store, 'agents/agent', false),
     ]);
     const { status, lines } = await audit([dir], { skip: [stores[0]!], within: [root] });
     expect(status, lines.join('\n')).toBe(0);
@@ -2334,7 +2368,10 @@ describe('a host on trial, before its commit', () => {
     } finally {
       opening.mockRestore();
     }
-    return { ...counts, openedInThisProcess: opened, message: error === undefined ? undefined : error instanceof Error ? error.message : String(error) };
+    return {
+      ...counts, openedInThisProcess: opened, refused: error instanceof StartRefusal,
+      message: error === undefined ? undefined : error instanceof Error ? error.message : String(error),
+    };
   }
 
   test("audits every store it would open only after its commit under a place its fallback undoes, leaves its active session to its own start, and a store it can't open ends the start with `current` as it was", async () => {
@@ -2342,7 +2379,7 @@ describe('a host on trial, before its commit', () => {
       { namespace: 'agents/agent', crossed: false },
       { namespace: 'agents/agent', crossed: true },
     ]);
-    const child = await makeDataDirWith(join('data', 'kid'), [(store) => makeStore(store, 'agents/agent', true)]);
+    const child = await makeDataDirWith(join('data', 'kid'), [(store) => copyStore(store, 'agents/agent', true)]);
     const outside = await makeDataDir('outside', [{ namespace: 'agents/agent', crossed: true }]);
     const kidRecipe = join(root, 'kid.json');
     writeFileSync(kidRecipe, JSON.stringify(DEFAULT_RECIPE));
@@ -2383,6 +2420,7 @@ describe('a host on trial, before its commit', () => {
     expect(logged).toContain(`[update] ${newLine}`);
     expect(existsSync(join(root, 'not-yet'))).toBe(false);
     const message = result.message!;
+    expect(result.refused).toBe(true);
     expect(message).toStartWith("This release couldn't open every store it would open only after its commit, so it starts none of its agents, and the next start goes back to 0.10.2:\n");
     expect(message).toContain(`\n${stores[1]} (agents/agent): refused: store topology rejected: `);
     expect(message).toContain(`\n${child.stores[0]} (agents/agent): refused: store topology rejected: `);
@@ -2410,6 +2448,7 @@ describe('a host on trial, before its commit', () => {
       expect(result.started).toBe(0);
       expect(result.stopped).toBe(1);
       expect(result.message).toBe(said);
+      expect(result.refused).toBe(true);
       expect(readCurrent(install)).toBe('0.10.2');
     }
   });
@@ -2560,6 +2599,7 @@ describe('a host on trial, before its commit', () => {
     expect(stderr).toContain("This release couldn't open every store it would open only after its commit, so it starts none of its agents, and the next start goes back to 0.10.2:\n");
     expect(stderr).toContain(`\n${stores[1]} (agents/agent): refused: store topology rejected: `);
     expect(readCurrent(install)).toBe('0.10.2');
+    expect(stderr).not.toContain('Fatal error');
   }, 90_000);
 
   test("through the host's entry, on a trial: the audit builds its strategies from the extensions the start loaded, so none registers twice", async () => {
@@ -2597,6 +2637,7 @@ describe('a host on trial, before its commit', () => {
     const { status, stderr } = await startOnTrial(dir);
     expect(status, stderr.slice(-3000)).toBe(1);
     expect(stderr).toContain("This release can't open its active session's store on its trial, so it opened no store, starts none of its agents, and the next start goes back to 0.10.2:\n");
+    expect(stderr).not.toContain('Fatal error');
     expect(stderr).toContain(linkLine(stores[0]!, join(stores[0]!, 'records.log'), TRIAL_PLACES, true));
     expect(statSync(out).size).toBe(size);
     expect(readCurrent(install)).toBe('0.10.2');
@@ -2611,6 +2652,7 @@ describe('a host on trial, before its commit', () => {
     const { status, stderr } = await startOnTrial(dir, { journal: false });
     expect(status, stderr.slice(-3000)).toBe(1);
     expect(stderr).toContain("No switch or Go back is under way by the install's journal, so this release opened no store and starts none of its agents: ");
+    expect(stderr).not.toContain('Fatal error');
     expect(statSync(log).size).toBe(size);
     expect(readCurrent(install)).toBe('0.10.2');
   }, 90_000);
@@ -2689,7 +2731,7 @@ describe('a host on trial, before its commit', () => {
 
   test("each load repair the trial's audit causes is also sent through the framework's ops path, and the trial commits", async () => {
     const { dir, stores } = await makeDataDirWith('data', [
-      (store) => makeStore(store, 'agents/agent', false),
+      (store) => copyStore(store, 'agents/agent', false),
       (store) => makeRepairStore(store),
       (store) => makeRepairStore(store),
     ]);
@@ -2714,7 +2756,7 @@ describe('a host on trial, before its commit', () => {
 
   test("a trial whose commit is refused after its audit has still sent the load repair the audit caused, since the release it goes back to may not report it", async () => {
     const { dir, stores } = await makeDataDirWith('data', [
-      (store) => makeStore(store, 'agents/agent', false),
+      (store) => copyStore(store, 'agents/agent', false),
       (store) => makeRepairStore(store),
     ]);
     const sent: string[] = [];
@@ -2724,7 +2766,7 @@ describe('a host on trial, before its commit', () => {
       notifyOps: (kind: string) => { sent.push(kind); },
     } as never;
     await expect(startFramework(framework, { root: install, release: '0.11.0' }, { dataDir: dir, activeStore: stores[0]!, places: () => [dir] }))
-      .rejects.toThrow("couldn't connect the MCPL server discord");
+      .rejects.toThrow("The MCPL server discord wasn't connected when this release went to commit");
     expect(readCurrent(install)).toBe('0.10.2');
     expect(sent).toEqual(['memory-load-repair']);
   }, 60_000);
@@ -2739,7 +2781,8 @@ describe('a host on trial, before its commit', () => {
     await startFramework(framework, { root: install, release: '0.11.0' }, { dataDir: dir, activeStore: stores[0]!, places });
     expect(counts.started).toBe(1);
     expect(readCurrent(install)).toBe('0.11.0');
-    await makeStore(stores[1]!, 'agents/agent', true);
+    rmSync(stores[1]!, { recursive: true, force: true });
+    await copyStore(stores[1]!, 'agents/agent', true);
     const opening = spyOn(JsStore, 'openOrCreate');
     try {
       await startFramework(framework, { root: install, release: '0.11.0' }, { dataDir: dir, activeStore: stores[0]!, places });

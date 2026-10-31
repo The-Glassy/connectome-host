@@ -244,7 +244,8 @@ scripts resolve the libs. A stock install's `node_modules` already holds them, s
 symlinks there:
 
 ```bash
-mkdir -p ~/<agent>-cm/{recipes,data,files,notes,scripts,logs}
+mkdir -p ~/<agent>-cm/{recipes,files,notes,scripts,logs}
+mkdir -p -m 700 ~/<agent>-cm/data   # the agent's history and call logs: its owner's alone, as a host makes a new one
 ```
 
 Local-checkout route only:
@@ -269,8 +270,8 @@ ln -sfn ../../../connectome-local/context-manager/node_modules/@animalabs/chroni
     "systemPrompt": "",                     // empty, or a few sentences at most — see below
     "thinking": { "enabled": true, "type": "adaptive", "display": "summarized" },
     "maxTokens": 32000,                     // response cap
-    "maxStreamTokens": 320000,              // recompile trigger; keep < model window
-    "contextBudgetTokens": 300000,          // SEE §11.1 — MUST fit under (window - maxTokens)
+    "maxStreamTokens": 320000,              // recompile trigger on uncached input; see §11.1
+    "contextBudgetTokens": 300000,          // SEE §11.1 — with the system prompt and tools, keep it under the window
     "cacheTtl": "1h",                       // prompt-cache TTL; defaults to '1h', set '5m' explicitly for rapid sub-5m loops
     "strategy": {
       "type": "autobiographical",
@@ -327,7 +328,9 @@ and keep everything under `strategy` as is; chunk size, merge fan-in and the
 fallback rungs are window-independent.
 
 **System prompt: keep it minimal.** Leave it empty (`""` is valid; the request then carries
-no system block at all), or write a few sentences at most. Most long-running residents run
+no system block at all, except on a model whose thinking binds, where the host's one paragraph
+on folds is the system text, unless the recipe uses the `anthropic-xml` formatter), or write a
+few sentences at most. Most long-running residents run
 a single sentence or nothing. Why:
 
 - **The agent's identity lives in its memory.** That means the imported history and everything
@@ -348,8 +351,9 @@ longer persona text, offer to put it where the agent can read it as material (a 
 
 For Anthropic streaming turns, add `"effort": "medium"` to `agent.thinking` to
 set the recipe baseline; `enabled` is still required and can be `false`.
-Explicit `agent_settings` effort overrides the recipe until reset, from the
-point where it was set: a branch made before that point, such as an undo past
+Effort set explicitly with `agent_settings` (in the agent's built-in `settings`
+toolset, or its tool list if that lacks `toolsets--open` or `toolsets--act`)
+overrides the recipe until reset, from the point where it was set: a branch made before that point, such as an undo past
 the turn that set it, has the effort set there, or the recipe's where none was.
 Unrelated settings updates preserve the baseline, and compression calls are
 unaffected.
@@ -402,10 +406,13 @@ resident adds one tool, so its first turn after the restart is one full cache wr
 **Memory defaults.** Current host code fills an omitted/partial `strategy` with:
 autobiographical + `adaptiveResolution: true` + `foldingStrategy: "kv-unified"` with the
 host's standard `kvUnified` block (§5b) + same-model compression (`compressionModel` falls
-back to `agent.model`) + `summaryParticipant` = `agent.name`. Omitted sizes: a
-`contextBudgetTokens` of 300k (for 1M-window models — set your own on a smaller window,
-§11.1), a `recentWindowTokens` of 40% of the budget (120k at 300k), and a `maxStreamTokens`
-of 320k when the budget is also omitted, else 150k. That tail is worked out once, from the
+back to `agent.model`) + `summaryParticipant` = the agent's name (the label before each
+summary stays context-manager's default unless the recipe sets `summaryContextLabel`). Omitted sizes: a
+`contextBudgetTokens` of 300k, or, on Anthropic's API for a model the host knows a window for, with a `maxTokens`
+that is unset or a positive number, the smaller of 300k and the window less the system prompt and 32k for the tools (§11.1); a `recentWindowTokens`
+of 40% of the budget (120k at 300k), or 40% of the budget less `maxTokens` where the head and
+40% of the budget wouldn't fit beside `maxTokens` with context-manager's over-budget grace; and a `maxStreamTokens` of the
+budget plus 20k when the budget is also omitted, else 150k. That tail is worked out once, from the
 recipe's budget: if you lower the budget at runtime on a recipe without its own tail, lower
 `tailTokens` with it, or compiles fail once the history fills the tail. A resident whose store was built under
 `kv-stable` must pin `"foldingStrategy": "kv-stable"` before it moves to such a host, or
@@ -677,7 +684,8 @@ Two `systemd --user` units in `~/.config/systemd/user/`:
 
 Set explicit `PATH` in the units (login-shell PATH isn't loaded for services).
 
-Add a **backups cron** (snapshot `data/` every ~15 min) and a lightweight **watchdog** cron
+Add a **backups cron** (snapshot `data/` every ~15 min, run as the agent's user or root, since
+`data/` is readable by its owner alone) and a lightweight **watchdog** cron
 (detect "messages arriving but no reply for N min" → restart, with a cooldown so it can't
 restart-loop). These caught real incidents.
 
@@ -713,12 +721,24 @@ Snapshot a clean baseline once it's verified.
 ## 11. CRITICAL gotchas (read before deploying)
 
 **11.1 — `contextBudgetTokens` must fit the model window.** The autobiographical strategy
-fills context up to `contextBudgetTokens`, which defaults to 300k when the recipe omits it —
-right for 1M-window models, fatal on a 200k one. If that plus the response (`maxTokens`) exceeds the
-model's context window, **every reply silently 400s** — the agent appears to "think but not
-speak" (compression calls, with small contexts, still succeed; full replies don't). Rule:
-`contextBudgetTokens + maxTokens + overhead  <  model window`. For a 200k-window model with a
-16k response cap, keep the budget around 160–178k. As a conversation **grows**, the equilibrium
+fills context up to `contextBudgetTokens` less `maxTokens`, which it keeps for the reply, and the
+system prompt and the tools' definitions come on top. If that prompt is over the model's context
+window, **every reply 400s** ("prompt is too long") once the conversation fills the budget — the
+agent appears to "think but not speak" (compression calls, with small contexts, still succeed;
+full replies don't). The hard limit: `contextBudgetTokens − maxTokens + system prompt + tools  <
+model window`, where the head and the verbatim tail count in place of `contextBudgetTokens − maxTokens`
+if they come to more, as they can within `overBudgetGraceRatio`. The working rule leaves the reply its room too: `contextBudgetTokens + system
+prompt + tools  ≤  model window`, for a compile that keeps to the budget less `maxTokens` (the head and the
+verbatim tail can pass that by up to the grace). A long turn's tool results add to the prompt
+between compiles, so at a full compile a budget over the working rule leaves a turn less room
+before the API refuses its prompt. `maxStreamTokens` counts uncached input only, so with prompt caching on it doesn't
+bound a turn. On Anthropic's API the host checks part of this for you, on a model it knows a
+window for and a recipe whose numbers it can read: a recipe that sets no budget gets one that keeps the working
+rule, leaving 32k for the tools, and a load that resolves
+the system prompt refuses a budget whose prompt, without the tools, would pass the window, a
+budget that leaves too little room for the head and the verbatim tail once `maxTokens` is kept
+for the reply, or a `maxTokens` over the model's maximum output, naming the numbers and the changes it found that would let it load. On any other provider, or for a model it knows no window for, it prints one line at
+start saying the fit wasn't checked, and the rules are yours to keep. As a conversation **grows**, the equilibrium
 context creeps up — watch the makeup view and trim budget / `recentWindowTokens` before it
 crosses the line. (This was the opus4 outage; diagnosing it is *why* the makeup view exists.)
 
@@ -848,8 +868,25 @@ trigger into a channel the resident reads.
 works only on the model that minted them; any other model 400s. Editing the *shape* of a turn
 around a retained thinking block (split, reorder, insert before) also 400s ("thinking blocks
 cannot be modified") — a transport error the membrane retries once text-only, not a refusal.
-Newer API accounts additionally enforce preserved thinking on context edits before thinking
-blocks; expect folds to interact with this on the next model generation.
+On Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 5.5, whose thinking binds, a block is bound
+to the conversation and head (system text, tools, model) it was minted under: an account that
+enforces the binding refuses a request where those changed, as after a fold. The host sends the
+drop control on agent turns through the Anthropic API so the provider sets such a block aside instead, and context-manager
+leaves out what a fold invalidates (anima-research/context-manager#155). Not every account
+binds: some still show the model such a block. At start, for each such model the recipe uses (the
+agent's and its subagents' default), the host mints one block and replays it under a changed
+system text, a few small requests that `[thinking-binding]` lines in its log report on. Where the
+account showed the block, the agent and its subagents send their thinking as stored, without the
+drop control, which would have the block dropped. That holds only on the Anthropic route for a model
+that takes the control: if a gateway later moves the agent to an account that refuses such a block,
+the first refusal turns the control on for the rest of the run and the request is sent again. Where
+the account refused or dropped the block they leave such thinking out as above. A start at which the
+check can't tell uses what it last found on the same route (`$DATA_DIR/thinking-binding.json`), or
+leaves such thinking out. `THINKING_BINDING_PROBE=off` skips the check.
+On those four the host
+also passes the model's window, and with both, agent-framework doesn't break a turn's stream at
+`maxStreamTokens` (or the `/budget` command's value): its stream breaks mid-turn for its size
+only where its next request would pass the window, and a fresh compile carries the turn on.
 
 ---
 
