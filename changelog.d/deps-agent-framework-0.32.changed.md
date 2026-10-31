@@ -1,12 +1,14 @@
 - `@animalabs/agent-framework` is now `^0.32.0` (was `^0.31.0`);
   `package-lock.json` and `bun.lock` move that package and nothing else. What
   changes for residents (see its notes):
-  - An agent is no longer told when a fork is derived from it. Since 0.19.0,
-    every subagent `fork` registered as a task-fork, and agent-framework put
-    an `[Agent lifecycle: … was derived from you …]` line (past a threshold, a
-    count line) in the forking agent's context. agent-framework now adds it
-    only for a host that passes `dendrite.derivationNotice`, which this host
-    doesn't.
+  - An agent is no longer told when a fork is derived from it. Since host
+    0.19.0, every subagent `fork` registered as a task-fork, and
+    agent-framework put an `[Agent lifecycle: … was derived from you …]` line
+    (past a threshold, a count line) in the forking agent's context.
+    agent-framework now adds it only for a host that passes
+    `dendrite.derivationNotice`, which this host doesn't. So a recipe's
+    `dendrite.collapseDerivationNoticesAfter`, which only spaced those lines
+    out, no longer has any effect.
   - An agent is no longer told when reasoning leaves its context: the
     `[reasoning] <agent>:` notices agent-framework added on a binding compile's
     strip, or on a block the provider dropped, are gone.
