@@ -169,6 +169,9 @@ export function buildFrameworkAgentConfig(
     ...(recipe.agent.toolWrapperProseGuard !== undefined
       ? { toolWrapperProseGuard: recipe.agent.toolWrapperProseGuard }
       : {}),
+    ...(recipe.agent.speculativeChannelChunks !== undefined
+      ? { speculativeChannelChunks: recipe.agent.speculativeChannelChunks }
+      : {}),
     ...(recipe.agent.autoContinue !== undefined
       ? { autoContinue: recipe.agent.autoContinue }
       : {}),

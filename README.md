@@ -265,6 +265,28 @@ which agent-framework 0.29.0, this host's floor, has. See Agent Framework's
 { "agent": { "autoContinue": { "maxConsecutive": 3 } } }
 ```
 
+`agent.speculativeChannelChunks` (boolean, off when omitted) streams a
+`channel_publish` call's text to its channel while the model is still writing
+the call, so a voice channel can start speaking the first sentence before the
+answer is finished. Only a channel whose descriptor declares
+`capabilities.streaming.speculative: true`, on a server granted
+`channels.streaming`, gets the stream; every other channel sees no change.
+It needs native tool mode with Anthropic, and the Anthropic beta
+`fine-grained-tool-streaming-2025-05-14` in `agent.anthropicBetas`: without it
+the API buffers tool input, and the text arrives no earlier than the publish.
+With the beta the API does not validate tool-input JSON, so turn it on only for
+agents that use this. Text streams early only once the call has named its
+channel: a call that writes `channelId` before `content` streams as it goes,
+while one that names no channel sends its text in one piece when the call is
+finished. It rests on `AgentConfig.speculativeChannelChunks`
+(anima-research/agent-framework#965), and on an agent-framework without it
+the key is accepted and does nothing. See Agent Framework's
+`docs/speculative-channel-chunks.md`.
+
+```json
+{ "agent": { "speculativeChannelChunks": true, "anthropicBetas": ["fine-grained-tool-streaming-2025-05-14"] } }
+```
+
 ### Recipe loading
 
 | Command | Behavior |
