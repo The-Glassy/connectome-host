@@ -30,7 +30,9 @@ describe('AutobiographicalStrategy.getProgressSnapshot', () => {
       totalChunks: 0,
       chunksCompressed: 0,
       l1QueueLength: 0,
+      l1WaitingOnTools: 0,
       mergeQueueLength: 0,
+      mergesWaitingOnTools: 0,
       summaryCounts: { l1: 0, l2: 0, l3: 0 },
       pending: false,
     });

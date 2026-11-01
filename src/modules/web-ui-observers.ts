@@ -518,6 +518,9 @@ export const TRACE_SCOPES: Readonly<Record<string, FrameScopes>> = {
   'operator:action': OPS,
   'inference:failed': OPS,
   'inference:exhausted': OPS,
+  // A turn held for a budget refusal and the hold's end (agent-framework #361, vendored).
+  'inference:held': OPS,
+  'inference:hold_ended': OPS,
   // Why a turn was stopped. A client with messages and without ops gets
   // stream-ended in its place.
   'inference:aborted': ['messages', 'ops'],
