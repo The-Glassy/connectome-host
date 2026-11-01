@@ -278,10 +278,15 @@ With the beta the API does not validate tool-input JSON, so turn it on only for
 agents that use this. Text streams early only once the call has named its
 channel: a call that writes `channelId` before `content` streams as it goes,
 while one that names no channel sends its text in one piece when the call is
-finished. It rests on `AgentConfig.speculativeChannelChunks`
-(anima-research/agent-framework#965), and on an agent-framework without it
-the key is accepted and does nothing. See Agent Framework's
-`docs/speculative-channel-chunks.md`.
+finished. Ephemeral subagents don't inherit it: their streams run with it
+off, and a fork's or spawn's orientation lists `speculative channel chunks`
+beside the parent's. It rests on `AgentConfig.speculativeChannelChunks`
+(anima-research/agent-framework#965), which no agent-framework release has
+yet, 0.32.x (this host's floor) included. Until one does, the key is accepted
+and does nothing, and the host says so at start with an `[agent-settings]`
+warning. It also warns at start when the key is set with another provider,
+with the `anthropic-xml` formatter, or without the beta above. Once released,
+the contract is Agent Framework's `docs/speculative-channel-chunks.md`.
 
 ```json
 { "agent": { "speculativeChannelChunks": true, "anthropicBetas": ["fine-grained-tool-streaming-2025-05-14"] } }
