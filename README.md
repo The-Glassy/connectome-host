@@ -275,10 +275,11 @@ It needs native tool mode with Anthropic, and the Anthropic beta
 `fine-grained-tool-streaming-2025-05-14` in `agent.anthropicBetas`: without it
 the API buffers tool input, and the text arrives no earlier than the publish.
 With the beta the API does not validate tool-input JSON, so turn it on only for
-agents that use this. Text streams early only once the call has named its
-channel: a call that writes `channelId` before `content` streams as it goes,
-while one that names no channel sends its text in one piece when the call is
-finished. Ephemeral subagents don't inherit it: their streams run with it
+agents that use this. Text streams early only once the call has fixed its
+recipient: a call that writes `channelId` and `serverId` (the channel's
+server) before `content` streams as it goes, and any other call sends its text
+in one piece when the call is finished, just before the publish. A message
+whose text went to a channel is published there or nowhere. Ephemeral subagents don't inherit it: their streams run with it
 off, and a fork's or spawn's orientation lists `speculative channel chunks`
 beside the parent's. It rests on `AgentConfig.speculativeChannelChunks`
 (anima-research/agent-framework#965), which no agent-framework release has
